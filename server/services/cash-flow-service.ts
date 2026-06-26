@@ -234,7 +234,7 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
     await db.execute(sql`
       insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale, source_ref)
       values (${s.label}, ${s.payee}, ${s.category}, ${s.tier}, 0, true, ${s.dueDate}::date, ${s.cadence}, ${s.criticality}, 'pending', 'tax', ${s.externalKey}, ${s.rationale}, ${s.sourceRef})
-      on conflict (external_key) do update set
+      on conflict (external_key) where external_key is not null do update set
         due_date = excluded.due_date, label = excluded.label, rationale = excluded.rationale,
         tier = excluded.tier, updated_at = now()
       where cash_obligations.status = 'pending'`);
@@ -262,7 +262,7 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
     await db.execute(sql`
       insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
       values (${ln.name + " payment"}, ${ln.name}, 'debt', ${tier}, 0, true, ${due}::date, 'monthly', ${tier === "tier2" ? "must" : "important"}, 'pending', 'debt', ${key}, ${rationale})
-      on conflict (external_key) do update set due_date = excluded.due_date, tier = excluded.tier, rationale = excluded.rationale, updated_at = now()
+      on conflict (external_key) where external_key is not null do update set due_date = excluded.due_date, tier = excluded.tier, rationale = excluded.rationale, updated_at = now()
       where cash_obligations.status = 'pending'`);
     debt++;
   }
@@ -299,7 +299,7 @@ export async function syncQbBillsToObligations(
     await db.execute(sql`
       insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
       values (${label}, ${b.vendor}, ${tax ? "tax" : "vendor_bill"}, ${tier}, ${num(b.amount)}, false, ${b.dueDate}::date, 'one_time', ${tax ? "must" : "important"}, 'pending', 'qb_bill', ${key}, ${rationale})
-      on conflict (external_key) do update set
+      on conflict (external_key) where external_key is not null do update set
         amount = excluded.amount, due_date = excluded.due_date, payee = excluded.payee,
         label = excluded.label, tier = excluded.tier, updated_at = now()
       where cash_obligations.status <> 'paid'`);

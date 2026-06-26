@@ -361,7 +361,20 @@ async function runNightlyAggregation(): Promise<void> {
   }).catch((error) => {
     console.warn("[Daily Sales] Failed to record scheduler run:", error);
   });
-  
+
+  // Refresh the Cash Command tax/payroll/debt calendar on the same nightly tick,
+  // so the pay-order is current even on days nobody opens the page. Runs right
+  // after sales aggregation so the cash-position run-rate it reads is fresh.
+  // Fire-and-forget + lazy import: a failure here must never affect daily sales.
+  try {
+    const { db } = await import("../db");
+    const { syncGeneratedObligations } = await import("./cash-flow-service");
+    const res = await syncGeneratedObligations(db, getMountainDateString(new Date()));
+    console.log(`[Cash Command] Nightly obligation refresh: ${res.tax} tax, ${res.debt} debt`);
+  } catch (err: any) {
+    console.warn("[Cash Command] Nightly obligation refresh failed:", err?.message ?? err);
+  }
+
   // Schedule the next run
   scheduleNextRun();
 }

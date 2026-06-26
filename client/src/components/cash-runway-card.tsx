@@ -112,11 +112,16 @@ export function CashRunwayCard() {
         <CardTitle className="text-base font-medium flex items-center gap-2">
           <Gauge className="h-4 w-4" /> Cash Runway &amp; Scenarios
         </CardTitle>
-        {gapped && (
-          <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" data-testid="badge-runway-gapped">
-            CALCULATION GAPPED
-          </Badge>
-        )}
+        {(() => {
+          const st = data?.forecast?.status;
+          if (st === "CRITICAL")
+            return <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" data-testid="badge-runway-status">CRITICAL</Badge>;
+          if (st === "WARNING")
+            return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" data-testid="badge-runway-status">WARNING</Badge>;
+          if (gapped)
+            return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" data-testid="badge-runway-gapped">CALCULATION GAPPED</Badge>;
+          return null;
+        })()}
       </CardHeader>
       <CardContent>
         {isLoading ? (

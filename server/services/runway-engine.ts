@@ -15,7 +15,10 @@
  * Pure + fully unit-tested in runway-engine.test.ts (no DB/network).
  */
 
-export type RunwayStatus = "HEALTHY" | "CALCULATION_GAPPED" | "MISMATCH";
+// HEALTHY / WARNING / CRITICAL are severity tiers off the realistic (headline)
+// runway: >=90 days HEALTHY, 30-89 WARNING, <30 CRITICAL. Before this, ANY fully
+// computed forecast returned HEALTHY, so a 6-day runway read "healthy".
+export type RunwayStatus = "HEALTHY" | "WARNING" | "CRITICAL" | "CALCULATION_GAPPED" | "MISMATCH";
 export type ScenarioKey = "conservative" | "realistic" | "aggressive";
 
 export interface ScenarioInputs {
@@ -118,7 +121,15 @@ export function computeRunwayForecast(inputs: RunwayForecastInputs): RunwayForec
     }
   });
 
-  const status: RunwayStatus = dataGaps.length > 0 ? "CALCULATION_GAPPED" : "HEALTHY";
+  // Severity off the REALISTIC (headline) scenario once all inputs are present.
+  // null runwayDays with no gaps means cash-flow positive (no finite burn) => HEALTHY.
+  let status: RunwayStatus;
+  if (dataGaps.length > 0) {
+    status = "CALCULATION_GAPPED";
+  } else {
+    const rd = scenarios.realistic.runwayDays;
+    status = rd == null ? "HEALTHY" : rd < 30 ? "CRITICAL" : rd < 90 ? "WARNING" : "HEALTHY";
+  }
 
   return {
     conservativeDays: scenarios.conservative.runwayDays,

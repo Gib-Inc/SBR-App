@@ -242,20 +242,27 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
   }
 
   let debt = 0;
+  // Generate a monthly obligation for EVERY active facility with a balance. The
+  // due_day filter used to require a non-null due_day, but credit_lines.due_day is
+  // NULL on every facility, so the entire ~$1.16M debt stack never appeared in the
+  // pay order. Default a NULL due day to the 15th (mid-month, avoids bunching every
+  // facility on the 1st) and flag it as an estimate until the operator sets it.
   const lines = rows(await db.execute(sql`
-    select name, type, due_day from credit_lines where is_active and balance > 0 and due_day is not null`));
+    select name, type, due_day from credit_lines where is_active and balance > 0`));
   const now = parseYmd(asOf);
   for (const ln of lines) {
-    const dd = Math.max(1, Math.min(28, num(ln.due_day) || 1));
+    const dueKnown = ln.due_day != null;
+    const dd = Math.max(1, Math.min(28, num(ln.due_day) || 15));
     let yy = now.getUTCFullYear(), mm = now.getUTCMonth();
     if (now.getUTCDate() > dd) { mm += 1; yy += Math.floor(mm / 12); mm = ((mm % 12) + 12) % 12; }
     const due = `${yy}-${String(mm + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
     const key = `debt:${ln.name}:${yy}-${String(mm + 1).padStart(2, "0")}`;
     const tier = debtTier(ln.name, ln.type);
+    const rationale = `Scheduled ${ln.type || "debt"} payment.${dueKnown ? "" : " Due day is an estimate (15th) until set in the debt schedule."} Enter the monthly amount in the debt schedule.`;
     await db.execute(sql`
       insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
-      values (${ln.name + " payment"}, ${ln.name}, 'debt', ${tier}, 0, true, ${due}::date, 'monthly', ${tier === "tier2" ? "must" : "important"}, 'pending', 'debt', ${key}, ${"Scheduled " + (ln.type || "debt") + " payment. Enter the monthly amount in the debt schedule."})
-      on conflict (external_key) do update set due_date = excluded.due_date, tier = excluded.tier, updated_at = now()
+      values (${ln.name + " payment"}, ${ln.name}, 'debt', ${tier}, 0, true, ${due}::date, 'monthly', ${tier === "tier2" ? "must" : "important"}, 'pending', 'debt', ${key}, ${rationale})
+      on conflict (external_key) do update set due_date = excluded.due_date, tier = excluded.tier, rationale = excluded.rationale, updated_at = now()
       where cash_obligations.status = 'pending'`);
     debt++;
   }

@@ -111,6 +111,33 @@ describe("computeRunwayForecast", () => {
     expect(f.dataGaps).toEqual([]);
   });
 
+  it("CRITICAL when the realistic runway is under 30 days", () => {
+    const f = computeRunwayForecast({
+      conservative: { ...base, cashOnHand: 10_000 },
+      realistic: { ...base, cashOnHand: 10_000 }, // burn 700 -> 14 days
+      aggressive: { ...base, cashOnHand: 10_000 },
+    });
+    expect(f.realisticDays).toBe(14);
+    expect(f.status).toBe("CRITICAL"); // a ~6-14 day runway must NOT read healthy
+  });
+
+  it("WARNING when the realistic runway is 30-89 days", () => {
+    const f = computeRunwayForecast({
+      conservative: base,
+      realistic: { ...base, cashOnHand: 40_000 }, // 40000/700 -> 57 days
+      aggressive: base,
+    });
+    expect(f.realisticDays).toBe(57);
+    expect(f.status).toBe("WARNING");
+  });
+
+  it("stays HEALTHY when cash-flow positive (no finite burn, no gaps)", () => {
+    const cfPositive = { ...base, dailyMarginContribution: 5_000 }; // inflow > costs
+    const f = computeRunwayForecast({ conservative: cfPositive, realistic: cfPositive, aggressive: cfPositive });
+    expect(f.realisticDays).toBeNull();
+    expect(f.status).toBe("HEALTHY");
+  });
+
   it("CALCULATION_GAPPED when any scenario is missing inputs, tagged by scenario", () => {
     const f = computeRunwayForecast({
       conservative: base,

@@ -181,7 +181,7 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
 
   const salesRow = rows(await db.execute(sql`
     select coalesce(avg(coalesce(net_revenue, total_revenue)), 0) as daily_net
-    from daily_sales_snapshots where snapshot_date >= (current_date - 30)`))[0];
+    from daily_sales_snapshots where date >= (current_date - 30)`))[0];
   const dailyRunRate = num(salesRow?.daily_net);
 
   return {
@@ -194,9 +194,20 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
 /** Write a cash_position snapshot row (so the standalone tool can read it too). */
 export async function writeCashPosition(db: any, asOf: string): Promise<void> {
   const p = await getCashPosition(db, 30, asOf);
-  await db.execute(sql`
-    insert into cash_position (as_of, cash_on_hand, expected_inflows, source, updated_at)
-    values (${asOf}::date, ${p.cashOnHand}, ${p.projectedIncome}, 'qbo', now())`);
+  // One snapshot per day. getCashFlow runs on every page read, so without this
+  // guard cash_position would accumulate a duplicate row per read. Refresh the
+  // day's row if it already exists, otherwise insert it.
+  const existing = rows(await db.execute(sql`
+    select id from cash_position where as_of = ${asOf}::date order by updated_at desc limit 1`))[0];
+  if (existing?.id) {
+    await db.execute(sql`
+      update cash_position set cash_on_hand = ${p.cashOnHand}, expected_inflows = ${p.projectedIncome},
+        source = 'qbo', updated_at = now() where id = ${existing.id}`);
+  } else {
+    await db.execute(sql`
+      insert into cash_position (as_of, cash_on_hand, expected_inflows, source, updated_at)
+      values (${asOf}::date, ${p.cashOnHand}, ${p.projectedIncome}, 'qbo', now())`);
+  }
 }
 
 // ── DB: keep generated (tax/debt) obligations fresh ─────────────────────────

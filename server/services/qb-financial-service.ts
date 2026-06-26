@@ -177,6 +177,7 @@ export function parseBalanceSheet(report: any): QbBalanceSheet {
 }
 
 export interface BillDue {
+  id: string | null; // QuickBooks Bill Id — stable key for the obligation sync
   vendor: string;
   amount: number;
   dueDate: string | null;
@@ -185,8 +186,9 @@ export interface BillDue {
 }
 
 /** Turn open QuickBooks bills into a ranked "what to pay" list — overdue first,
- *  then largest. Top 25. Pure (no IO). */
-export function buildBillsDue(openBills: any[] | null, asOf: Date = new Date()): BillDue[] {
+ *  then largest. Defaults to the top 25 for display; pass a larger limit (e.g. for
+ *  the Cash Command obligation sync) to get every open bill. Pure (no IO). */
+export function buildBillsDue(openBills: any[] | null, asOf: Date = new Date(), limit = 25): BillDue[] {
   if (!openBills) return [];
   const day = 86400000;
   return openBills
@@ -199,6 +201,7 @@ export function buildBillsDue(openBills: any[] | null, asOf: Date = new Date()):
         if (!Number.isNaN(due)) daysOverdue = Math.max(0, Math.floor((asOf.getTime() - due) / day));
       }
       return {
+        id: b?.Id ? String(b.Id) : null,
         vendor: String(b?.VendorRef?.name || b?.VendorRef?.value || "Unknown vendor"),
         amount,
         dueDate,
@@ -208,7 +211,7 @@ export function buildBillsDue(openBills: any[] | null, asOf: Date = new Date()):
     })
     .filter((b) => b.amount > 0)
     .sort((a, b) => b.daysOverdue - a.daysOverdue || b.amount - a.amount)
-    .slice(0, 25);
+    .slice(0, limit);
 }
 
 // ── CIPH.R — transaction-level expense breakdown (who is behind each category) ──
@@ -426,6 +429,22 @@ export async function captureFinancialSnapshot(
     gaps.push("DATA GAPPED: Balance Sheet totals (unrecognized report layout)");
   }
   const billsDue = buildBillsDue(raw.openBills);
+
+  // Mirror EVERY open QuickBooks bill into the Cash Command pay-order so the
+  // accounting team sees real bills (amounts + due dates) ranked alongside tax
+  // and debt. ONLY when bills were actually fetched (openBills != null) — a QB
+  // AP gap must not wipe the list. Best-effort: never break the snapshot capture.
+  if (raw.openBills != null) {
+    try {
+      const allBills = buildBillsDue(raw.openBills, new Date(), 5000);
+      const { db } = await import("../db");
+      const { syncQbBillsToObligations } = await import("./cash-flow-service");
+      const r = await syncQbBillsToObligations(db, allBills);
+      console.log(`[QB Bills] Synced ${r.upserted} open bills to Cash Command, marked ${r.closed} paid/closed`);
+    } catch (e: any) {
+      gaps.push(`Bill→obligation sync skipped: ${e?.message ?? e}`);
+    }
+  }
 
   // Transaction-level expense breakdown (who is behind each category total).
   // Trailing 120 days so a monthly vendor shows ~4 charges — enough to read a

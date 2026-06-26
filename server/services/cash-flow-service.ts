@@ -270,6 +270,48 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
   return { tax, debt };
 }
 
+/** Vendors whose bills are tax obligations → tier1 (rank above ordinary AP). */
+function isTaxVendor(vendor: string): boolean {
+  return /tax commission|department of revenue|dept of revenue|franchise tax|\birs\b|eftps|state tax|internal revenue/i.test(vendor || "");
+}
+
+// ── DB: mirror open QuickBooks bills into the pay-order ─────────────────────
+/** Upsert every open QB bill as a real (non-estimated) obligation, then mark any
+ *  previously-synced qb_bill that is no longer open as paid so it drops off. The
+ *  caller must only pass bills when QB actually returned them (never on a gap). */
+export async function syncQbBillsToObligations(
+  db: any,
+  bills: Array<{ id: string | null; vendor: string; amount: number; dueDate: string | null; docNumber: string | null }>,
+): Promise<{ upserted: number; closed: number }> {
+  // DB-clock boundary: every still-open bill below gets updated_at = now() (> dbStart),
+  // so anything left with updated_at < dbStart is no longer open in QB. Using the DB's
+  // own clock keeps the sweep immune to app/DB clock skew.
+  const dbStart = rows(await db.execute(sql`select now() as t`))[0]?.t;
+  let upserted = 0;
+  for (const b of bills) {
+    const key = `qbbill:${b.id ?? `${b.vendor}:${b.docNumber ?? b.dueDate ?? b.amount}`}`;
+    const tax = isTaxVendor(b.vendor);
+    const tier: Tier = tax ? "tier1" : "tier3";
+    const label = `${b.vendor}${b.docNumber ? ` #${b.docNumber}` : ""}`;
+    const rationale = tax
+      ? "Tax bill booked in QuickBooks A/P. Confirm with Roger."
+      : "Open vendor bill from QuickBooks accounts payable.";
+    await db.execute(sql`
+      insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
+      values (${label}, ${b.vendor}, ${tax ? "tax" : "vendor_bill"}, ${tier}, ${num(b.amount)}, false, ${b.dueDate}::date, 'one_time', ${tax ? "must" : "important"}, 'pending', 'qb_bill', ${key}, ${rationale})
+      on conflict (external_key) do update set
+        amount = excluded.amount, due_date = excluded.due_date, payee = excluded.payee,
+        label = excluded.label, tier = excluded.tier, updated_at = now()
+      where cash_obligations.status <> 'paid'`);
+    upserted++;
+  }
+  // Bills paid/closed in QuickBooks (not in this sync) drop off the pay-order.
+  const res = await db.execute(sql`
+    update cash_obligations set status = 'paid', updated_at = now()
+    where source = 'qb_bill' and is_active and status <> 'paid' and updated_at < ${dbStart}`);
+  return { upserted, closed: num((res as any)?.rowCount ?? 0) };
+}
+
 // ── DB: the assembled, ranked cash-flow view ────────────────────────────────
 export async function getCashFlow(db: any, opts: { windowDays?: number; asOf?: string } = {}): Promise<CashFlowResult> {
   const windowDays = opts.windowDays ?? 30;

@@ -25586,8 +25586,9 @@ Generate only the email body text, no subject line.`;
     try {
       const { db } = await import("./db");
       const { getCashFlow } = await import("./services/cash-flow-service");
-      const windowDays = req.query.windowDays != null ? Number(req.query.windowDays) : undefined;
-      res.json({ success: true, ...(await getCashFlow(db, { windowDays: Number.isFinite(windowDays as number) ? (windowDays as number) : undefined })) });
+      const raw = req.query.windowDays != null ? Number(req.query.windowDays) : NaN;
+      const windowDays = Number.isFinite(raw) ? Math.min(365, Math.max(1, Math.trunc(raw))) : undefined;
+      res.json({ success: true, ...(await getCashFlow(db, { windowDays })) });
     } catch (error: any) {
       console.error("[CashFlow] error:", error);
       res.status(500).json({ success: false, error: error.message || "Failed to build cash flow" });
@@ -25602,8 +25603,14 @@ Generate only the email body text, no subject line.`;
       }
       const { db } = await import("./db");
       const { setObligationStatus } = await import("./services/cash-flow-service");
+      const { storage } = await import("./storage");
       const by = (req.session as any)?.userId || null;
-      await setObligationStatus(db, req.params.id, status as any, by, req.body?.byName);
+      // Resolve the actor's name server-side for the audit trail — the client
+      // can't be trusted for audit fields, and the session only stores userId.
+      let byName: string | null = null;
+      if (by) { const u = await storage.getUser(by).catch(() => null); byName = u?.name || u?.email || null; }
+      const ok = await setObligationStatus(db, req.params.id, status as any, by, byName);
+      if (!ok) return res.status(404).json({ success: false, error: "obligation not found" });
       res.json({ success: true });
     } catch (error: any) {
       console.error("[CashFlow] status error:", error);

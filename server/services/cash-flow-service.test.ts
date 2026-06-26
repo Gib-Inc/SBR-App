@@ -34,6 +34,14 @@ describe("debtTier", () => {
     expect(debtTier("Shoreham Bank-SBA 6-2-25", "loan")).toBe("tier2");
     expect(debtTier("American Express 43003", "card")).toBe("tier3");
   });
+  it("does not let generic substrings match the short mca/fora tokens", () => {
+    // "Comcast" contains "mca", "Metafora" contains "fora" — must NOT be tagged mca
+    expect(debtTier("Comcast Business", "card")).not.toBe("mca");
+    expect(debtTier("Metafora Leasing", "loan")).not.toBe("mca");
+    // real facilities still match
+    expect(debtTier("Fora Financial", "loan")).toBe("mca");
+    expect(debtTier("BlueVine MCA", "loan")).toBe("mca");
+  });
 });
 
 describe("rankAndProject", () => {
@@ -58,6 +66,15 @@ describe("rankAndProject", () => {
     expect(r.find((o) => o.id === "a")!.runningCashAfter).toBeNull();
     expect(r.find((o) => o.id === "b")!.runningCashAfter).toBe(300);
   });
+  it("treats hold tier as defer (no runway draw)", () => {
+    const obls = [
+      obl({ id: "h", tier: "hold", amount: 500 }),
+      obl({ id: "p", tier: "tier2", amount: 200 }),
+    ];
+    const r = rankAndProject(obls, 1000, "2026-06-26");
+    expect(r.find((o) => o.id === "h")!.runningCashAfter).toBeNull();
+    expect(r.find((o) => o.id === "p")!.runningCashAfter).toBe(800);
+  });
 });
 
 describe("taxObligationSeeds", () => {
@@ -70,5 +87,12 @@ describe("taxObligationSeeds", () => {
     expect(utSales?.dueDate).toBe("2026-07-31"); // June sales/use tax due end of July
     seeds.forEach((s) => expect(s.tier).toBe("tier1"));
     expect(seeds.length).toBeGreaterThanOrEqual(2);
+  });
+  it("anchors the Q4 941 to the current year when asOf is in January", () => {
+    // The imminent Jan-31 deadline must be present, not pushed a full year to 2027
+    const seeds = taxObligationSeeds("2026-01-20");
+    const q4 = seeds.find((s) => s.externalKey === "tax:941:2026-01-31");
+    expect(q4).toBeTruthy();
+    expect(q4?.dueDate).toBe("2026-01-31");
   });
 });

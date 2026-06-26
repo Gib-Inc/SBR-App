@@ -43,7 +43,15 @@ export default function CashFlow() {
   const { toast } = useToast();
   const [windowDays, setWindowDays] = useState(30);
 
-  const { data, isLoading } = useQuery<CashFlow>({ queryKey: ["/api/finances/cash-flow", windowDays] });
+  // Explicit queryFn: the default getQueryFn joins the key with "/", which would
+  // request /api/finances/cash-flow/30 (no such route → SPA HTML → JSON parse
+  // error). Send windowDays as the query string the route actually reads. The
+  // 2-element key keeps a distinct cache entry per window and lets the prefix
+  // invalidation below still match.
+  const { data, isLoading } = useQuery<CashFlow>({
+    queryKey: ["/api/finances/cash-flow", windowDays],
+    queryFn: async () => (await apiRequest("GET", `/api/finances/cash-flow?windowDays=${windowDays}`)).json(),
+  });
 
   const setStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) =>

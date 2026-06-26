@@ -39,6 +39,7 @@ import Reports from "@/pages/reports";
 import Finances from "@/pages/finances";
 import Budget from "@/pages/budget";
 import CashFlow from "@/pages/cash-flow";
+import GreenLine from "@/pages/green-line";
 import Health from "@/pages/health";
 import FinOps from "@/pages/finops";
 import { FinanceGate } from "@/components/finance-gate";
@@ -145,6 +146,7 @@ function AuthenticatedApp() {
                     <Route path="/finances"><FinanceGate><Finances /></FinanceGate></Route>
                     <Route path="/budget"><FinanceGate><Budget /></FinanceGate></Route>
                     <Route path="/cash-flow"><FinanceGate><CashFlow /></FinanceGate></Route>
+                    <Route path="/green-line"><FinanceGate><GreenLine /></FinanceGate></Route>
                     <Route path="/health" component={Health} />
                     <Route path="/finops"><FinanceGate><FinOps /></FinanceGate></Route>
                     <Route path="/reorder-alerts" component={ReorderAlerts} />

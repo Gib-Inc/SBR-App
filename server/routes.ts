@@ -23791,6 +23791,19 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Green Line L7 — the north-star: one readout of solvency (runway + DSCR + opex)
+  // plus governor + debt, with the net-income trend. Drives the dashboard header.
+  app.get("/api/finances/green-line", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeGreenLine } = await import("./services/green-line-service");
+      res.json({ success: true, ...(await computeGreenLine(db)) });
+    } catch (err: any) {
+      console.error("[Finances] green-line error:", err?.message ?? err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to compute green line" });
+    }
+  });
+
   // COUNT.M — weekly reorder needs: per-component "needed this week" (velocity ×
   // BOM vs on-hand + on-order) plus the per-vendor grouping the digest sends.
   app.get("/api/reorder/needs", requireAuth, async (_req: Request, res: Response) => {

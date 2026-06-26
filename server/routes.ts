@@ -23778,6 +23778,19 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Green Line L5 — Marketing Governor: spend-authority posture (ALLOW_SCALE /
+  // HOLD / BLOCK) gating budget increases on MER + cash + freshness + September Rule.
+  app.get("/api/finances/marketing-governor", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeGovernor } = await import("./services/marketing-governor-service");
+      res.json({ success: true, ...(await computeGovernor(db)) });
+    } catch (err: any) {
+      console.error("[Finances] marketing-governor error:", err?.message ?? err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to compute governor" });
+    }
+  });
+
   // COUNT.M — weekly reorder needs: per-component "needed this week" (velocity ×
   // BOM vs on-hand + on-order) plus the per-vendor grouping the digest sends.
   app.get("/api/reorder/needs", requireAuth, async (_req: Request, res: Response) => {

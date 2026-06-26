@@ -25581,6 +25581,55 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── Cash Flow Command: what-to-pay-when (recommends + tracks only; never pays) ──
+  app.get("/api/finances/cash-flow", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getCashFlow } = await import("./services/cash-flow-service");
+      const windowDays = req.query.windowDays != null ? Number(req.query.windowDays) : undefined;
+      res.json({ success: true, ...(await getCashFlow(db, { windowDays: Number.isFinite(windowDays as number) ? (windowDays as number) : undefined })) });
+    } catch (error: any) {
+      console.error("[CashFlow] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build cash flow" });
+    }
+  });
+
+  app.put("/api/finances/cash-obligation/:id/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const status = String(req.body?.status || "");
+      if (!["pending", "approved", "deferred", "paid"].includes(status)) {
+        return res.status(400).json({ success: false, error: "invalid status" });
+      }
+      const { db } = await import("./db");
+      const { setObligationStatus } = await import("./services/cash-flow-service");
+      const by = (req.session as any)?.userId || null;
+      await setObligationStatus(db, req.params.id, status as any, by, req.body?.byName);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[CashFlow] status error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to update status" });
+    }
+  });
+
+  app.post("/api/finances/cash-obligation", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const b = req.body || {};
+      if (!b.label) return res.status(400).json({ success: false, error: "label required" });
+      const { db } = await import("./db");
+      const { upsertObligation } = await import("./services/cash-flow-service");
+      await upsertObligation(db, {
+        id: b.id, label: String(b.label), payee: b.payee, category: b.category, tier: b.tier,
+        amount: b.amount != null ? Number(b.amount) : undefined, amountEstimated: b.amountEstimated === true,
+        dueDate: b.dueDate ?? null, cadence: b.cadence, criticality: b.criticality,
+        payFrom: b.payFrom ?? null, method: b.method ?? null, rationale: b.rationale ?? null,
+      });
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[CashFlow] upsert error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to save obligation" });
+    }
+  });
+
   app.get("/api/marketing/trend", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");

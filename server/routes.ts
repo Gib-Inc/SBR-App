@@ -23701,6 +23701,33 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Green Line L0a — measured BOM COGS vs the REAL booked QuickBooks COGS plug,
+  // per month. Kills the "is gross margin real?" blind spot: every margin number
+  // is an assumption until measured COGS is trusted.
+  app.get("/api/finances/cogs-reconciliation", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeMeasuredVsPlugged } = await import("./services/cogs-service");
+      res.json({ success: true, months: await computeMeasuredVsPlugged(db) });
+    } catch (err: any) {
+      console.error("[Finances] cogs-reconciliation error:", err?.message ?? err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to reconcile COGS" });
+    }
+  });
+
+  // Green Line L1 — measured materials COGS + gross contribution per channel.
+  // Materials-only margin on COVERED SKUs; coveragePct is reported alongside.
+  app.get("/api/finances/cogs-by-channel", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeChannelCogs } = await import("./services/cogs-service");
+      res.json({ success: true, channels: await computeChannelCogs(db) });
+    } catch (err: any) {
+      console.error("[Finances] cogs-by-channel error:", err?.message ?? err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to compute channel COGS" });
+    }
+  });
+
   // COUNT.M — weekly reorder needs: per-component "needed this week" (velocity ×
   // BOM vs on-hand + on-order) plus the per-vendor grouping the digest sends.
   app.get("/api/reorder/needs", requireAuth, async (_req: Request, res: Response) => {

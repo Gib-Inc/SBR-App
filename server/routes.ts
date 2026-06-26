@@ -23728,6 +23728,20 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Green Line L2 — Debt-Service Coverage Ratio. <1.0 = operations can't cover
+  // debt (borrowing to pay debt). Principal is a dataGap until the debt schedule
+  // is filled, so the ratio is reported as a best-case interest-coverage bound.
+  app.get("/api/finances/dscr", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeDscr } = await import("./services/dscr-service");
+      res.json({ success: true, ...(await computeDscr(db)) });
+    } catch (err: any) {
+      console.error("[Finances] dscr error:", err?.message ?? err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to compute DSCR" });
+    }
+  });
+
   // COUNT.M — weekly reorder needs: per-component "needed this week" (velocity ×
   // BOM vs on-hand + on-order) plus the per-vendor grouping the digest sends.
   app.get("/api/reorder/needs", requireAuth, async (_req: Request, res: Response) => {

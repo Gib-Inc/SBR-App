@@ -48,9 +48,13 @@ export async function computeOpexCreep(db: DB, sinceYmd = "2026-01-01"): Promise
     const pct = netSales > 0 ? r1((opex / netSales) * 100) : 0;
     return { month: rr.ym, netSales: r0(netSales), opex: r0(opex), opexPct: pct, status: opexStatus(pct) };
   });
+  // Severity keys off the last COMPLETE month, not the in-progress one: a partial
+  // month's opex/sales ratio is unstable and would swing the headline by day.
+  const currentYm = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" }).slice(0, 7);
+  const complete = months.filter((m) => m.month < currentYm);
   return {
     months,
-    latest: months[months.length - 1] ?? null,
+    latest: complete[complete.length - 1] ?? months[months.length - 1] ?? null,
     monthsOver90: months.filter((m) => m.opexPct >= 90).length,
   };
 }
@@ -149,13 +153,16 @@ export async function computeDebtAvalanche(db: DB): Promise<{
 }
 
 // ── L7: the Green Line north-star ───────────────────────────────────────────
-/** Runway severity from the day count itself, so the Green Line is correct even
- *  if the persisted runway_status row hasn't recomputed since the threshold fix. */
-function runwaySeverity(days: number | null): Severity {
-  if (days == null) return "HEALTHY"; // cash-flow positive (no finite burn)
+/** Runway severity, status-aware. Returns null ("unknown") when the persisted
+ *  forecast is gapped: a NULL day count means EITHER cash-flow positive OR a
+ *  failed calculation, and the two must not both read green. */
+function runwaySev(days: number | null, status: string | null): Severity | null {
+  if (status === "CALCULATION_GAPPED" || status === "MISMATCH") return null;
+  if (days == null) return "HEALTHY"; // genuine cash-flow positive (no finite burn)
   return days < 30 ? "CRITICAL" : days < 90 ? "WARNING" : "HEALTHY";
 }
-function worst(...s: Severity[]): Severity {
+/** Worst (most severe) of the KNOWN severities. Gaps are excluded by the caller. */
+function worst(s: Severity[]): Severity {
   if (s.includes("CRITICAL")) return "CRITICAL";
   if (s.includes("WARNING")) return "WARNING";
   return "HEALTHY";
@@ -165,17 +172,18 @@ export interface GreenLineSummary {
   overall: Severity;
   cashOnHand: number | null;
   runwayDays: number | null;
-  runwaySeverity: Severity;
+  runwaySeverity: string; // Severity or "UNKNOWN" (gapped)
   burnRate: number | null;
   dscr: number | null;
   dscrStatus: string;
   opexPct: number | null;
-  opexSeverity: Severity;
+  opexSeverity: string; // Severity or "UNKNOWN" (gapped)
   governorState: string;
   blendedMer: number | null;
   totalDebt: number;
   mcaBucket: number;
   netIncomeTrend: Array<{ month: string; netIncome: number }>;
+  gaps: string[];
   asOf: string | null;
 }
 
@@ -186,9 +194,9 @@ export async function computeGreenLine(db: DB): Promise<GreenLineSummary> {
   const { computeGovernor } = await import("./marketing-governor-service");
 
   const [cashRow, runwayRow, niRows, debt, dscr, opex, gov] = await Promise.all([
-    db.execute(sql`select cash_on_hand, captured_at::date as as_of from qb_financial_snapshots
+    db.execute(sql`select cash_on_hand, captured_at::date::text as as_of from qb_financial_snapshots
       where cash_on_hand is not null order by captured_at desc limit 1`).then((r: any) => rows(r)[0]),
-    db.execute(sql`select realistic_days, calculated_burn_rate from financial_runway_forecasts
+    db.execute(sql`select realistic_days, calculated_burn_rate, runway_status from financial_runway_forecasts
       order by created_at desc limit 1`).then((r: any) => rows(r)[0]),
     db.execute(sql`
       with c as (
@@ -206,26 +214,36 @@ export async function computeGreenLine(db: DB): Promise<GreenLineSummary> {
   ]);
 
   const runwayDays = runwayRow?.realistic_days != null ? num(runwayRow.realistic_days) : null;
-  const rwSev = runwaySeverity(runwayDays);
-  const dscrSev: Severity = dscr.status === "CRITICAL" ? "CRITICAL" : dscr.status === "HEALTHY" ? "HEALTHY" : "WARNING";
-  const opexSev: Severity = opex.latest?.status ?? "HEALTHY";
+  const rwSev = runwaySev(runwayDays, runwayRow?.runway_status ?? null);
+  const dscrSev: Severity | null =
+    dscr.status === "CRITICAL" ? "CRITICAL" : dscr.status === "WARNING" ? "WARNING" : dscr.status === "HEALTHY" ? "HEALTHY" : null;
+  const opexSev: Severity | null = opex.latest ? opex.latest.status : null;
+  // A data gap is "unknown" — it must not read green OR amber. The color reflects
+  // only the instruments we can actually measure; gaps are surfaced separately.
+  const known = [rwSev, dscrSev, opexSev].filter((s): s is Severity => s != null);
+  const overall: Severity = known.length ? worst(known) : "WARNING";
+  const gaps: string[] = [];
+  if (rwSev == null) gaps.push("runway");
+  if (dscrSev == null) gaps.push("DSCR");
+  if (opexSev == null) gaps.push("opex");
   const mcaBucket = (debt.byBucket.find((b) => b.tier === "mca")?.total) ?? 0;
 
   return {
-    overall: worst(rwSev, dscrSev, opexSev),
+    overall,
     cashOnHand: cashRow?.cash_on_hand != null ? r0(num(cashRow.cash_on_hand)) : null,
     runwayDays,
-    runwaySeverity: rwSev,
+    runwaySeverity: rwSev ?? "UNKNOWN",
     burnRate: runwayRow?.calculated_burn_rate != null ? r0(num(runwayRow.calculated_burn_rate)) : null,
     dscr: dscr.dscr,
     dscrStatus: dscr.status,
     opexPct: opex.latest?.opexPct ?? null,
-    opexSeverity: opexSev,
+    opexSeverity: opexSev ?? "UNKNOWN",
     governorState: gov.state,
     blendedMer: gov.blendedMer,
     totalDebt: debt.totalDebt,
     mcaBucket,
     netIncomeTrend: niRows.map((rr: any) => ({ month: String(rr.ym), netIncome: r0(num(rr.net_income)) })),
+    gaps,
     asOf: cashRow?.as_of ?? null,
   };
 }

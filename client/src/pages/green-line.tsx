@@ -11,7 +11,7 @@ interface GreenLine {
   overall: string; cashOnHand: number | null; runwayDays: number | null; runwaySeverity: string;
   burnRate: number | null; dscr: number | null; dscrStatus: string; opexPct: number | null; opexSeverity: string;
   governorState: string; blendedMer: number | null; totalDebt: number; mcaBucket: number;
-  netIncomeTrend: { month: string; netIncome: number }[]; asOf: string | null;
+  netIncomeTrend: { month: string; netIncome: number }[]; gaps: string[]; asOf: string | null;
 }
 interface Governor {
   state: string; reasons: string[]; blendedMer: number | null; breakeven: number; qbMarketing30d: number;
@@ -77,13 +77,16 @@ export default function GreenLine() {
           </div>
           <Badge className={`${sev.text} bg-transparent border ${sev.box}`}>{sev.label}{g?.asOf ? ` · as of ${g.asOf}` : ""}</Badge>
         </div>
+        {g?.gaps && g.gaps.length > 0 && (
+          <div className="text-[11px] mt-1 opacity-80">Some inputs incomplete ({g.gaps.join(", ")}); color reflects measured signals only.</div>
+        )}
       </div>
 
       {/* Vitals */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <Tile label="Cash on hand" value={money(g?.cashOnHand)} tone={(g?.cashOnHand ?? 0) < 60000 ? "CRITICAL" : "HEALTHY"} />
         <Tile label="Runway" value={g?.runwayDays != null ? `${g.runwayDays}d` : "—"} sub={g?.burnRate ? `${money(g.burnRate)}/day burn` : ""} tone={g?.runwaySeverity} />
-        <Tile label="DSCR" value={g?.dscr != null ? `${g.dscr.toFixed(2)}x` : (g?.dscrStatus === "CRITICAL" ? "<0" : "—")} sub="debt coverage" tone={g?.dscrStatus === "CRITICAL" ? "CRITICAL" : g?.dscrStatus === "HEALTHY" ? "HEALTHY" : "WARNING"} />
+        <Tile label="DSCR" value={g?.dscr != null ? `${g.dscr.toFixed(2)}x` : (g?.dscrStatus === "CRITICAL" ? "<0" : "—")} sub="debt coverage" tone={g?.dscrStatus === "CRITICAL" ? "CRITICAL" : g?.dscrStatus === "HEALTHY" ? "HEALTHY" : g?.dscrStatus === "WARNING" ? "WARNING" : "UNKNOWN"} />
         <Tile label="Blended MER" value={g?.blendedMer != null ? `${g.blendedMer.toFixed(2)}x` : "—"} sub="vs 5x breakeven" tone={(g?.blendedMer ?? 0) > 5 ? "HEALTHY" : "WARNING"} />
         <Tile label="Opex / sales" value={pct(g?.opexPct)} sub="latest month" tone={g?.opexSeverity} />
         <Tile label="Total debt" value={money(g?.totalDebt)} sub={`${money(g?.mcaBucket)} MCA`} tone={(g?.totalDebt ?? 0) > 0 ? "WARNING" : "HEALTHY"} />

@@ -132,14 +132,23 @@ export async function computeMeasuredVsPlugged(db: DB, sinceYmd = "2026-01-01"):
     if (m && MONTH_NUM[m[1]]) incomeByYm[`${m[2]}-${MONTH_NUM[m[1]]}`] = num(i.income);
   }
 
-  return measuredRows.map((rr: any): CogsReconMonth => {
-    const measured = num(rr.measured_cogs);
-    const lineRev = num(rr.line_revenue);
-    const coveredRev = num(rr.covered_revenue);
-    const plug = plugByYm[rr.ym] ?? null;
-    const income = incomeByYm[rr.ym] ?? null;
+  // Drive output from the UNION of measured months and booked-plug months, so a
+  // month with a booked COGS plug but no surviving sales lines (all cancelled, or
+  // a pure COGS true-up) still appears in the reconciliation instead of vanishing.
+  const measuredByYm: Record<string, any> = {};
+  for (const rr of measuredRows) measuredByYm[String(rr.ym)] = rr;
+  const ymList: string[] = (measuredRows as any[]).map((r: any) => String(r.ym)).concat(Object.keys(plugByYm));
+  const allYms: string[] = Array.from(new Set(ymList)).sort();
+
+  return allYms.map((ym): CogsReconMonth => {
+    const rr = measuredByYm[ym];
+    const measured = rr ? num(rr.measured_cogs) : 0;
+    const lineRev = rr ? num(rr.line_revenue) : 0;
+    const coveredRev = rr ? num(rr.covered_revenue) : 0;
+    const plug = plugByYm[ym] ?? null;
+    const income = incomeByYm[ym] ?? null;
     return {
-      month: rr.ym,
+      month: ym,
       measuredCogs: r2(measured),
       coveredRevenue: r2(coveredRev),
       coveragePct: lineRev > 0 ? r1((coveredRev / lineRev) * 100) : 0,

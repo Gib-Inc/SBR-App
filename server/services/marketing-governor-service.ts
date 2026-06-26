@@ -96,9 +96,13 @@ export async function computeGovernor(db: DB): Promise<GovernorResult> {
   const cashOnHand = cashRow?.cash_on_hand != null ? num(cashRow.cash_on_hand) : null;
 
   // September Rule: consecutive most-recent Google days with ROAS < 8x.
+  // Scope to the per-campaign '_windsor' grain only. ad_metrics_daily stores the
+  // same Google spend at overlapping grains (account/product SKUs + _windsor),
+  // so summing across all of them double-counts spend and mixes attribution
+  // fields — the canonical analytics query dedups the same way.
   const gRows = rows(await db.execute(sql`
     select date::text as d, (sum(revenue)/nullif(sum(spend),0)) as roas
-    from ad_metrics_daily where platform ilike '%google%' and spend > 0
+    from ad_metrics_daily where platform ilike '%google%' and spend > 0 and sku = '_windsor'
     group by date order by date desc limit 60`));
   let septemberStreak = 0;
   for (const g of gRows) {

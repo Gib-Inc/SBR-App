@@ -67,6 +67,7 @@ export default function GreenLine() {
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2"><Compass className="h-6 w-6" /> Green Line</h1>
         <p className="text-sm text-muted-foreground">One readout: are we steering into the green? Solvency (runway, DSCR, opex) drives the color. Every instrument recommends and tracks. None of it moves money.</p>
+        <p className="text-[11px] text-muted-foreground mt-1">Figures here are operational estimates (basis: accrual, from QuickBooks). QuickBooks is the authoritative book of record; the app reconciles and flags, it never posts entries.</p>
       </div>
 
       {/* North-star banner */}
@@ -183,6 +184,9 @@ export default function GreenLine() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Is gross margin real? Measured COGS vs the booked plug</CardTitle></CardHeader>
         <CardContent className="space-y-3">
+          <div className="text-[11px] rounded-md border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 px-2 py-1">
+            <b>PLUG — not measured.</b> Booked COGS is a 35%-of-income journal estimate. Roger books the measured-COGS true-up in QuickBooks; the app reports and flags only, it never posts entries.
+          </div>
           {recon.data?.months && (
             <div className="space-y-1">
               {recon.data.months.slice(-4).map((m) => (

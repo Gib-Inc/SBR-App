@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Compass, ShieldAlert, TrendingDown, Receipt, Layers, Gauge } from "lucide-react";
+import { DataFreshnessBar } from "@/components/data-freshness-bar";
 
 const money = (n: number | null | undefined) =>
   n == null ? "—" : `${n < 0 ? "-" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
@@ -75,6 +76,7 @@ export default function GreenLine() {
         <h1 className="text-2xl font-bold flex items-center gap-2"><Compass className="h-6 w-6" /> Green Line</h1>
         <p className="text-sm text-muted-foreground">One readout: are we steering into the green? Solvency (runway, DSCR, opex) drives the color. Every instrument recommends and tracks. None of it moves money.</p>
         <p className="text-[11px] text-muted-foreground mt-1">Figures here are operational estimates (basis: accrual, from QuickBooks). QuickBooks is the authoritative book of record; the app reconciles and flags, it never posts entries.</p>
+        <DataFreshnessBar className="mt-2" />
       </div>
 
       {/* North-star banner */}

@@ -25872,6 +25872,54 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Data-as-of freshness: the real last-updated timestamp of each finance data
+  // source, with a server-computed staleness status, so a frozen number reads as
+  // visibly stale instead of being trusted. Read-only; defensive per-source so a
+  // missing column/table degrades that one row to "unknown" rather than 500-ing.
+  app.get("/api/finances/data-freshness", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const now = Date.now();
+      // kind "synced_at" = when we last pulled it (should be hours fresh);
+      // kind "covers_through" = the latest period the data spans (month-scale).
+      const statusFor = (asOf: string | null, kind: string) => {
+        if (!asOf) return { ageHours: null, status: "unknown" };
+        const ms = now - Date.parse(asOf);
+        const days = ms / 86_400_000;
+        const status = kind === "synced_at"
+          ? (days <= 1.5 ? "fresh" : days <= 7 ? "stale" : "very_stale")
+          : (days <= 35 ? "fresh" : days <= 65 ? "stale" : "very_stale");
+        return { ageHours: Math.round(ms / 3_600_000), status };
+      };
+      const safe = async (source: string, kind: string, q: any) => {
+        try {
+          const row = (((await db.execute(q)).rows ?? []) as any[])[0];
+          const raw = row?.ts ?? null;
+          const asOf = raw ? new Date(raw).toISOString() : null;
+          return { source, kind, asOf, ...statusFor(asOf, kind) };
+        } catch {
+          return { source, kind, asOf: null, ageHours: null, status: "unknown" };
+        }
+      };
+      const sources = await Promise.all([
+        safe("QuickBooks financial snapshot", "synced_at",
+          sql`select max(captured_at) as ts from qb_financial_snapshots`),
+        safe("QuickBooks P&L detail", "covers_through",
+          sql`select max(period_end) as ts from qb_pl_detail`),
+        safe("Marketing ad spend", "covers_through",
+          sql`select max(coalesce(period_end, period_start)) as ts from marketing_spend_snapshots where coalesce(superseded,false) = false`),
+        safe("Credit-line balances", "synced_at",
+          sql`select max(balance_synced_at) as ts from credit_lines`),
+      ]);
+      const rank: Record<string, number> = { very_stale: 0, stale: 1, unknown: 2, fresh: 3 };
+      const worst = sources.reduce((w, s) => (rank[s.status] < rank[w] ? s.status : w), "fresh");
+      res.json({ success: true, asOf: new Date(now).toISOString(), worstStatus: worst, sources });
+    } catch (error: any) {
+      console.error("[Finances] data-freshness error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load data freshness" });
+    }
+  });
+
   // Set a category's target % of net sales.
   app.put("/api/finances/budget-target", requireAuth, async (req: Request, res: Response) => {
     try {

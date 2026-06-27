@@ -374,6 +374,45 @@ export async function syncQbBillsToObligations(
   return { upserted, closed: num((res as any)?.rowCount ?? 0) };
 }
 
+// ── DB: 13-week cash forecast (the standard turnaround instrument) ───────────
+export interface ForecastWeek {
+  weekStart: string; weekEnd: string; openingCash: number; inflows: number; outflows: number; endingCash: number;
+}
+/** Weekly cash projection for the next 13 weeks: opening cash → + sales run-rate
+ *  − obligations due that week → ending cash. Recommend-only; never moves money. */
+export async function compute13WeekForecast(db: any, asOf?: string): Promise<{
+  startingCash: number; weeklyInflow: number; weeks: ForecastWeek[]; lowestCash: number; lowestWeek: string | null; note: string;
+}> {
+  const startStr = asOf ?? todayMountain();
+  const start = parseYmd(startStr);
+  const fmt = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  const pos = await getCashPosition(db, 7, startStr);
+  const weeklyInflow = r2(pos.dailySalesRunRate * 7);
+  const endStr = fmt(new Date(start.getTime() + 91 * 86_400_000));
+  const obls = rows(await db.execute(sql`
+    select due_date::text as due, amount::float8 as amount from cash_obligations
+    where is_active and status not in ('paid','deferred') and due_date is not null
+      and due_date >= ${startStr}::date and due_date < ${endStr}::date`));
+  let cash = pos.cashOnHand;
+  let lowestCash = cash;
+  let lowestWeek: string | null = null;
+  const weeks: ForecastWeek[] = [];
+  for (let w = 0; w < 13; w++) {
+    const ws = new Date(start.getTime() + w * 7 * 86_400_000);
+    const we = new Date(ws.getTime() + 6 * 86_400_000);
+    const wsS = fmt(ws), weS = fmt(we);
+    const outflows = r2(obls.filter((o: any) => o.due >= wsS && o.due <= weS).reduce((s: number, o: any) => s + num(o.amount), 0));
+    const opening = cash;
+    cash = r2(opening + weeklyInflow - outflows);
+    if (cash < lowestCash) { lowestCash = cash; lowestWeek = wsS; }
+    weeks.push({ weekStart: wsS, weekEnd: weS, openingCash: r2(opening), inflows: weeklyInflow, outflows, endingCash: cash });
+  }
+  return {
+    startingCash: r2(pos.cashOnHand), weeklyInflow, weeks, lowestCash, lowestWeek,
+    note: "OPTIMISTIC / best-case. Inflows are GROSS trailing-30d sales run-rate × 7 (costs NOT deducted, so true net cash inflow is materially lower), and outflows only include obligations that carry a due date and amount — debt service (MCA daily debits) and tax read $0 until their amounts are entered. Read the SHAPE (weekly bill timing, trajectory), not the level. Operational estimate; QuickBooks is authoritative.",
+  };
+}
+
 // ── DB: the assembled, ranked cash-flow view ────────────────────────────────
 export async function getCashFlow(db: any, opts: { windowDays?: number; asOf?: string } = {}): Promise<CashFlowResult> {
   const windowDays = opts.windowDays ?? 30;

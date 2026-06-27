@@ -25544,6 +25544,19 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // 13-week cash forecast (the standard turnaround instrument): weekly opening cash
+  // + sales run-rate − obligations due that week. Recommend-only; never moves money.
+  app.get("/api/finances/cash-forecast-13week", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { compute13WeekForecast } = await import("./services/cash-flow-service");
+      res.json({ success: true, ...(await compute13WeekForecast(db)) });
+    } catch (error: any) {
+      console.error('[Cash Forecast 13wk] error:', error);
+      res.status(500).json({ error: error.message || "Failed to build cash forecast" });
+    }
+  });
+
   // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
   app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
     const startedAt = new Date();

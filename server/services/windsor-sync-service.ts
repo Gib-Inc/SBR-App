@@ -66,7 +66,18 @@ async function ingestPlatform(platform: string, source: string, agg: WindsorAgg,
     await storage.createDataReconciliationLog([{ dataType: "sync:windsor", entityKey, action: "DISREGARDED", field: null, oldValue: null, newValue: null, reason: rec.decision.reason, source }]);
     return { platform, action: "DISREGARDED", spend: agg.spend };
   }
-  if (rec.action === "SUPERSEDED" && rec.supersedeIds.length) await storage.markMarketingSpendSnapshotsSuperseded(rec.supersedeIds, source);
+  // Supersede ANY active same-platform snapshot whose period OVERLAPS this one, so the
+  // daily trailing-30d window REPLACES the prior overlapping windows instead of stacking.
+  // reconcileMarketingSnapshot only matched exact/identical periods, so ~14 overlapping
+  // rolling windows piled up and multi-counted spend (~14x). Mirrors the meta-manual path.
+  const newEnd = agg.periodEnd ?? agg.periodStart;
+  const overlapIds = (active as any[])
+    .filter((s) => String(s.platform || "").toUpperCase() === platform.toUpperCase() && !s.superseded
+      && s.periodStart && s.periodEnd && s.sourceHash !== sourceHash
+      && s.periodStart <= newEnd && s.periodEnd >= agg.periodStart)
+    .map((s) => s.id);
+  const supersedeIds = Array.from(new Set([...(rec.action === "SUPERSEDED" ? rec.supersedeIds : []), ...overlapIds]));
+  if (supersedeIds.length) await storage.markMarketingSpendSnapshotsSuperseded(supersedeIds, source);
   await storage.createMarketingSpendSnapshot({
     platform, periodStart: agg.periodStart, periodEnd: agg.periodEnd,
     spend: agg.spend, impressions: agg.impressions, clicks: agg.clicks, currency: "USD",

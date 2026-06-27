@@ -25754,8 +25754,12 @@ Generate only the email body text, no subject line.`;
       // can't be trusted for audit fields, and the session only stores userId.
       let byName: string | null = null;
       if (by) { const u = await storage.getUser(by).catch(() => null); byName = u?.name || u?.email || null; }
-      const ok = await setObligationStatus(db, req.params.id, status as any, by, byName);
-      if (!ok) return res.status(404).json({ success: false, error: "obligation not found" });
+      const r = await setObligationStatus(db, req.params.id, status as any, by, byName);
+      if (!r.ok) {
+        if (r.reason === "sod_block") return res.status(409).json({ success: false, error: "Segregation of duties: a different person must mark this paid than the one who approved it." });
+        if (r.reason === "no_actor") return res.status(401).json({ success: false, error: "Sign in to record a pay action." });
+        return res.status(404).json({ success: false, error: "obligation not found" });
+      }
       res.json({ success: true });
     } catch (error: any) {
       console.error("[CashFlow] status error:", error);

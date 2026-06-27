@@ -444,22 +444,41 @@ export async function upsertObligation(db: any, p: {
 
 const ACTION_FOR: Record<OblStatus, string> = { approved: "approved", deferred: "deferred", paid: "marked_paid", pending: "reopened" };
 
-export async function setObligationStatus(db: any, id: string, status: OblStatus, by?: string, byName?: string): Promise<boolean> {
-  const o = rows(await db.execute(sql`select amount::float8 as amount from cash_obligations where id = ${id}`))[0];
-  // Unknown/stale/deleted/forged id: refuse silently so we never write an orphan
-  // audit row (payment_actions has no FK) or report a false success to the caller.
-  if (!o) return false;
+/** Dual-control threshold: marking a paid obligation at/above this requires a
+ *  different person than the approver. Configurable via env (default $1,000). */
+const DUAL_CONTROL_THRESHOLD = Number(process.env.FINANCE_DUAL_CONTROL_THRESHOLD || 1000);
+
+/** Segregation of duties: a material obligation cannot be marked paid by the same
+ *  person who approved it. Pure + unit-tested. */
+export function sodBlocksPaid(status: OblStatus, amount: number, approvedBy: string | null, actor: string, threshold = DUAL_CONTROL_THRESHOLD): boolean {
+  return status === "paid" && amount >= threshold && !!approvedBy && approvedBy === actor;
+}
+
+export type StatusResult = { ok: boolean; reason?: "not_found" | "no_actor" | "sod_block" };
+
+export async function setObligationStatus(db: any, id: string, status: OblStatus, by?: string, byName?: string): Promise<StatusResult> {
+  const o = rows(await db.execute(sql`select amount::float8 as amount, approved_by from cash_obligations where id = ${id}`))[0];
+  // Unknown/stale/deleted/forged id: refuse so we never write an orphan audit row.
+  if (!o) return { ok: false, reason: "not_found" };
+  // Every action must attribute to a real authenticated person — never a placeholder
+  // like "team" (which destroys the audit trail's evidentiary value).
+  if (!by) return { ok: false, reason: "no_actor" };
+  // Segregation of duties: the payer must differ from the approver on material items.
+  if (sodBlocksPaid(status, num(o.amount), o.approved_by ?? null, by)) {
+    return { ok: false, reason: "sod_block" };
+  }
   await db.execute(sql`
     update cash_obligations set
       status = ${status},
-      approved_by = ${status === "approved" ? (by ?? "team") : sql`approved_by`},
+      approved_by = ${status === "approved" ? by : sql`approved_by`},
       approved_at = ${status === "approved" ? sql`now()` : sql`approved_at`},
       paid_at = ${status === "paid" ? sql`now()` : sql`paid_at`},
       updated_at = now()
     where id = ${id}`);
-  // audit trail — critical given the ACH fraud history. Best-effort; never block the action.
+  // Append-only audit trail (DB trigger blocks UPDATE/DELETE) — critical given the
+  // ACH fraud history. Best-effort insert; never block the recorded decision.
   await db.execute(sql`
     insert into payment_actions (obligation_id, action, acted_by, acted_by_name, amount)
-    values (${id}, ${ACTION_FOR[status] ?? status}, ${by ?? null}, ${byName ?? null}, ${num(o?.amount)})`).catch(() => {});
-  return true;
+    values (${id}, ${ACTION_FOR[status] ?? status}, ${by}, ${byName ?? null}, ${num(o.amount)})`).catch(() => {});
+  return { ok: true };
 }

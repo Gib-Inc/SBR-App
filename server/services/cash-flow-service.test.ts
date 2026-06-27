@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, type Obligation } from "./cash-flow-service";
+import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, sodBlocksPaid, type Obligation } from "./cash-flow-service";
 
 function obl(p: Partial<Obligation>): Obligation {
   return {
@@ -41,6 +41,24 @@ describe("debtTier", () => {
     // real facilities still match
     expect(debtTier("Fora Financial", "loan")).toBe("mca");
     expect(debtTier("BlueVine MCA", "loan")).toBe("mca");
+  });
+});
+
+describe("sodBlocksPaid (segregation of duties)", () => {
+  it("blocks the approver from marking a material item paid", () => {
+    expect(sodBlocksPaid("paid", 5000, "userA", "userA", 1000)).toBe(true);
+  });
+  it("allows a different person to mark it paid", () => {
+    expect(sodBlocksPaid("paid", 5000, "userA", "userB", 1000)).toBe(false);
+  });
+  it("allows self-pay below the dual-control threshold", () => {
+    expect(sodBlocksPaid("paid", 200, "userA", "userA", 1000)).toBe(false);
+  });
+  it("only gates the paid action (approve/defer are unaffected)", () => {
+    expect(sodBlocksPaid("approved", 5000, "userA", "userA", 1000)).toBe(false);
+  });
+  it("does not block when there is no prior approver", () => {
+    expect(sodBlocksPaid("paid", 5000, null, "userA", 1000)).toBe(false);
   });
 });
 

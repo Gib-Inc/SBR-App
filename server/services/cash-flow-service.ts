@@ -307,9 +307,25 @@ export async function syncQbBillsToObligations(
   // DB-clock boundary: every still-open bill below gets updated_at = now() (> dbStart),
   // so anything left with updated_at < dbStart is no longer open in QB. Using the DB's
   // own clock keeps the sweep immune to app/DB clock skew.
+  const usd = (n: number) => "$" + Math.round(n).toLocaleString("en-US");
   const dbStart = rows(await db.execute(sql`select now() as t`))[0]?.t;
+  // Vendor payment plans (e.g. "pay While You're In Town $1,000/week"): a matching
+  // vendor's bills roll into ONE committed installment obligation instead of being
+  // listed whole and treated as deferrable.
+  const plans = rows(await db.execute(sql`
+    select id, vendor_match, display_name, amount::float8 as amount, cadence, tier, note
+    from vendor_payment_plans where is_active`));
+  const planAgg = new Map<string, { plan: any; total: number; count: number; vendor: string }>();
+
   let upserted = 0;
   for (const b of bills) {
+    const plan = plans.find((p: any) =>
+      b.vendor.toLowerCase().includes(String(p.vendor_match || "").toLowerCase()));
+    if (plan) {
+      const agg = planAgg.get(plan.id) ?? { plan, total: 0, count: 0, vendor: b.vendor };
+      agg.total += num(b.amount); agg.count += 1; planAgg.set(plan.id, agg);
+      continue; // rolled into the plan obligation below, not listed individually
+    }
     const key = `qbbill:${b.id ?? `${b.vendor}:${b.docNumber ?? b.dueDate ?? b.amount}`}`;
     const tax = isTaxVendor(b.vendor);
     const c = tax ? { tier: "tier1" as Tier, criticality: "must" as Criticality } : classifyVendorTier(b.vendor);
@@ -330,7 +346,28 @@ export async function syncQbBillsToObligations(
       where cash_obligations.status <> 'paid'`);
     upserted++;
   }
-  // Bills paid/closed in QuickBooks (not in this sync) drop off the pay-order.
+
+  // One obligation per active plan with open bills: the agreed installment (not the
+  // whole balance), tiered as a committed payment. Shows the cadence + balance.
+  for (const { plan, total, count, vendor } of Array.from(planAgg.values())) {
+    const tier = (plan.tier || "tier2") as Tier;
+    const crit: Criticality = tier === "tier4" ? "flexible" : tier === "tier3" ? "important" : "must";
+    const per = plan.cadence === "monthly" ? "month" : "week";
+    const name = plan.display_name || vendor;
+    const label = `${name} — ${usd(num(plan.amount))}/${per} plan`;
+    const rationale = `Agreed ${plan.cadence} payment plan${plan.note ? `: ${plan.note}` : ""}. ${usd(total)} balance across ${count} open bill${count === 1 ? "" : "s"}.`;
+    await db.execute(sql`
+      insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
+      values (${label}, ${name}, 'vendor_bill', ${tier}, ${num(plan.amount)}, false, current_date, ${plan.cadence}, ${crit}, 'pending', 'qb_bill', ${`plan:${plan.id}`}, ${rationale})
+      on conflict (external_key) where external_key is not null do update set
+        amount = excluded.amount, label = excluded.label, rationale = excluded.rationale,
+        tier = excluded.tier, due_date = excluded.due_date, updated_at = now()
+      where cash_obligations.status <> 'paid'`);
+    upserted++;
+  }
+
+  // Anything source='qb_bill' not touched this run (paid in QB, or a plan now paid
+  // off) drops off the pay-order.
   const res = await db.execute(sql`
     update cash_obligations set status = 'paid', updated_at = now()
     where source = 'qb_bill' and is_active and status <> 'paid' and updated_at < ${dbStart}`);

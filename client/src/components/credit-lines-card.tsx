@@ -23,7 +23,11 @@ interface CreditLine {
 }
 interface Resp {
   lines: CreditLine[];
-  totals: { totalBalance: number; totalLimit: number | null; totalAvailable: number | null; blendedUtilization: number | null; count: number };
+  totals: {
+    totalBalance: number; totalLimit: number | null; totalAvailable: number | null;
+    blendedUtilization: number | null; count: number;
+    missingApr?: number; missingDueDay?: number; missingTermsBalance?: number; termsComplete?: boolean;
+  };
 }
 interface LoanLine { name: string; balance: number | null; term?: string | null; rate?: number | null; }
 interface BalanceSheet { creditCards: number | null; totalLiabilities: number | null; loans?: LoanLine[]; asOf?: string }
@@ -161,6 +165,14 @@ export function CreditLinesCard({ balanceSheet }: { balanceSheet: BalanceSheet |
                 {totals.blendedUtilization != null && <span className={utilTone(totals.blendedUtilization)}><span className="font-semibold">{totals.blendedUtilization}%</span> utilization</span>}
               </div>
             )}
+            {totals && !totals.termsComplete && (totals.missingApr || totals.missingDueDay) ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300" data-testid="credit-terms-incomplete">
+                {totals.missingApr ? `${totals.missingApr} line${totals.missingApr > 1 ? "s" : ""} missing APR` : ""}
+                {totals.missingApr && totals.missingDueDay ? " · " : ""}
+                {totals.missingDueDay ? `${totals.missingDueDay} missing due day` : ""}
+                {totals.missingTermsBalance ? ` (${money(totals.missingTermsBalance)} of balance)` : ""}. Enter each facility's terms (✎) from its loan statement — until then DSCR, runway, and payoff order run on structural proxies. The app never fabricates an APR.
+              </div>
+            ) : null}
             <div className="overflow-hidden rounded-lg border">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-xs text-muted-foreground">

@@ -71,7 +71,14 @@ export interface CreditLine {
 
 export async function computeCreditLines(): Promise<{
   lines: CreditLine[];
-  totals: { totalBalance: number; totalLimit: number | null; totalAvailable: number | null; blendedUtilization: number | null; count: number };
+  totals: {
+    totalBalance: number; totalLimit: number | null; totalAvailable: number | null;
+    blendedUtilization: number | null; count: number;
+    // Terms completeness: APR / due day are operator-entered (QB doesn't hold them).
+    // Until they're filled, DSCR / runway / payoff order run on structural proxies —
+    // surfaced here so the gap is visible and actionable, not silent.
+    missingApr: number; missingDueDay: number; missingTermsBalance: number; termsComplete: boolean;
+  };
 }> {
   const rs = rows(await db.execute(sql`
     SELECT id, name, type, qb_account_name, balance, credit_limit, apr, due_day, balance_synced_at
@@ -100,7 +107,22 @@ export async function computeCreditLines(): Promise<{
   const totalAvailable = totalLimit != null ? Math.round((totalLimit - withLimit.reduce((s, l) => s + l.balance, 0)) * 100) / 100 : null;
   const blendedUtilization = totalLimit && totalLimit > 0 ? Math.round((withLimit.reduce((s, l) => s + l.balance, 0) / totalLimit) * 1000) / 10 : null;
 
-  return { lines, totals: { totalBalance, totalLimit, totalAvailable, blendedUtilization, count: lines.length } };
+  // Loans/MCAs (not cards) are where APR + due day drive DSCR / runway / payoff order;
+  // count any active line still missing them, and the balance riding on a proxy.
+  const missingApr = lines.filter((l) => l.apr == null).length;
+  const missingDueDay = lines.filter((l) => l.dueDay == null).length;
+  const missingTermsBalance = Math.round(
+    lines.filter((l) => l.apr == null || l.dueDay == null).reduce((s, l) => s + l.balance, 0) * 100,
+  ) / 100;
+  const termsComplete = missingApr === 0 && missingDueDay === 0;
+
+  return {
+    lines,
+    totals: {
+      totalBalance, totalLimit, totalAvailable, blendedUtilization, count: lines.length,
+      missingApr, missingDueDay, missingTermsBalance, termsComplete,
+    },
+  };
 }
 
 /** Register/update the manual fields on a line (limit, APR, due day, name, type, active). */

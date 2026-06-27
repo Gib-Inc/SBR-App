@@ -25557,6 +25557,21 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Statement of Cash Flows (indirect, HONEST PARTIAL): operating section from net
+  // income ± ΔAR/ΔAP/ΔInventory across two QB snapshots; D&A/capex/financing flagged
+  // as not-captured (the unreconciled gap = those items). QuickBooks is authoritative.
+  app.get("/api/finances/cash-flow-statement", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeCashFlowStatement } = await import("./services/cash-flow-statement-service");
+      const days = Math.min(120, Math.max(7, Number(req.query.days) || 30));
+      res.json({ success: true, ...(await computeCashFlowStatement(db, days)) });
+    } catch (error: any) {
+      console.error('[Cash Flow Statement] error:', error);
+      res.status(500).json({ error: error.message || "Failed to build cash-flow statement" });
+    }
+  });
+
   // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
   app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
     const startedAt = new Date();

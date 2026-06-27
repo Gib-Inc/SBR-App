@@ -51,6 +51,10 @@ const GOV_CLASS: Record<string, string> = {
   ALLOW_SCALE: "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300",
 };
 
+interface InvRecon { appWac: number; qbInventory: number | null; variance: number | null; material: boolean; flag: string; }
+interface NetRev { gross: number; taxCollected: number; netOfTax: number; taxCaptureCoveragePct: number; }
+interface CloseStatus { periods: { period: string; status: string; doneCount: number; totalCount: number }[]; }
+
 export default function GreenLine() {
   const gl = useQuery<GreenLine>({ queryKey: ["/api/finances/green-line"] });
   const gov = useQuery<Governor>({ queryKey: ["/api/finances/marketing-governor"] });
@@ -58,6 +62,9 @@ export default function GreenLine() {
   const leaks = useQuery<SpendLeaks>({ queryKey: ["/api/finances/spend-leaks"] });
   const recon = useQuery<CogsRecon>({ queryKey: ["/api/finances/cogs-reconciliation"] });
   const channels = useQuery<ChannelCogs>({ queryKey: ["/api/finances/cogs-by-channel"] });
+  const invRecon = useQuery<InvRecon>({ queryKey: ["/api/finances/inventory-reconciliation"] });
+  const netRev = useQuery<NetRev>({ queryKey: ["/api/finances/revenue-net-of-tax?days=90"] });
+  const close = useQuery<CloseStatus>({ queryKey: ["/api/finances/close-status"] });
 
   const g = gl.data;
   const sev = SEV[g?.overall ?? "HEALTHY"] ?? SEV.HEALTHY;
@@ -211,6 +218,40 @@ export default function GreenLine() {
             </div>
           )}
           <p className="text-[11px] text-muted-foreground">Measured COGS is materials-only on covered SKUs (about half of lines have unmapped SKUs), so it reads below the booked plug. The fix is SKU mapping. Until coverage is high, treat any single margin number as directional.</p>
+        </CardContent>
+      </Card>
+
+      {/* Books reconciliation — for Roger */}
+      <Card className="border-2">
+        <CardHeader className="pb-2"><CardTitle className="text-base">Books reconciliation — for Roger</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="flex items-start gap-2">
+            <span className="w-28 text-muted-foreground shrink-0">Inventory</span>
+            <div className="flex-1">
+              <div>App WAC <b className="tabular-nums">{money(invRecon.data?.appWac)}</b> vs QB <b className="tabular-nums">{money(invRecon.data?.qbInventory)}</b>{invRecon.data?.variance != null && <span className={invRecon.data.material ? " text-red-600 dark:text-red-400" : ""}> · variance <b className="tabular-nums">{money(invRecon.data.variance)}</b></span>}</div>
+              {invRecon.data?.flag && <div className="text-[11px] text-muted-foreground">{invRecon.data.flag}</div>}
+            </div>
+          </div>
+          <div className="flex items-start gap-2 border-t pt-2">
+            <span className="w-28 text-muted-foreground shrink-0">Revenue (90d)</span>
+            <div className="flex-1">
+              <div>gross <b className="tabular-nums">{money(netRev.data?.gross)}</b> · net of tax <b className="tabular-nums">{money(netRev.data?.netOfTax)}</b> · tax <b className="tabular-nums">{money(netRev.data?.taxCollected)}</b></div>
+              <div className="text-[11px] text-muted-foreground">Tax-capture coverage {netRev.data?.taxCaptureCoveragePct ?? 0}% (forward-only). QuickBooks nets tax and is authoritative.</div>
+            </div>
+          </div>
+          <div className="flex items-start gap-2 border-t pt-2">
+            <span className="w-28 text-muted-foreground shrink-0">Month-end close</span>
+            <div className="flex-1 space-y-0.5">
+              {close.data?.periods?.slice(0, 3).map((p) => (
+                <div key={p.period} className="flex items-center gap-2">
+                  <span className="w-16 tabular-nums">{p.period}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${p.status === "locked" ? "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>{p.status}</span>
+                  <span className="text-[11px] text-muted-foreground">{p.doneCount}/{p.totalCount} checklist</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">The app reconciles and flags; Roger books all entries and the bank reconciliation in QuickBooks. The app never posts to QB.</p>
         </CardContent>
       </Card>
     </div>

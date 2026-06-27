@@ -25494,6 +25494,56 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Month-end close: checklist + period lock. The app tracks close state and locks a
+  // month from app-side edits; Roger does the bank rec and books entries in QuickBooks.
+  app.get("/api/finances/close-status", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getCloseStatus } = await import("./services/period-close-service");
+      res.json({
+        success: true, periods: await getCloseStatus(db, 4),
+        note: "The app tracks the close checklist and locks a month from app-side edits. QuickBooks is the book of record; Roger performs the bank reconciliation and books all entries — the app never closes the period in QB or posts entries.",
+      });
+    } catch (error: any) {
+      console.error('[Close Status] error:', error);
+      res.status(500).json({ error: error.message || "Failed to load close status" });
+    }
+  });
+
+  app.put("/api/finances/period/:period/checklist", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { key, done } = req.body || {};
+      if (!key) return res.status(400).json({ success: false, error: "key required" });
+      const { db } = await import("./db");
+      const { setChecklistItem } = await import("./services/period-close-service");
+      const by = (req.session as any)?.userId || "unknown";
+      const ok = await setChecklistItem(db, String(req.params.period), String(key), done === true, by);
+      if (!ok) return res.status(400).json({ success: false, error: "unknown checklist item, or the period is locked" });
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Close Checklist] error:', error);
+      res.status(500).json({ error: error.message || "Failed to update checklist" });
+    }
+  });
+
+  app.post("/api/finances/period/:period/lock", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const lock = req.body?.locked !== false; // default true
+      const { financePinConfigured, verifyFinancePin } = await import("./services/finance-lock");
+      if (lock && financePinConfigured() && !verifyFinancePin(req.body?.pin)) {
+        return res.status(423).json({ success: false, error: "Finance PIN required to lock a period." });
+      }
+      const { db } = await import("./db");
+      const { setPeriodLock } = await import("./services/period-close-service");
+      const by = (req.session as any)?.userId || "unknown";
+      await setPeriodLock(db, String(req.params.period), lock, by);
+      res.json({ success: true, locked: lock });
+    } catch (error: any) {
+      console.error('[Period Lock] error:', error);
+      res.status(500).json({ error: error.message || "Failed to set period lock" });
+    }
+  });
+
   // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
   app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
     const startedAt = new Date();

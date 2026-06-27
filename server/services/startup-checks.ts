@@ -286,6 +286,7 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS subtotal_amount real`,
     `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS tax_amount real`,
     `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS discount_amount real`,
+    `CREATE TABLE IF NOT EXISTS financial_periods (period text PRIMARY KEY, status text NOT NULL DEFAULT 'open', checklist jsonb NOT NULL DEFAULT '{}'::jsonb, locked_by text, locked_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now())`,
     `CREATE TABLE IF NOT EXISTS payment_actions (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), obligation_id varchar, action text NOT NULL, acted_by text, acted_by_name text, amount numeric(14,2), note text, acted_at timestamptz NOT NULL DEFAULT now())`,
     `CREATE INDEX IF NOT EXISTS payment_actions_obl_idx ON payment_actions(obligation_id)`,
     `CREATE TABLE IF NOT EXISTS cash_position (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), as_of date NOT NULL DEFAULT current_date, cash_on_hand numeric(14,2) NOT NULL DEFAULT 0, expected_inflows numeric(14,2) NOT NULL DEFAULT 0, source text DEFAULT 'qbo', updated_at timestamptz NOT NULL DEFAULT now())`,

@@ -25910,6 +25910,10 @@ Generate only the email body text, no subject line.`;
           sql`select max(coalesce(period_end, period_start)) as ts from marketing_spend_snapshots where coalesce(superseded,false) = false`),
         safe("Credit-line balances", "synced_at",
           sql`select max(balance_synced_at) as ts from credit_lines`),
+        // Accountant P&L is a static seed (text month like 'May 2026') — surface
+        // its coverage so it reads as stale once it falls behind the real month.
+        safe("Accountant P&L (seed)", "covers_through",
+          sql`select max(to_date(month, 'Mon YYYY')) as ts from monthly_financials`),
       ]);
       const rank: Record<string, number> = { very_stale: 0, stale: 1, unknown: 2, fresh: 3 };
       const worst = sources.reduce((w, s) => (rank[s.status] < rank[w] ? s.status : w), "fresh");

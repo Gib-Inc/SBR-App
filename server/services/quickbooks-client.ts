@@ -153,7 +153,7 @@ interface QBAccount {
   Active?: boolean;
 }
 
-interface QBOpenDoc {
+export interface QBOpenDoc {
   Id?: string;
   Balance?: number;
   DueDate?: string;
@@ -481,6 +481,44 @@ export class QuickBooksClient {
       realmId: this.auth.realmId,
       errors,
     };
+  }
+
+  /**
+   * Focused, read-only A/R pull for the collections worklist: open invoices
+   * (Balance > 0, positive) AND unapplied credit memos (Balance > 0, returned as
+   * NEGATIVE so the worklist nets them against invoices the way QuickBooks' A/R
+   * does). Carries CustomerRef so the worklist can group by customer. `truncated`
+   * is set if either query hit the 1000-row cap (totals would be understated).
+   * Throws when not authenticated (caller degrades to the snapshot total).
+   */
+  async fetchArOpenItems(): Promise<{ items: QBOpenDoc[]; truncated: boolean }> {
+    if (!this.auth) {
+      throw new Error('QuickBooks not authenticated');
+    }
+    const items: QBOpenDoc[] = [];
+    let truncated = false;
+
+    const invQ = encodeURIComponent("SELECT * FROM Invoice WHERE Balance > '0' MAXRESULTS 1000");
+    const invR = await this.apiRequest<{ QueryResponse: { Invoice?: QBOpenDoc[] } }>(`/query?query=${invQ}`);
+    const invoices = invR.QueryResponse?.Invoice || [];
+    if (invoices.length >= 1000) truncated = true;
+    items.push(...invoices);
+
+    // Unapplied credit memos reduce A/R — negate their balance so they net.
+    try {
+      const cmQ = encodeURIComponent("SELECT * FROM CreditMemo WHERE Balance > '0' MAXRESULTS 1000");
+      const cmR = await this.apiRequest<{ QueryResponse: { CreditMemo?: QBOpenDoc[] } }>(`/query?query=${cmQ}`);
+      const creditMemos = cmR.QueryResponse?.CreditMemo || [];
+      if (creditMemos.length >= 1000) truncated = true;
+      for (const cm of creditMemos) {
+        items.push({ ...cm, Balance: -(Number(cm.Balance) || 0) });
+      }
+    } catch {
+      // Credit memos are best-effort; if the query fails, the worklist still
+      // reports invoice balances and its note flags that credits may be missing.
+    }
+
+    return { items, truncated };
   }
 
   /**

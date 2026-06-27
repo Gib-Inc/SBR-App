@@ -226,6 +226,203 @@ export function buildBillsDue(openBills: any[] | null, asOf: Date = new Date(), 
     .slice(0, limit);
 }
 
+// ── CIPH.R — A/R collections worklist ───────────────────────────────────────
+// SBR's "receivables" are mostly payment-processor SETTLEMENT FLOAT: Amazon,
+// Shopify, PayPal, Stripe hold funds in transit then auto-disburse, so they show
+// as a receivable but require no collection. A naive collections list would
+// wrongly tell the operator "go collect $102K from Amazon." This separates that
+// in-transit settlement from REAL collectible customer balances (B2B / wholesale)
+// and flags clearing-account artifacts — a stale invoice netted to ~$0 by
+// unapplied credit memos — for the accountant to reconcile. Pure (no IO); the live
+// pull (open invoices + unapplied credit memos) lives in QuickBooksClient.fetchArOpenItems.
+//
+// Classification uses a processor TOKEN (word-boundary) plus a settlement-style
+// QUALIFIER ("- customer", "website", ...) rather than a raw substring, so a real
+// B2B customer named "Amazon Lawns LLC" is NOT misfiled as processor float. When in
+// doubt it defaults to "customer" (visible + collectible) — never hide a receivable.
+const AR_PROCESSOR_TOKENS = [
+  "amazon", "shopify", "paypal", "stripe", "shop pay", "shop cash",
+  "affirm", "afterpay", "klarna", "walmart", "etsy", "ebay",
+];
+// Bare processor names QuickBooks uses for the settlement "customer".
+const AR_PROCESSOR_EXACT = new Set(["amazon", "shopify", "paypal", "stripe", "shop pay", "shop cash"]);
+// Qualifiers that mark a name as a processor's clearing customer, not a real buyer.
+const AR_SETTLEMENT_QUALIFIERS = [
+  "- customer", "website", "payout", "payouts", "marketplace", "settlement",
+  "clearing", "seller account", "fba",
+];
+
+function isWordBoundary(c: string): boolean {
+  return c === "" || !/[a-z0-9]/.test(c);
+}
+function nameHasToken(lname: string, token: string): boolean {
+  const i = lname.indexOf(token);
+  if (i < 0) return false;
+  const before = i === 0 ? "" : lname[i - 1];
+  const after = i + token.length >= lname.length ? "" : lname[i + token.length];
+  return isWordBoundary(before) && isWordBoundary(after);
+}
+export function classifyArName(name: string): ArKind {
+  const l = name.toLowerCase().trim();
+  if (AR_PROCESSOR_EXACT.has(l)) return "settlement";
+  const hasToken = AR_PROCESSOR_TOKENS.some((t) => nameHasToken(l, t));
+  const hasQualifier = AR_SETTLEMENT_QUALIFIERS.some((q) => l.includes(q));
+  return hasToken && hasQualifier ? "settlement" : "customer";
+}
+
+export type ArKind = "settlement" | "customer";
+
+export interface ArCustomerLine {
+  customer: string;
+  kind: ArKind; // settlement = processor float (no action); customer = real collections
+  net: number; // grossPositive + unappliedCredits (the true open balance)
+  grossPositive: number; // sum of positive open-invoice balances (aged below)
+  unappliedCredits: number; // sum of credit-memo balances, as a negative (NOT aged)
+  invoiceCount: number; // count of source documents
+  current: number;
+  d1_30: number;
+  d31_60: number;
+  d61_90: number;
+  d91_plus: number; // age buckets hold POSITIVE invoice balances only
+  maxDaysOverdue: number;
+  oldestDueDate: string | null;
+  reconcileFlag: string | null;
+}
+
+export interface ArWorklist {
+  asOf: string; // the date this was computed (today)
+  totalAr: number;
+  settlementFloat: number; // net A/R of processor-settlement customers (in transit)
+  realCollectible: number; // net A/R of real customers with a positive balance
+  creditBalances: number; // net A/R of real customers in a net credit position (negative)
+  realOverdue: number; // the overdue, collectible part of realCollectible (capped at net)
+  truncated: boolean; // a source query hit the 1000-row cap (totals understated)
+  customers: ArCustomerLine[];
+  reconcileFlags: ArCustomerLine[];
+  headline: string;
+  source: string; // "gl"
+  authoritative: string; // "quickbooks"
+  note: string;
+}
+
+const fmtUsd = (n: number) =>
+  n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** Group open QuickBooks A/R items (invoices as positives, unapplied credit memos
+ *  as negatives) into a per-customer collections worklist that separates processor
+ *  settlement float from real collectible balances and flags clearing artifacts.
+ *  Decomposition is an exact partition: totalAr === settlementFloat + realCollectible
+ *  + creditBalances. Pure. */
+export function buildArWorklist(
+  openItems: any[] | null,
+  asOf: Date = new Date(),
+  opts?: { truncated?: boolean },
+): ArWorklist {
+  const day = 86400000;
+  const byCustomer = new Map<string, any[]>();
+  for (const it of openItems || []) {
+    const name = String(it?.CustomerRef?.name || it?.CustomerRef?.value || "(unnamed)");
+    const list = byCustomer.get(name) ?? [];
+    list.push(it);
+    byCustomer.set(name, list);
+  }
+
+  const customers: ArCustomerLine[] = [];
+  for (const [customer, items] of Array.from(byCustomer)) {
+    let grossPositive = 0;
+    let unappliedCredits = 0; // accumulates negatives separately — keeps age buckets clean
+    let current = 0;
+    let d1_30 = 0;
+    let d31_60 = 0;
+    let d61_90 = 0;
+    let d91_plus = 0;
+    let maxDaysOverdue = 0;
+    let oldestDueDate: string | null = null;
+    for (const it of items) {
+      const bal = round2(Number(it?.Balance) || 0);
+      if (bal < 0) {
+        unappliedCredits += bal; // credit memo / unapplied — not aged into a debit bucket
+        continue;
+      }
+      if (bal === 0) continue;
+      grossPositive += bal;
+      const dueStr = it?.DueDate || it?.TxnDate || null;
+      let daysOverdue = 0;
+      if (dueStr) {
+        const due = Date.parse(String(dueStr) + "T00:00:00Z");
+        if (!Number.isNaN(due)) daysOverdue = Math.max(0, Math.floor((asOf.getTime() - due) / day));
+      }
+      if (dueStr && (oldestDueDate === null || String(dueStr) < oldestDueDate)) oldestDueDate = String(dueStr);
+      if (daysOverdue > maxDaysOverdue) maxDaysOverdue = daysOverdue;
+      if (daysOverdue <= 0) current += bal;
+      else if (daysOverdue <= 30) d1_30 += bal;
+      else if (daysOverdue <= 60) d31_60 += bal;
+      else if (daysOverdue <= 90) d61_90 += bal;
+      else d91_plus += bal;
+    }
+    grossPositive = round2(grossPositive);
+    unappliedCredits = round2(unappliedCredits);
+    const net = round2(grossPositive + unappliedCredits);
+    const kind = classifyArName(customer);
+    let reconcileFlag: string | null = null;
+    if (Math.abs(net) < 1 && grossPositive >= 1) {
+      reconcileFlag =
+        `Nets to ~$0: $${fmtUsd(grossPositive)} of invoices offset by $${fmtUsd(Math.abs(unappliedCredits))} in credits / unapplied payments — a clearing-account artifact. Reconcile (Roger).`;
+    } else if (unappliedCredits <= -1000) {
+      reconcileFlag =
+        `Carries $${fmtUsd(Math.abs(unappliedCredits))} in credits / unapplied payments against $${fmtUsd(grossPositive)} of invoices. Apply or clear (Roger).`;
+    } else if (kind === "settlement" && d91_plus >= 1000) {
+      reconcileFlag =
+        `Processor account carries $${fmtUsd(d91_plus)} aged 91+ days — unusual for settlement float (which clears in days). Reconcile (Roger).`;
+    }
+    customers.push({
+      customer, kind, net, grossPositive, unappliedCredits,
+      invoiceCount: items.length,
+      current: round2(current), d1_30: round2(d1_30), d31_60: round2(d31_60),
+      d61_90: round2(d61_90), d91_plus: round2(d91_plus),
+      maxDaysOverdue, oldestDueDate, reconcileFlag,
+    });
+  }
+
+  customers.sort((a, b) => b.net - a.net);
+  // Exact partition of totalAr: every customer falls in exactly one of the three.
+  const totalAr = round2(customers.reduce((s, c) => s + c.net, 0));
+  const settlementFloat = round2(
+    customers.filter((c) => c.kind === "settlement").reduce((s, c) => s + c.net, 0),
+  );
+  const realCustomers = customers.filter((c) => c.kind === "customer");
+  const realCollectible = round2(realCustomers.filter((c) => c.net >= 0).reduce((s, c) => s + c.net, 0));
+  const creditBalances = round2(realCustomers.filter((c) => c.net < 0).reduce((s, c) => s + c.net, 0));
+  // Overdue portion of each real collectible customer, capped at their net so a
+  // no-due-date credit can never make "overdue" exceed what is actually owed.
+  const realOverdue = round2(
+    realCustomers
+      .filter((c) => c.net > 0)
+      .reduce((s, c) => s + Math.max(0, Math.min(round2(c.d1_30 + c.d31_60 + c.d61_90 + c.d91_plus), c.net)), 0),
+  );
+  const reconcileFlags = customers.filter((c) => c.reconcileFlag != null);
+  const truncated = opts?.truncated === true;
+
+  const creditTail = creditBalances < 0 ? `, and $${fmtUsd(Math.abs(creditBalances))} in customer credits/unapplied` : "";
+  const flagTail = reconcileFlags.length
+    ? ` ${reconcileFlags.length} item${reconcileFlags.length > 1 ? "s" : ""} to reconcile.`
+    : "";
+  const headline =
+    `Of $${fmtUsd(totalAr)} A/R, $${fmtUsd(settlementFloat)} is payment-processor settlement in transit ` +
+    `(auto-disburses, no collection action) and $${fmtUsd(realCollectible)} is real collectible customer balance${creditTail}.` +
+    flagTail;
+
+  return {
+    asOf: asOf.toISOString().slice(0, 10),
+    totalAr, settlementFloat, realCollectible, creditBalances, realOverdue, truncated,
+    customers, reconcileFlags, headline,
+    source: "gl", authoritative: "quickbooks",
+    note:
+      "Built from open QuickBooks invoices (positive) netted against unapplied credit memos (negative); book of record is QuickBooks. Unapplied customer PAYMENTS (as opposed to credit memos) are not separately fetched, so a customer's net can still differ from QuickBooks' A/R Aging — reconcile there (Roger). 'Settlement' = payment-processor float in transit, not a collections action. The app reports and flags; it never posts entries, applies payments, or moves money." +
+      (truncated ? " NOTE: a source query hit the 1000-row cap — totals are understated." : ""),
+  };
+}
+
 // ── CIPH.R — transaction-level expense breakdown (who is behind each category) ──
 // Answers "what are these subscriptions FOR?" by naming the vendor on every
 // expense charge, grouped under its P&L account. Pure + unit-tested; the network
@@ -489,7 +686,7 @@ export async function captureFinancialSnapshot(
     grossProfit: toNumericString(pl.grossProfit),
     netIncome: toNumericString(pl.netIncome),
     totalIncome: toNumericString(pl.totalIncome),
-    qbInventory: toNumericString(qbBalanceSheet?.inventory),
+    qbInventory: toNumericString(qbBalanceSheet?.inventory ?? null),
     plPeriodStart: raw.plPeriodStart,
     plPeriodEnd: raw.plPeriodEnd,
     realmId: raw.realmId,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bucketAging, parseProfitAndLoss, computeConfidence, parseBalanceSheet, buildBillsDue, parseExpenseDetail, summarizeExpenseDetail } from "./qb-financial-service";
+import { bucketAging, parseProfitAndLoss, computeConfidence, parseBalanceSheet, buildBillsDue, parseExpenseDetail, summarizeExpenseDetail, buildArWorklist } from "./qb-financial-service";
 
 describe("bucketAging", () => {
   const asOf = new Date("2026-06-06T12:00:00");
@@ -266,3 +266,93 @@ describe("parseExpenseDetail + summarizeExpenseDetail", () => {
     expect(sum.byAccount).toEqual([]);
   });
 });
+
+describe("buildArWorklist", () => {
+  const asOf = new Date("2026-06-27T12:00:00Z");
+
+  it("classifies processor float as settlement, not collections (SBR's real shape)", () => {
+    // Amazon $102,519.94 in transit (due ~now) — the real SBR AR position.
+    const w = buildArWorklist(
+      [{ Id: "1", Balance: 102519.94, DueDate: "2026-06-20", CustomerRef: { value: "9", name: "Amazon - Customer" } }],
+      asOf,
+    );
+    expect(w.totalAr).toBe(102519.94);
+    expect(w.settlementFloat).toBe(102519.94);
+    expect(w.realCollectible).toBe(0);
+    expect(w.customers[0].kind).toBe("settlement");
+    expect(w.headline).toContain("settlement in transit");
+  });
+
+  it("nets unapplied credit memos so a clearing artifact shows net ~$0, and flags it", () => {
+    // Shopify Website: $33,131.95 stale invoice (91+) offset by ~-$33K of credit memos.
+    const w = buildArWorklist(
+      [
+        { Id: "a", Balance: 33131.95, DueDate: "2026-01-01", CustomerRef: { name: "Shopify Website" } },
+        { Id: "b", Balance: -15050.95, TxnDate: "2026-06-10", CustomerRef: { name: "Shopify Website" } },
+        { Id: "c", Balance: -12490.8, TxnDate: "2026-05-10", CustomerRef: { name: "Shopify Website" } },
+        { Id: "d", Balance: -5590.2, TxnDate: "2026-04-10", CustomerRef: { name: "Shopify Website" } },
+      ],
+      asOf,
+    );
+    const shop = w.customers.find((c) => c.customer === "Shopify Website")!;
+    expect(Math.abs(shop.net)).toBeLessThan(1); // credits net it to ~zero
+    expect(shop.grossPositive).toBe(33131.95);
+    expect(shop.d91_plus).toBe(33131.95); // age buckets hold positives only
+    expect(shop.reconcileFlag).toMatch(/clearing-account artifact/i);
+    expect(w.reconcileFlags.length).toBe(1);
+  });
+
+  it("does NOT misclassify a real customer whose name contains a processor token", () => {
+    const w = buildArWorklist(
+      [
+        { Id: "x", Balance: 4200, DueDate: "2026-05-01", CustomerRef: { name: "Amazon Lawns LLC" } },
+        { Id: "y", Balance: 900, DueDate: "2026-06-25", CustomerRef: { name: "Stripe Mowing Co" } },
+      ],
+      asOf,
+    );
+    expect(w.customers.every((c) => c.kind === "customer")).toBe(true);
+    expect(w.realCollectible).toBe(5100);
+    expect(w.settlementFloat).toBe(0);
+  });
+
+  it("caps realOverdue at the customer's net so a no-due-date credit offsets it", () => {
+    // +$5,000 invoice 100d overdue, -$1,000 credit memo with no date -> net $4,000.
+    const w = buildArWorklist(
+      [
+        { Id: "p", Balance: 5000, DueDate: "2026-03-19", CustomerRef: { name: "Beta Wholesale" } },
+        { Id: "q", Balance: -1000, CustomerRef: { name: "Beta Wholesale" } },
+      ],
+      asOf,
+    );
+    const beta = w.customers[0];
+    expect(beta.net).toBe(4000);
+    expect(beta.d91_plus).toBe(5000);
+    expect(w.realOverdue).toBe(4000); // capped at net, NOT 5000
+  });
+
+  it("keeps the decomposition an exact partition: total = settlement + collectible + credits", () => {
+    const w = buildArWorklist(
+      [
+        { Id: "1", Balance: 102519.94, DueDate: "2026-06-20", CustomerRef: { name: "Amazon - Customer" } },
+        { Id: "2", Balance: 4200, DueDate: "2026-05-01", CustomerRef: { name: "Acme Landscaping" } },
+        { Id: "3", Balance: -2500, CustomerRef: { name: "Gamma Co" } }, // net-credit real customer
+      ],
+      asOf,
+    );
+    expect(w.settlementFloat).toBe(102519.94);
+    expect(w.realCollectible).toBe(4200);
+    expect(w.creditBalances).toBe(-2500);
+    expect(round2sum(w.settlementFloat, w.realCollectible, w.creditBalances)).toBe(w.totalAr);
+  });
+
+  it("returns an honest empty worklist for no open items", () => {
+    const w = buildArWorklist([], asOf);
+    expect(w.totalAr).toBe(0);
+    expect(w.customers).toEqual([]);
+    expect(w.reconcileFlags).toEqual([]);
+  });
+});
+
+function round2sum(...ns: number[]): number {
+  return Math.round(ns.reduce((s, n) => s + n, 0) * 100) / 100;
+}

@@ -25833,6 +25833,45 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // A/R collections worklist — separates payment-processor SETTLEMENT float (Amazon,
+  // Shopify, etc. in transit, auto-disburses, no action) from REAL collectible
+  // customer balances, and flags clearing artifacts. Reads open invoices live from
+  // QuickBooks; degrades to the last captured A/R total if QB is unavailable.
+  app.get("/api/finances/ar-worklist", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId as string; // requireAuth guarantees this
+      const { QuickBooksClient } = await import("./services/quickbooks-client");
+      const { buildArWorklist } = await import("./services/qb-financial-service");
+      const client = new QuickBooksClient(storage, userId);
+      if (await client.initialize()) {
+        try {
+          const { items, truncated } = await client.fetchArOpenItems();
+          return res.json({ success: true, degraded: false, ...buildArWorklist(items, new Date(), { truncated }) });
+        } catch (e: any) {
+          console.error("[Finances] ar-worklist live fetch failed, degrading:", e?.message ?? e);
+        }
+      }
+      // Degraded: last captured A/R total from the snapshot (per-customer detail unavailable).
+      const { db } = await import("./db");
+      const snap = (((await db.execute(sql`
+        select accounts_receivable::float8 as ar, captured_at::text as at
+        from qb_financial_snapshots where accounts_receivable is not null
+        order by captured_at desc limit 1`)).rows ?? []) as any[])[0];
+      return res.json({
+        success: true, source: "snapshot", authoritative: "quickbooks", degraded: true,
+        totalAr: snap ? Math.round(Number(snap.ar) * 100) / 100 : null,
+        settlementFloat: null, realCollectible: null, creditBalances: null, realOverdue: null,
+        truncated: false, customers: [], reconcileFlags: [],
+        asOf: snap?.at ? String(snap.at).slice(0, 10) : null,
+        headline: "QuickBooks live A/R unavailable — showing the last captured A/R total only.",
+        note: "QuickBooks live A/R fetch unavailable; showing the last captured A/R total. Per-customer detail returns when QuickBooks reconnects.",
+      });
+    } catch (error: any) {
+      console.error("[Finances] ar-worklist error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load A/R worklist" });
+    }
+  });
+
   // Set a category's target % of net sales.
   app.put("/api/finances/budget-target", requireAuth, async (req: Request, res: Response) => {
     try {

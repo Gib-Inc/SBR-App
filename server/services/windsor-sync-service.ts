@@ -70,11 +70,12 @@ async function ingestPlatform(platform: string, source: string, agg: WindsorAgg,
   // daily trailing-30d window REPLACES the prior overlapping windows instead of stacking.
   // reconcileMarketingSnapshot only matched exact/identical periods, so ~14 overlapping
   // rolling windows piled up and multi-counted spend (~14x). Mirrors the meta-manual path.
-  const newEnd = agg.periodEnd ?? agg.periodStart;
+  const newStart = agg.periodStart;
+  const newEnd = agg.periodEnd ?? newStart;
   const overlapIds = (active as any[])
     .filter((s) => String(s.platform || "").toUpperCase() === platform.toUpperCase() && !s.superseded
       && s.periodStart && s.periodEnd && s.sourceHash !== sourceHash
-      && s.periodStart <= newEnd && s.periodEnd >= agg.periodStart)
+      && s.periodStart <= newEnd && s.periodEnd >= newStart)
     .map((s) => s.id);
   const supersedeIds = Array.from(new Set([...(rec.action === "SUPERSEDED" ? rec.supersedeIds : []), ...overlapIds]));
   if (supersedeIds.length) await storage.markMarketingSpendSnapshotsSuperseded(supersedeIds, source);

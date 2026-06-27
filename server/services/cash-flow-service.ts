@@ -275,6 +275,27 @@ function isTaxVendor(vendor: string): boolean {
   return /tax commission|department of revenue|dept of revenue|franchise tax|\birs\b|eftps|state tax|internal revenue/i.test(vendor || "");
 }
 
+/**
+ * Tier a (non-tax) vendor bill by operational criticality so the pay-order ranks
+ * what the business actually needs to keep running above what can wait. Pure.
+ *  - tier2 (must): fulfillment, materials, molds, freight, rent/facility — can't ship without them
+ *  - tier4 (flexible): marketing / agencies / ad platforms — deferrable in a cash crunch
+ *  - tier3 (important): everything else (legal, software, misc)
+ */
+export function classifyVendorTier(vendor: string): { tier: Tier; criticality: Criticality } {
+  const v = (vendor || "").toLowerCase();
+  // Marketing / ad-platform / agency first (a name can match both lists; defer wins
+  // only for genuine marketing spend, so keep this list specific).
+  if (/meta platforms|facebook|google ads|while you'?re in town|carpe diem|jezza|giant horizons|lucid earth|vertical ascension|gamerzdojo|tiktok|pinterest|\bmarketing\b/.test(v)) {
+    return { tier: "tier4", criticality: "flexible" };
+  }
+  // Operationally critical: fulfillment, materials, molds, freight, rent/facility.
+  if (/pyvott|accu-?form|mcmaster|uline|basic american|plastics|fulfillment|freight|postage|warehouse|\brent\b|property|utah ave|supply|materials|packaging|shippo|extensiv/.test(v)) {
+    return { tier: "tier2", criticality: "must" };
+  }
+  return { tier: "tier3", criticality: "important" };
+}
+
 // ── DB: mirror open QuickBooks bills into the pay-order ─────────────────────
 /** Upsert every open QB bill as a real (non-estimated) obligation, then mark any
  *  previously-synced qb_bill that is no longer open as paid so it drops off. The
@@ -291,14 +312,18 @@ export async function syncQbBillsToObligations(
   for (const b of bills) {
     const key = `qbbill:${b.id ?? `${b.vendor}:${b.docNumber ?? b.dueDate ?? b.amount}`}`;
     const tax = isTaxVendor(b.vendor);
-    const tier: Tier = tax ? "tier1" : "tier3";
+    const c = tax ? { tier: "tier1" as Tier, criticality: "must" as Criticality } : classifyVendorTier(b.vendor);
     const label = `${b.vendor}${b.docNumber ? ` #${b.docNumber}` : ""}`;
     const rationale = tax
       ? "Tax bill booked in QuickBooks A/P. Confirm with Roger."
-      : "Open vendor bill from QuickBooks accounts payable.";
+      : c.tier === "tier2"
+        ? "Open vendor bill — operationally critical supplier (must-pay)."
+        : c.tier === "tier4"
+          ? "Open vendor bill — marketing/agency; deferrable in a cash crunch."
+          : "Open vendor bill from QuickBooks accounts payable.";
     await db.execute(sql`
       insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
-      values (${label}, ${b.vendor}, ${tax ? "tax" : "vendor_bill"}, ${tier}, ${num(b.amount)}, false, ${b.dueDate}::date, 'one_time', ${tax ? "must" : "important"}, 'pending', 'qb_bill', ${key}, ${rationale})
+      values (${label}, ${b.vendor}, ${tax ? "tax" : "vendor_bill"}, ${c.tier}, ${num(b.amount)}, false, ${b.dueDate}::date, 'one_time', ${c.criticality}, 'pending', 'qb_bill', ${key}, ${rationale})
       on conflict (external_key) where external_key is not null do update set
         amount = excluded.amount, due_date = excluded.due_date, payee = excluded.payee,
         label = excluded.label, tier = excluded.tier, updated_at = now()

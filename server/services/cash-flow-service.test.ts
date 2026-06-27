@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, type Obligation } from "./cash-flow-service";
+import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, type Obligation } from "./cash-flow-service";
 
 function obl(p: Partial<Obligation>): Obligation {
   return {
@@ -41,6 +41,23 @@ describe("debtTier", () => {
     // real facilities still match
     expect(debtTier("Fora Financial", "loan")).toBe("mca");
     expect(debtTier("BlueVine MCA", "loan")).toBe("mca");
+  });
+});
+
+describe("classifyVendorTier", () => {
+  it("ranks operationally critical suppliers as must-pay (tier2)", () => {
+    for (const v of ["Pyvott Fulfillment", "Accu-Form Plastics Inc", "McMaster-Carr", "Uline", "Basic American Supply Inc - 658", "1020 W Utah Ave LLC"]) {
+      expect(classifyVendorTier(v)).toEqual({ tier: "tier2", criticality: "must" });
+    }
+  });
+  it("drops marketing/agency bills to flexible (tier4)", () => {
+    for (const v of ["Meta Platforms Inc", "While You're In Town LLC", "Carpe Diem", "Vertical Ascension"]) {
+      expect(classifyVendorTier(v)).toEqual({ tier: "tier4", criticality: "flexible" });
+    }
+  });
+  it("leaves everything else important (tier3)", () => {
+    expect(classifyVendorTier("Gurr & Brande PLLC")).toEqual({ tier: "tier3", criticality: "important" });
+    expect(classifyVendorTier("Some Random Vendor")).toEqual({ tier: "tier3", criticality: "important" });
   });
 });
 

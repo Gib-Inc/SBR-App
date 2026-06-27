@@ -25572,6 +25572,61 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Comparative / flux P&L: the two most recent COMPLETE months side by side, with
+  // variance and the top opex vendor movers. Read-only from qb_pl_detail (QB authoritative).
+  app.get("/api/finances/pnl-flux", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const months = (((await db.execute(sql`
+        with c as (
+          select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym,
+            case when account_name ~ '^[123] -' or account_name ilike '%gross sales%' or account_name ilike '%discount%' or account_name ilike '%returns%' then 'income'
+                 when account_name ilike '%cost of goods%' or account_name ilike '%cogs%' then 'cogs' else 'opex' end as k,
+            amount
+          from qb_pl_detail
+          where txn_date >= (date_trunc('month', current_date) - interval '3 months') and txn_date < date_trunc('month', current_date))
+        select ym,
+          round(sum(amount) filter (where k='income')::numeric,2) as net_sales,
+          round(sum(amount) filter (where k='cogs')::numeric,2) as cogs,
+          round(sum(amount) filter (where k='opex')::numeric,2) as opex
+        from c group by ym order by ym desc limit 2`)).rows ?? []) as any[];
+      const r0 = (n: number) => Math.round(n * 100) / 100;
+      const mk = (r: any) => r ? (() => {
+        const ns = Number(r.net_sales) || 0, cogs = Number(r.cogs) || 0, opex = Number(r.opex) || 0;
+        return { month: r.ym, netSales: ns, cogs, grossProfit: r0(ns - cogs), opex, operatingIncome: r0(ns - cogs - opex) };
+      })() : null;
+      const cur = mk(months[0]); const prior = mk(months[1]);
+      let movers: any[] = [];
+      if (cur && prior) {
+        movers = (((await db.execute(sql`
+          with v as (
+            select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, coalesce(nullif(trim(vendor_or_payee),''),'(unspecified)') as vendor, amount
+            from qb_pl_detail
+            where txn_date >= ${prior.month + '-01'}::date and txn_date < date_trunc('month', current_date)
+              and not (account_name ~ '^[123] -' or account_name ilike '%gross sales%' or account_name ilike '%discount%' or account_name ilike '%returns%' or account_name ilike '%cost of goods%'))
+          select vendor,
+            round(coalesce(sum(amount) filter (where ym=${cur.month}),0)::numeric,0) as curr,
+            round(coalesce(sum(amount) filter (where ym=${prior.month}),0)::numeric,0) as prior
+          from v group by vendor
+          order by abs(coalesce(sum(amount) filter (where ym=${cur.month}),0) - coalesce(sum(amount) filter (where ym=${prior.month}),0)) desc
+          limit 6`)).rows ?? []) as any[]).map((r: any) => ({ vendor: r.vendor, curr: Number(r.curr) || 0, prior: Number(r.prior) || 0, delta: r0((Number(r.curr) || 0) - (Number(r.prior) || 0)) }));
+      }
+      const variance = (cur && prior) ? {
+        netSales: r0(cur.netSales - prior.netSales), grossProfit: r0(cur.grossProfit - prior.grossProfit),
+        opex: r0(cur.opex - prior.opex), operatingIncome: r0(cur.operatingIncome - prior.operatingIncome),
+      } : null;
+      res.json({
+        success: true, current: cur, prior, variance, topVendorMovers: movers,
+        basis: "accrual (from QuickBooks)", source: "gl", authoritative: "quickbooks",
+        note: "Two most recent complete months from QuickBooks P&L detail. COGS reflects the 35% plug (see the COGS reconciliation). QuickBooks is authoritative.",
+      });
+    } catch (error: any) {
+      console.error('[PnL Flux] error:', error);
+      res.status(500).json({ error: error.message || "Failed to build P&L flux" });
+    }
+  });
+
   // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
   app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
     const startedAt = new Date();

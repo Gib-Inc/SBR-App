@@ -25456,6 +25456,44 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Revenue net of sales tax (ASC 606-10-32-2: collected sales tax is a third-party
+  // pass-through, not revenue). Reports gross vs net + tax-capture coverage (the
+  // tax fields are captured going forward, so older orders read gross until backfilled).
+  app.get("/api/finances/revenue-net-of-tax", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const days = Math.min(365, Math.max(1, Number(req.query.days) || 90));
+      const r: any = ((await db.execute(sql`
+        SELECT
+          round(sum(total_amount)::numeric, 2) AS gross,
+          round(sum(coalesce(tax_amount, 0))::numeric, 2) AS tax_collected,
+          round(sum(total_amount - coalesce(tax_amount, 0))::numeric, 2) AS net_of_tax,
+          count(*) AS orders,
+          count(*) FILTER (WHERE tax_amount IS NOT NULL) AS orders_with_tax_captured
+        FROM sales_orders
+        WHERE order_date >= (current_date - ${days}::int)
+          AND coalesce(status,'') NOT IN ('CANCELLED','cancelled','canceled','REFUNDED')`)).rows ?? [])[0] ?? {};
+      const orders = Number(r.orders ?? 0);
+      const withTax = Number(r.orders_with_tax_captured ?? 0);
+      res.json({
+        windowDays: days,
+        gross: Number(r.gross ?? 0),
+        taxCollected: Number(r.tax_collected ?? 0),
+        netOfTax: Number(r.net_of_tax ?? 0),
+        taxCaptureCoveragePct: orders > 0 ? Math.round((withTax / orders) * 1000) / 10 : 0,
+        basis: "accrual (order date)",
+        source: "operational_estimate",
+        authoritative: "quickbooks",
+        note: "Revenue net of sales tax (ASC 606: collected tax is a pass-through, not revenue). Tax capture is forward-only — orders before tax-field capture read gross until backfilled. QuickBooks already nets tax and is authoritative; Roger books the sales-tax-payable.",
+        amazonNote: "Amazon marketplace-collected tax is not yet separated; Amazon revenue may still include marketplace tax until captured.",
+      });
+    } catch (error: any) {
+      console.error('[Revenue Net Of Tax] error:', error);
+      res.status(500).json({ error: error.message || "Failed to compute net revenue" });
+    }
+  });
+
   // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
   app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
     const startedAt = new Date();

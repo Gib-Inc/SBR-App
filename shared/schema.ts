@@ -1894,7 +1894,10 @@ export const salesOrders = pgTable("sales_orders", {
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
   requiredByDate: timestamp("required_by_date"),
   expectedDeliveryDate: timestamp("expected_delivery_date"), // Promised delivery date from Amazon/Shopify or computed
-  totalAmount: real("total_amount").notNull().default(0), // Total order amount
+  totalAmount: real("total_amount").notNull().default(0), // Total order amount (GROSS, tax-inclusive)
+  subtotalAmount: real("subtotal_amount"), // pre-tax, pre-discount line subtotal (ASC 606 transaction price basis)
+  taxAmount: real("tax_amount"), // sales tax collected — a third-party pass-through, excluded from revenue
+  discountAmount: real("discount_amount"), // order-level discounts
   currency: text("currency").notNull().default('USD'), // Order currency
   componentsUsed: integer("components_used").notNull().default(0), // Total BOM components consumed for fulfilled quantity
   productionStatus: text("production_status").notNull().default('ready'), // 'ready' | 'alerted' | 'pending' | 'in_transit' | 'fulfilled'

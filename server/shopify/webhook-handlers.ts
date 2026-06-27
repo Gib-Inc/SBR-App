@@ -197,6 +197,12 @@ export async function handleOrderCreated(
           deliveredAt,
           sourceUrl: `https://${context.shopDomain}/admin/orders/${orderId}`,
           totalAmount: payload.total_price ? parseFloat(payload.total_price) : 0,
+          // Capture the tax/subtotal/discount breakdown so revenue can be reported
+          // net of sales tax (ASC 606-10-32-2: tax collected is a third-party
+          // pass-through, not revenue). Null-safe: missing fields stay null.
+          subtotalAmount: payload.subtotal_price != null ? parseFloat(payload.subtotal_price) : null,
+          taxAmount: payload.total_tax != null ? parseFloat(payload.total_tax) : null,
+          discountAmount: payload.total_discounts != null ? parseFloat(payload.total_discounts) : null,
           currency: payload.currency || 'USD',
           fulfillmentSource,
           rawPayload: payload,

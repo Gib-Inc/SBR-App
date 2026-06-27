@@ -488,11 +488,29 @@ export async function captureFinancialSnapshot(
 
 let qbFinancialArmed = false;
 
+/** Ms until the next of the given Mountain-time (America/Denver) hour slots. */
+function msUntilNextMountainSlot(hours: number[]): number {
+  const now = new Date();
+  const mtNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Denver" }));
+  const offset = mtNow.getTime() - now.getTime(); // MT wall-clock minus real UTC
+  let best = Infinity;
+  for (const h of hours) {
+    const target = new Date(mtNow);
+    target.setHours(h, 0, 0, 0);
+    if (target <= mtNow) target.setDate(target.getDate() + 1);
+    const delta = (target.getTime() - offset) - now.getTime();
+    if (delta < best) best = delta;
+  }
+  return Math.max(60_000, best);
+}
+
 /**
- * Arm the daily live-QuickBooks financial capture. Fires ~30s after boot, then
- * every 24h. No-ops gracefully when QuickBooks isn't connected (captureFinancial
- * Snapshot returns ok:false). Idempotent via the `armed` guard. Fire-and-forget
- * from startup so a slow QB call never blocks listen().
+ * Arm the live-QuickBooks financial capture. Runs ~30s after boot, then at fixed
+ * Mountain-time slots (7am/1pm/7pm) — NOT a boot-relative 24h interval, which
+ * drifts and silently skips quiet (no-deploy) days and leaves the canonical
+ * cash/AR/AP/P&L snapshot stale. No-ops when QuickBooks isn't connected.
+ * Idempotent via the `armed` guard; fire-and-forget so a slow QB call never
+ * blocks listen().
  */
 export function startQbFinancialScheduler(): void {
   if (qbFinancialArmed) return;
@@ -510,6 +528,10 @@ export function startQbFinancialScheduler(): void {
     }
   };
   setTimeout(() => { void run(); }, 30_000); // initial run after boot settles
-  const t = setInterval(() => { void run(); }, 24 * 60 * 60 * 1000);
-  if (typeof (t as any)?.unref === "function") (t as any).unref();
+  const SLOTS = [7, 13, 19]; // 7am / 1pm / 7pm America/Denver
+  const scheduleNext = () => {
+    const t = setTimeout(() => { void run().finally(scheduleNext); }, msUntilNextMountainSlot(SLOTS));
+    if (typeof (t as any)?.unref === "function") (t as any).unref();
+  };
+  scheduleNext();
 }

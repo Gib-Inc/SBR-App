@@ -25578,7 +25578,7 @@ Generate only the email body text, no subject line.`;
     try {
       const { db } = await import("./db");
       const { sql } = await import("drizzle-orm");
-      const months = (((await db.execute(sql`
+      const months = ((await db.execute(sql`
         with c as (
           select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym,
             case when account_name ~ '^[123] -' or account_name ilike '%gross sales%' or account_name ilike '%discount%' or account_name ilike '%returns%' then 'income'

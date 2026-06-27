@@ -25816,6 +25816,23 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Drill-down level 2: the individual QuickBooks GL lines behind one account
+  // (optionally narrowed to one vendor) — date / type / doc# / memo / amount.
+  app.get("/api/finances/category-transactions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const account = String(req.query.account ?? "");
+      if (!account) return res.status(400).json({ success: false, error: "account is required" });
+      const vendor = req.query.vendor != null ? String(req.query.vendor) : undefined;
+      const monthsBack = Math.min(12, Math.max(1, Number(req.query.monthsBack) || 3));
+      const { db } = await import("./db");
+      const { getCategoryVendorTransactions } = await import("./services/finance-pnl-service");
+      res.json({ success: true, ...(await getCategoryVendorTransactions(db, account, vendor, monthsBack)) });
+    } catch (error: any) {
+      console.error("[Budget] category-transactions error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load category transactions" });
+    }
+  });
+
   // Set a category's target % of net sales.
   app.put("/api/finances/budget-target", requireAuth, async (req: Request, res: Response) => {
     try {

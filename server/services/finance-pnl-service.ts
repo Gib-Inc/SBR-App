@@ -204,6 +204,72 @@ export async function getCategoryVendors(db: DB, account: string, monthsBack = 3
   return r.map((x: any) => ({ vendor: x.vendor, amount: r2(num(x.amount)), lines: num(x.lines) }));
 }
 
+/**
+ * Drill-down level 2: the individual QuickBooks GL lines behind one account
+ * (optionally narrowed to one vendor). This is read-through to qb_pl_detail —
+ * date / type / doc# / memo / amount, exactly as QuickBooks recorded them. The
+ * grand total and count come from a separate aggregate so the row cap can never
+ * make the total understate reality (the cap only bounds the rows returned).
+ * QuickBooks remains the book of record; this reports, it does not post.
+ */
+export async function getCategoryVendorTransactions(
+  db: DB,
+  account: string,
+  vendor?: string,
+  monthsBack = 3,
+  limit = 500,
+): Promise<{
+  account: string;
+  vendor: string | null;
+  lines: Array<{ date: string; type: string | null; doc: string | null; memo: string | null; amount: number }>;
+  total: number;
+  count: number;
+  truncated: boolean;
+  source: string;
+  authoritative: string;
+}> {
+  const window = sql`txn_date >= (date_trunc('month', now()) - (${monthsBack} || ' months')::interval) AND txn_date < date_trunc('month', now())`;
+  // vendor '(unlabeled)' is the surface label for a NULL vendor_or_payee (see getCategoryVendors).
+  const vendorFilter =
+    vendor == null || vendor === ""
+      ? sql``
+      : vendor === "(unlabeled)"
+        ? sql` AND vendor_or_payee IS NULL`
+        : sql` AND vendor_or_payee = ${vendor}`;
+
+  const agg = (rows(await db.execute(sql`
+    SELECT count(*) AS n, round(coalesce(sum(amount), 0)::numeric, 2) AS total
+    FROM qb_pl_detail
+    WHERE account_name = ${account} AND ${window}${vendorFilter}`)) as any[])[0];
+
+  const r = rows(await db.execute(sql`
+    SELECT txn_date::text AS date, txn_type AS type, doc_number AS doc, memo,
+           round(amount::numeric, 2) AS amount
+    FROM qb_pl_detail
+    WHERE account_name = ${account} AND ${window}${vendorFilter}
+    ORDER BY txn_date DESC, abs(amount) DESC
+    LIMIT ${limit}`)) as any[];
+
+  const lines = r.map((x: any) => ({
+    date: x.date,
+    type: x.type ?? null,
+    doc: x.doc ?? null,
+    memo: x.memo ?? null,
+    amount: r2(num(x.amount)),
+  }));
+  const count = num(agg?.n);
+  return {
+    account,
+    vendor: vendor && vendor !== "" ? vendor : null,
+    lines,
+    total: r2(num(agg?.total)),
+    count,
+    truncated: count > lines.length,
+    source: "gl",
+    authoritative: "quickbooks",
+  };
+}
+
 export interface TopVendor { vendor: string; amount: number; monthlyAvg: number; pctOfNetSales: number | null; topAccount: string | null; lines: number; }
 export interface VendorView {
   basis: { months: number };

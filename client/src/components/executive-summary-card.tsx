@@ -11,16 +11,18 @@ import { ShieldAlert, TrendingDown } from "lucide-react";
 
 interface Headline {
   cashOnHand: number; ytdNetLoss: number; ytdNetLossPctOfRevenue: number;
-  totalDebt: number; totalDebtChangePctSinceDec2025: number; ownersEquity: number;
+  totalDebt: number; totalDebtChangePctSinceDec2025: number | null; ownersEquity: number;
   totalAssets: number; fullYearLossProjection: number;
   debtBreakdown: { shortTermLoans: number; creditCards: number; sba: number };
+  ytdYear?: number; ytdMonths?: number; cashSource?: string;
 }
 interface Ratio { metric: string; value: string; status: string; tone: string; }
 interface Finding { n: number; title: string; headline: string; detail: string; tone: string; }
-interface RoiYear { year: string; value: number; }
+interface RoiYear { year: string; value: number | null; }
 interface ExecSummary {
   source: string; preparedBy: string; basis: string; asOf: string; periodLabel: string;
   critical: string; headline: Headline; ratios: Ratio[]; adRoiByYear: RoiYear[]; findings: Finding[];
+  roiDropPct?: number | null; bsAsOf?: string | null; balanceSheetSource?: string; computed?: boolean;
 }
 interface Resp { success: boolean; executiveSummary?: ExecSummary; }
 
@@ -32,7 +34,7 @@ export function ExecutiveSummaryCard() {
   const es = data?.executiveSummary;
   if (isLoading || !es) return null;
   const h = es.headline;
-  const maxRoi = Math.max(...es.adRoiByYear.map((r) => r.value), 1);
+  const maxRoi = Math.max(...es.adRoiByYear.map((r) => r.value ?? 0), 1);
 
   return (
     <Card className="border-red-200 dark:border-red-900" data-testid="card-executive-summary">
@@ -41,7 +43,10 @@ export function ExecutiveSummaryCard() {
           <ShieldAlert className="h-4 w-4 text-red-600 dark:text-red-400" /> Accountant's Executive Summary
           <span className="text-xs font-normal text-muted-foreground">· {es.periodLabel}</span>
         </CardTitle>
-        <p className="text-xs text-muted-foreground">{es.source} · {es.preparedBy} · {es.basis} basis · through {es.asOf}</p>
+        <p className="text-xs text-muted-foreground">{es.source} · {es.basis} basis · P&L through {es.asOf} · balance sheet as of {es.bsAsOf ?? es.asOf}</p>
+        {es.computed && es.balanceSheetSource === "accountant_seed" ? (
+          <p className="text-[11px] text-amber-600 dark:text-amber-400">P&amp;L figures are live from your uploads; debt/equity/assets still show the accountant baseline — upload a balance sheet to refresh them.</p>
+        ) : null}
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Critical banner */}
@@ -51,9 +56,9 @@ export function ExecutiveSummaryCard() {
 
         {/* Headline metrics */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Metric label="Cash on hand" value={fmt(h.cashOnHand)} sub="Adequate near-term" tone="ok" />
-          <Metric label="2026 YTD net loss (5 mo)" value={fmt(h.ytdNetLoss)} sub={`${h.ytdNetLossPctOfRevenue}% of revenue`} tone="crit" />
-          <Metric label="Total debt" value={fmt(h.totalDebt)} sub={`Up ${h.totalDebtChangePctSinceDec2025}% since Dec 2025`} tone="crit" />
+          <Metric label="Cash on hand" value={fmt(h.cashOnHand)} sub={h.cashSource ?? "Latest QB capture"} tone="ok" />
+          <Metric label={`${h.ytdYear ?? ""} YTD net ${h.ytdNetLoss < 0 ? "loss" : "income"}${h.ytdMonths ? ` (${h.ytdMonths} mo)` : ""}`.trim()} value={fmt(h.ytdNetLoss)} sub={`${h.ytdNetLossPctOfRevenue}% of revenue`} tone="crit" />
+          <Metric label="Total debt" value={fmt(h.totalDebt)} sub={h.totalDebtChangePctSinceDec2025 != null ? `Up ${h.totalDebtChangePctSinceDec2025}% since Dec 2025` : "Total liabilities"} tone="crit" />
           <Metric label="Owner's equity" value={fmt(h.ownersEquity)} sub={`Assets ${fmt(h.totalAssets)} − liabilities`} tone="crit" />
         </div>
 
@@ -82,12 +87,14 @@ export function ExecutiveSummaryCard() {
                 <div key={r.year} className="flex items-center gap-2 text-sm">
                   <span className="w-16 text-xs text-muted-foreground">{r.year}</span>
                   <div className="flex-1 bg-muted rounded h-3 overflow-hidden">
-                    <div className={`h-3 ${r.value >= 8 ? "bg-green-500" : r.value >= 4 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${Math.max(3, (r.value / maxRoi) * 100)}%` }} />
+                    {r.value != null && (
+                      <div className={`h-3 ${r.value >= 8 ? "bg-green-500" : r.value >= 4 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${Math.max(3, (r.value / maxRoi) * 100)}%` }} />
+                    )}
                   </div>
-                  <span className="w-14 text-right tabular-nums font-medium">${r.value.toFixed(2)}</span>
+                  <span className="w-14 text-right tabular-nums font-medium">{r.value != null ? `$${r.value.toFixed(2)}` : "no ads"}</span>
                 </div>
               ))}
-              <p className="text-[11px] text-muted-foreground pt-1">Fell 87% since 2022 — the #1 loss driver. SBR ROAS floor is 8× (target).</p>
+              <p className="text-[11px] text-muted-foreground pt-1">{es.roiDropPct != null && es.adRoiByYear.length > 1 ? `Fell ${es.roiDropPct}% since ${es.adRoiByYear[0].year}. ` : ""}SBR ROAS floor is 8× (target).</p>
             </div>
           </div>
         </div>

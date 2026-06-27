@@ -24094,11 +24094,12 @@ Generate only the email body text, no subject line.`;
   // anti-hallucination — distinct from the live balance sheet.
   app.get("/api/finances/documents", requireAuth, async (_req: Request, res: Response) => {
     try {
-      const { EXECUTIVE_SUMMARY, SHOPIFY_PERIOD } = await import("./data/finance-docs");
+      const { SHOPIFY_PERIOD } = await import("./data/finance-docs");
       const { shopifyPeriodMetrics } = await import("./services/finance-docs-service");
+      const { getExecutiveSummary } = await import("./services/executive-summary-service");
       res.json({
         success: true,
-        executiveSummary: EXECUTIVE_SUMMARY,
+        executiveSummary: await getExecutiveSummary(storage), // computed from uploads; falls back to the seed
         shopifyPeriod: SHOPIFY_PERIOD,
         shopifyMetrics: shopifyPeriodMetrics(),
       });

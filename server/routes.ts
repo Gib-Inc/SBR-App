@@ -25414,6 +25414,48 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Reconcile the app's WAC inventory valuation against QuickBooks' booked Inventory
+  // asset (sign-off blocker: the two must tie). Read-only from QB; the app flags a
+  // material variance for Roger to book the adjusting entry — it never posts to QB.
+  app.get("/api/finances/inventory-reconciliation", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const appRow: any = ((await db.execute(sql`
+        SELECT round(sum(
+          (CASE WHEN type='finished_product' THEN coalesce(hildale_qty,0)+coalesce(pivot_qty,0)
+                ELSE coalesce(current_stock,0) END)
+          * coalesce(wac_unit_cost, default_purchase_cost, 0))::numeric, 2) AS app_wac
+        FROM items`)).rows ?? [])[0] ?? {};
+      const qbRow: any = ((await db.execute(sql`
+        SELECT qb_inventory, captured_at::text AS captured_at
+        FROM qb_financial_snapshots WHERE qb_inventory IS NOT NULL
+        ORDER BY captured_at DESC LIMIT 1`)).rows ?? [])[0] ?? {};
+      const appWac = Number(appRow.app_wac ?? 0);
+      const qbInventory = qbRow.qb_inventory != null ? Number(qbRow.qb_inventory) : null;
+      const variance = qbInventory != null ? Math.round((appWac - qbInventory) * 100) / 100 : null;
+      const variancePct = qbInventory ? Math.round((variance! / qbInventory) * 1000) / 10 : null;
+      const material = variance != null && (Math.abs(variance) > 10000 || (variancePct != null && Math.abs(variancePct) > 5));
+      res.json({
+        appWac,
+        qbInventory,
+        qbInventoryAsOf: qbRow.captured_at ?? null,
+        variance, variancePct, material,
+        source: "operational_estimate",
+        authoritative: "quickbooks",
+        flag: qbInventory == null
+          ? "No QuickBooks inventory captured yet — pending the next QB balance-sheet sync."
+          : material
+            ? "Material variance: app valuation does not tie to the QuickBooks inventory asset. Roger to book the inventory adjusting entry in QuickBooks (the app never posts entries)."
+            : "App valuation ties to the QuickBooks inventory asset within tolerance.",
+        note: "App WAC valuation is an operational estimate. QuickBooks is the authoritative book of record.",
+      });
+    } catch (error: any) {
+      console.error('[Inventory Reconciliation] error:', error);
+      res.status(500).json({ error: error.message || 'Failed to reconcile inventory' });
+    }
+  });
+
   // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
   app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
     const startedAt = new Date();

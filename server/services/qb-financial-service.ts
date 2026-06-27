@@ -129,6 +129,7 @@ export interface QbBalanceSheet {
   totalLiabilities: number | null;
   totalCurrentLiabilities: number | null;
   totalEquity: number | null;
+  inventory: number | null; // the booked Inventory asset, for app-WAC reconciliation
 }
 
 /**
@@ -153,6 +154,16 @@ export function parseBalanceSheet(report: any): QbBalanceSheet {
           if (row?.group) byKey[norm(row.group)] = n;
         }
       }
+      // Leaf account rows (e.g. "Inventory Asset") carry ColData directly, not
+      // Summary.ColData. Capture them too, but never overwrite a summary total.
+      const lcd = row?.ColData;
+      if (Array.isArray(lcd) && lcd.length >= 2) {
+        const ln = toNum(lcd[lcd.length - 1]?.value);
+        if (!Number.isNaN(ln)) {
+          const label = norm(lcd[0]?.value);
+          if (label && !(label in byKey)) byKey[label] = ln;
+        }
+      }
       if (row?.Rows?.Row) visit(row.Rows.Row);
     }
   };
@@ -173,6 +184,7 @@ export function parseBalanceSheet(report: any): QbBalanceSheet {
     totalLiabilities,
     totalCurrentLiabilities: pick("TotalCurrentLiabilities", "Total Current Liabilities"),
     totalEquity,
+    inventory: pick("Inventory", "InventoryAsset", "Inventory Asset", "TotalInventory", "Inventories"),
   };
 }
 
@@ -428,6 +440,9 @@ export async function captureFinancialSnapshot(
   if (raw.bsReport != null && qbBalanceSheet?.totalLiabilities == null && qbBalanceSheet?.totalAssets == null) {
     gaps.push("DATA GAPPED: Balance Sheet totals (unrecognized report layout)");
   }
+  if (raw.bsReport != null && qbBalanceSheet?.inventory == null) {
+    gaps.push("DATA GAPPED: Balance Sheet Inventory line (app-WAC reconciliation unavailable)");
+  }
   const billsDue = buildBillsDue(raw.openBills);
 
   // Mirror EVERY open QuickBooks bill into the Cash Command pay-order so the
@@ -474,6 +489,7 @@ export async function captureFinancialSnapshot(
     grossProfit: toNumericString(pl.grossProfit),
     netIncome: toNumericString(pl.netIncome),
     totalIncome: toNumericString(pl.totalIncome),
+    qbInventory: toNumericString(qbBalanceSheet?.inventory),
     plPeriodStart: raw.plPeriodStart,
     plPeriodEnd: raw.plPeriodEnd,
     realmId: raw.realmId,

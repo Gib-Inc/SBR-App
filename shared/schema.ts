@@ -2205,6 +2205,7 @@ export const qbFinancialSnapshots = pgTable("qb_financial_snapshots", {
   grossProfit: numeric("gross_profit", { precision: 14, scale: 2 }),
   netIncome: numeric("net_income", { precision: 14, scale: 2 }),
   totalIncome: numeric("total_income", { precision: 14, scale: 2 }),
+  qbInventory: numeric("qb_inventory", { precision: 14, scale: 2 }), // QB balance-sheet Inventory asset, for app-WAC reconciliation
   plPeriodStart: date("pl_period_start"),
   plPeriodEnd: date("pl_period_end"),
   realmId: text("realm_id"),

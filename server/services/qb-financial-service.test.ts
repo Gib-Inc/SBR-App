@@ -154,7 +154,14 @@ describe("parseBalanceSheet", () => {
   });
 
   it("returns nulls (never guesses) for an unrecognized report", () => {
-    expect(parseBalanceSheet({})).toEqual({ totalAssets: null, totalCurrentAssets: null, totalLiabilities: null, totalCurrentLiabilities: null, totalEquity: null });
+    expect(parseBalanceSheet({})).toEqual({ totalAssets: null, totalCurrentAssets: null, totalLiabilities: null, totalCurrentLiabilities: null, totalEquity: null, inventory: null });
+  });
+
+  it("captures the Inventory leaf account for app-WAC reconciliation", () => {
+    const r = parseBalanceSheet({ Rows: { Row: [
+      { ColData: [{ value: "Inventory Asset" }, { value: "131,550.16" }] },
+    ] } });
+    expect(r.inventory).toBe(131550.16);
   });
 });
 

@@ -8655,50 +8655,62 @@ export class PostgresStorage implements IStorage {
       : await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date ORDER BY date DESC, revenue DESC`);
     const rows = (((res as any).rows ?? res) as any[]) || [];
 
-    // Reconcile ad spend to the authoritative snapshot totals. The per-SKU rows carry the
-    // relative SHAPE but unreliable absolute spend (ad_metrics_daily is multi-source); scale
-    // each channel's spend so it sums to the deduped marketing_spend_snapshots total
-    // (amazon = Amazon; shopify = Google + Meta). Same allocateBreakdownToTotal pattern the
-    // per-SKU margin table uses. Window assumes the default trailing ~30d.
-    const snapRes = await this.db.execute(drizzleSql`
-      SELECT upper(platform) AS platform,
-             (array_agg(spend ORDER BY period_end DESC NULLS LAST))[1]::float AS total_spend
-      FROM marketing_spend_snapshots
-      WHERE COALESCE(superseded,false) = false
-        AND COALESCE(period_end, period_start) >= ${start}::date
-      GROUP BY upper(platform)`);
-    const snaps = (((snapRes as any).rows ?? snapRes) as Array<{ platform: string; total_spend: number }>) || [];
-    const channelTotal: Record<string, number> = {};
-    for (const s of snaps) {
-      const sp = Number(s.total_spend) || 0;
-      if (s.platform === "AMAZON") channelTotal.amazon = (channelTotal.amazon ?? 0) + sp;
-      else if (s.platform === "GOOGLE" || s.platform === "META") channelTotal.shopify = (channelTotal.shopify ?? 0) + sp;
-    }
-
-    const { allocateBreakdownToTotal } = await import("./services/corrected-ad-spend");
+    // Reconcile ad spend to the authoritative CORRECTED totals — PERIOD-AWARE. The
+    // per-SKU rows carry the relative SHAPE but unreliable absolute spend
+    // (ad_metrics_daily is multi-source). For each calendar MONTH in the window we
+    // pull that month's corrected spend per platform from getCorrectedAdSpendRange —
+    // the same reader the Breakeven Scoreboard uses, which collapses overlapping
+    // windows, applies source-tier precedence, and PRORATES each window to the month
+    // (so a rolling 30-day window that straddles two months contributes only its
+    // in-month slice, and non-overlapping weekly Meta windows sum instead of being
+    // dropped). Map platform->channel (amazon = Amazon; shopify = Google + Meta) and
+    // scale each (month, channel) group to its own month's total. Per-month — not one
+    // total for the whole window — keeps multi-month history honest; a month with no
+    // corrected spend is left unscaled (allocated:false), never scaled to a wrong total.
+    const { getCorrectedAdSpendRange, reconcileRoasByMonthChannel } = await import("./services/corrected-ad-spend");
     const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
-    const groups = new Map<string, any[]>();
-    for (const r of rows) { const arr = groups.get(r.channel) ?? []; arr.push(r); groups.set(r.channel, arr); }
-    const out: any[] = [];
-    for (const [ch, items] of Array.from(groups.entries())) {
-      const target = ch in channelTotal ? channelTotal[ch] : null;
-      const scaled = allocateBreakdownToTotal(items.map((it) => ({ ...it, spend: Number(it.ad_spend) || 0 })), target);
-      for (const s of scaled) {
-        const adSpend = round2(s.spend);
-        const grossProfit = round2((Number(s.revenue) || 0) - (Number(s.cogs) || 0));
-        const netProfit = round2(grossProfit - adSpend);
-        out.push({
-          sku: s.sku, channel: s.channel, date: s.date,
-          revenue: Number(s.revenue) || 0, cogs: Number(s.cogs) || 0, units: s.units,
-          ad_spend: adSpend, clicks: s.clicks, conversions: s.conversions,
-          gross_profit: grossProfit, net_profit: netProfit,
-          gross_roas: adSpend > 0 ? round2((Number(s.revenue) || 0) / adSpend) : null,
-          net_roas: adSpend > 0 ? round2(grossProfit / adSpend) : null,
-          allocated: s.allocated,
-        });
+    const monthKeys: string[] = [];
+    {
+      let y = Number(start.slice(0, 4)), m = Number(start.slice(5, 7));
+      const ey = Number(end.slice(0, 4)), em = Number(end.slice(5, 7));
+      while (y < ey || (y === ey && m <= em)) {
+        monthKeys.push(`${y}-${String(m).padStart(2, "0")}`);
+        m++; if (m > 12) { m = 1; y++; }
       }
     }
-    return out;
+    const totalByMonthChannel: Record<string, number> = {};
+    for (const ym of monthKeys) {
+      const yy = Number(ym.slice(0, 4)), mm = Number(ym.slice(5, 7));
+      const firstOfMonth = `${ym}-01`;
+      const lastOfMonth = `${ym}-${String(new Date(Date.UTC(yy, mm, 0)).getUTCDate()).padStart(2, "0")}`;
+      const mStart = firstOfMonth < start ? start : firstOfMonth; // clip to the query window
+      const mEnd = lastOfMonth > end ? end : lastOfMonth;
+      let spendByPlatform: Record<string, number> = {};
+      try { spendByPlatform = (await getCorrectedAdSpendRange(mStart, mEnd)).spendByPlatform || {}; }
+      catch { spendByPlatform = {}; }
+      for (const [plat, sp] of Object.entries(spendByPlatform)) {
+        const P = String(plat).toUpperCase();
+        const ch = P.includes("AMAZON") ? "amazon" : (P.includes("GOOGLE") || P.includes("META")) ? "shopify" : null;
+        if (!ch) continue;
+        const key = `${ym}|${ch}`;
+        totalByMonthChannel[key] = (totalByMonthChannel[key] ?? 0) + (Number(sp) || 0);
+      }
+    }
+    const scaled = reconcileRoasByMonthChannel(rows, totalByMonthChannel);
+    return scaled.map((s: any) => {
+      const adSpend = round2(s.spend);
+      const grossProfit = round2((Number(s.revenue) || 0) - (Number(s.cogs) || 0));
+      const netProfit = round2(grossProfit - adSpend);
+      return {
+        sku: s.sku, channel: s.channel, date: s.date,
+        revenue: Number(s.revenue) || 0, cogs: Number(s.cogs) || 0, units: s.units,
+        ad_spend: adSpend, clicks: s.clicks, conversions: s.conversions,
+        gross_profit: grossProfit, net_profit: netProfit,
+        gross_roas: adSpend > 0 ? round2((Number(s.revenue) || 0) / adSpend) : null,
+        net_roas: adSpend > 0 ? round2(grossProfit / adSpend) : null,
+        allocated: s.allocated,
+      };
+    });
   }
 
   // Per-ad-platform rollup. Hits the v_roas_guardian_by_platform view that
@@ -8713,42 +8725,53 @@ export class PostgresStorage implements IStorage {
     // Breakeven Scoreboard uses). ad_metrics_daily under-reports AND double-counts (two ingestion
     // paths + grain/sentinel duplication), so it's used ONLY for the platform's directional
     // attributed revenue. Meta attributed revenue comes from the uploaded CSV, never Windsor.
-    const rows = await this.db.execute(drizzleSql`
-      WITH spend AS (
-        SELECT upper(platform) AS platform,
-               (array_agg(spend ORDER BY period_end DESC NULLS LAST))[1]::float AS total_spend
-        FROM marketing_spend_snapshots
-        WHERE COALESCE(superseded,false) = false
-          AND COALESCE(period_end, period_start) >= ${from}::date
-        GROUP BY upper(platform)
-      ),
-      rev AS (
-        SELECT CASE WHEN upper(platform) LIKE '%AMAZON%' THEN 'AMAZON'
-                    WHEN upper(platform) LIKE '%GOOGLE%' THEN 'GOOGLE' END AS platform,
-               SUM(revenue)::float AS pixel_revenue
-        FROM ad_metrics_daily
-        WHERE date >= ${from}::date AND date <= ${to}::date
-          AND (upper(platform) LIKE '%AMAZON%' OR upper(platform) LIKE '%GOOGLE%')
-        GROUP BY 1
-      ),
-      meta_rev AS (
-        SELECT 'META'::text AS platform, SUM(conversion_value)::float AS pixel_revenue
-        FROM meta_ads_performance
-        WHERE date >= ${from}::date AND date <= ${to}::date
-      )
-      SELECT s.platform,
-             s.total_spend AS total_spend,
-             COALESCE(r.pixel_revenue, mr.pixel_revenue, 0)::float AS pixel_revenue,
-             CASE WHEN s.total_spend > 0
-                  THEN COALESCE(r.pixel_revenue, mr.pixel_revenue, 0)::float / s.total_spend
-                  ELSE 0 END AS pixel_roas
-      FROM spend s
-      LEFT JOIN rev r ON r.platform = s.platform
-      LEFT JOIN meta_rev mr ON mr.platform = s.platform
-      WHERE s.total_spend > 0
-      ORDER BY s.total_spend DESC
-    `);
-    return (rows as any).rows ?? (rows as any);
+    // Spend from the canonical corrected reader (collapse-overlapping + source-tier
+    // precedence + month-boundary proration) — NOT array_agg[1] over the raw
+    // snapshots, which silently dropped the non-overlapping weekly Meta windows and
+    // would overstate ROAS (a false "crushing it" signal the ROAS floors must catch).
+    const { getCorrectedAdSpendRange } = await import("./services/corrected-ad-spend");
+    const r2b = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+    let spendByPlatform: Record<string, number> = {};
+    try { spendByPlatform = (await getCorrectedAdSpendRange(from, to)).spendByPlatform || {}; }
+    catch { spendByPlatform = {}; }
+    const spendUpper: Record<string, number> = {};
+    for (const [p, sp] of Object.entries(spendByPlatform)) {
+      const P = String(p).toUpperCase();
+      const key = P.includes("AMAZON") ? "AMAZON" : P.includes("GOOGLE") ? "GOOGLE" : P.includes("META") ? "META" : P;
+      spendUpper[key] = (spendUpper[key] ?? 0) + (Number(sp) || 0);
+    }
+    // Pixel-attributed (directional) revenue per platform — ad_metrics_daily for
+    // Amazon/Google, the uploaded Meta CSV for Meta (never Windsor for Meta revenue).
+    const revRes = await this.db.execute(drizzleSql`
+      SELECT CASE WHEN upper(platform) LIKE '%AMAZON%' THEN 'AMAZON'
+                  WHEN upper(platform) LIKE '%GOOGLE%' THEN 'GOOGLE' END AS platform,
+             SUM(revenue)::float AS pixel_revenue
+      FROM ad_metrics_daily
+      WHERE date >= ${from}::date AND date <= ${to}::date
+        AND (upper(platform) LIKE '%AMAZON%' OR upper(platform) LIKE '%GOOGLE%')
+      GROUP BY 1`);
+    const metaRevRes = await this.db.execute(drizzleSql`
+      SELECT SUM(conversion_value)::float AS pixel_revenue FROM meta_ads_performance
+      WHERE date >= ${from}::date AND date <= ${to}::date`);
+    const pixelRev: Record<string, number> = {};
+    for (const rr of ((((revRes as any).rows ?? revRes) as any[]) || [])) {
+      if (rr?.platform) pixelRev[rr.platform] = Number(rr.pixel_revenue) || 0;
+    }
+    const metaRev = Number(((((metaRevRes as any).rows ?? metaRevRes) as any[]) || [])[0]?.pixel_revenue) || 0;
+    if (metaRev) pixelRev.META = (pixelRev.META ?? 0) + metaRev;
+
+    return Object.entries(spendUpper)
+      .filter(([, total]) => total > 0)
+      .map(([platform, total_spend]) => {
+        const pixel_revenue = r2b(pixelRev[platform] ?? 0);
+        return {
+          platform,
+          total_spend: r2b(total_spend),
+          pixel_revenue,
+          pixel_roas: total_spend > 0 ? r2b(pixel_revenue / total_spend) : 0,
+        };
+      })
+      .sort((a, b) => b.total_spend - a.total_spend);
   }
 
   // Backed by the v_money_maker_health view — per-build capacity snapshot

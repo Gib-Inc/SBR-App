@@ -315,3 +315,34 @@ export function allocateBreakdownToTotal<T extends { spend: number }>(
     };
   });
 }
+
+/**
+ * Period-aware reconciliation for multi-month ROAS history. Groups per-SKU rows by
+ * (calendar month of `date`, channel) and scales each group to THAT month+channel's
+ * authoritative spend total — so a 3-month window isn't distorted by reconciling
+ * every month to a single latest-month total (the bug this replaces). A month with
+ * no total is left unscaled (allocated:false), never scaled to another month's number.
+ * `totalByMonthChannel` is keyed `${YYYY-MM}|${channel}`. Pure.
+ */
+export function reconcileRoasByMonthChannel<T extends { date: string; channel: string; ad_spend?: number }>(
+  rows: T[],
+  totalByMonthChannel: Record<string, number | null>,
+): Array<T & { spend: number; rawSpend: number; allocated: boolean }> {
+  const groups = new Map<string, T[]>();
+  for (const r of rows) {
+    const key = `${String(r.date).slice(0, 7)}|${r.channel}`;
+    const arr = groups.get(key) ?? [];
+    arr.push(r);
+    groups.set(key, arr);
+  }
+  const out: Array<T & { spend: number; rawSpend: number; allocated: boolean }> = [];
+  for (const [key, items] of Array.from(groups.entries())) {
+    const target = key in totalByMonthChannel ? totalByMonthChannel[key] : null;
+    const scaled = allocateBreakdownToTotal(
+      items.map((it) => ({ ...it, spend: Number(it.ad_spend) || 0 })),
+      target,
+    );
+    out.push(...scaled);
+  }
+  return out;
+}

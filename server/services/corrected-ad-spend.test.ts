@@ -24,7 +24,7 @@ const h = vi.hoisted(() => {
 
 vi.mock("../storage", () => ({ storage: h.storage }));
 
-import { allocateBreakdownToTotal, getCorrectedMonthlyAdSpend } from "./corrected-ad-spend";
+import { allocateBreakdownToTotal, getCorrectedMonthlyAdSpend, reconcileRoasByMonthChannel } from "./corrected-ad-spend";
 
 const snap = (platform: string, source: string, periodStart: string, periodEnd: string, spend: number) =>
   ({ platform, source, periodStart, periodEnd, spend });
@@ -66,6 +66,40 @@ describe("allocateBreakdownToTotal", () => {
     const out = allocateBreakdownToTotal([{ spend: 5 }, { spend: 5 }], 0);
     expect(out.map((o) => o.spend)).toEqual([5, 5]);
     expect(out.every((o) => !o.allocated)).toBe(true);
+  });
+});
+
+describe("reconcileRoasByMonthChannel", () => {
+  // The bug this guards against: reconciling every month to a single latest-month
+  // total. Each month must reconcile to ITS OWN month+channel total.
+  const rows = [
+    { sku: "A", channel: "shopify", date: "2026-04-10", ad_spend: 10, revenue: 100 },
+    { sku: "B", channel: "shopify", date: "2026-04-20", ad_spend: 30, revenue: 300 },
+    { sku: "A", channel: "shopify", date: "2026-05-12", ad_spend: 10, revenue: 200 },
+    { sku: "C", channel: "amazon", date: "2026-05-12", ad_spend: 5, revenue: 50 },
+  ];
+
+  it("scales each month+channel group to its own total, not one shared total", () => {
+    const out = reconcileRoasByMonthChannel(rows, {
+      "2026-04|shopify": 80, // April shopify raw 40 → factor 2
+      "2026-05|shopify": 10, // May shopify raw 10 → factor 1
+      "2026-05|amazon": 25, // May amazon raw 5 → factor 5
+    });
+    const by = (sku: string, ym: string) => out.find((o) => o.sku === sku && o.date.startsWith(ym))!;
+    expect(by("A", "2026-04").spend).toBe(20); // 10*2
+    expect(by("B", "2026-04").spend).toBe(60); // 30*2 — April reconciled to 80, NOT bled into May
+    expect(by("A", "2026-05").spend).toBe(10); // 10*1
+    expect(by("C", "2026-05").spend).toBe(25); // 5*5
+    // April shopify sums to its own total
+    const aprShopify = out.filter((o) => o.channel === "shopify" && o.date.startsWith("2026-04"));
+    expect(aprShopify.reduce((s, o) => s + o.spend, 0)).toBe(80);
+  });
+
+  it("leaves a month with no total unscaled (allocated:false), never scaled to another month", () => {
+    const out = reconcileRoasByMonthChannel(rows, { "2026-05|shopify": 10 });
+    const apr = out.filter((o) => o.date.startsWith("2026-04"));
+    expect(apr.every((o) => !o.allocated)).toBe(true);
+    expect(apr.map((o) => o.spend).sort((a, b) => a - b)).toEqual([10, 30]); // raw, untouched
   });
 });
 

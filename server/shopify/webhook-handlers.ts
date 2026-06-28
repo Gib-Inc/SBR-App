@@ -237,6 +237,25 @@ export async function handleOrderCreated(
       };
     }
 
+    // Idempotency guard — ROOT FIX for duplicate sales_order_lines.
+    // createSalesOrder now resolves a duplicate (channel, external_order_id)
+    // INTERNALLY via a storage-level upsert (added 2026-06 to stop order cloning),
+    // so it no longer throws on a dup — which means `isExistingOrder` above is never
+    // set on a re-delivered or multi-topic webhook. Shopify fires create/paid/
+    // fulfilled/updated for a single order, so without this guard each of those
+    // re-ran the line loop, producing ~9-11 duplicate lines per order and inflating
+    // the Units column, Sold(90d), Committed, and Available. If the order already
+    // has lines, a prior webhook created them (and decremented stock) — skip to
+    // prevent duplicate lines AND double inventory decrements.
+    const existingLines = await storage.getSalesOrderLines(salesOrder.id);
+    if (existingLines.length > 0) {
+      return {
+        success: true,
+        message: `Order ${orderName} already has ${existingLines.length} line(s); skipping duplicate line creation`,
+        data: { salesOrderId: salesOrder.id, alreadyProcessed: true },
+      };
+    }
+
     console.log(`[Shopify Webhook] Created sales order ${salesOrder.id} for Shopify order ${orderName}`);
 
     const inventoryMovement = new InventoryMovement(storage);

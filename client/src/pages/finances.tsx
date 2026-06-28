@@ -14,6 +14,7 @@ import { ShopifyCashCard } from "@/components/shopify-cash-card";
 import { CreditLinesCard } from "@/components/credit-lines-card";
 import { DebtRunwayCard } from "@/components/debt-runway-card";
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
+import { ResetImpactCard } from "@/components/reset-impact-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { AmazonPeriodCard } from "@/components/amazon-period-card";
 import { DraftOrdersCard } from "@/components/draft-orders-card";
@@ -140,6 +141,9 @@ export default function Finances() {
 
           {/* Live from QuickBooks — real-time cash, receivables, bills due (+ aging) */}
           <QuickBooksLiveCard qbLive={data?.qbLive ?? null} netCashPosition={data?.netCashPosition ?? null} />
+
+          {/* Reset Impact — month-over-month trend since the May reset (losses + MER) */}
+          <ResetImpactCard />
 
           {/* Accountant's Executive Summary (ITD narrative + ratios) */}
           <ExecutiveSummaryCard />

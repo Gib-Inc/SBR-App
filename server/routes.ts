@@ -25791,6 +25791,19 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Reset Impact: per-month P&L trend (incl. current month-to-date) + blended MER,
+  // with a same-day-range pace check (this month vs prior month) — "is the reset working?"
+  app.get("/api/finances/reset-impact", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getResetImpact } = await import("./services/reset-impact-service");
+      res.json({ success: true, ...(await getResetImpact(db)) });
+    } catch (error: any) {
+      console.error("[Finances] reset-impact error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load reset impact" });
+    }
+  });
+
   // Top spend vendors + the Pyvott fulfillment spotlight (cost/order).
   app.get("/api/finances/top-vendors", requireAuth, async (_req: Request, res: Response) => {
     try {

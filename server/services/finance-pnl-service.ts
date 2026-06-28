@@ -56,7 +56,7 @@ export interface BudgetScorecard {
 }
 
 /** Roll a set of {account, amount} into P&L aggregates. */
-function rollup(items: Array<{ account: string; amount: number }>) {
+export function rollup(items: Array<{ account: string; amount: number }>) {
   let income = 0, contra = 0, cogs = 0, expenses = 0;
   for (const it of items) {
     const g = classifyAccount(it.account);

@@ -81,7 +81,7 @@ import { logService } from "./services/log-service";
 import { checkReorderThresholds } from "./services/reorder-alert";
 import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
 import { shippoReturnsService } from "./services/shippo-returns-service";
-import { registerGhlAgentApiRoutes } from "./routes/ghl-agent-api";
+import { registerGhlAgentApiRoutes, extractCustomerIdentity, orderMatchesCustomer } from "./routes/ghl-agent-api";
 import { registerMarketingAnalyticsRoutes } from "./routes/marketing-analytics-api";
 import { registerMarketingAnalyticsCmoRoutes } from "./routes/marketing-analytics-cmo-api";
 import { runD1Pipeline, runSingleAgent } from "./services/zobot-pipeline";
@@ -19760,7 +19760,7 @@ Generate only the email body text, no subject line.`;
       }
 
       // Parse request body - channel indicates voice vs SMS/conversations
-      const { orderNumber, customerName, contactId, channel } = req.body;
+      const { orderNumber, customerName, contactId, channel, phone, email } = req.body;
       const isVoiceChannel = channel === 'CALL';
       
       if (!orderNumber && !customerName) {
@@ -19823,6 +19823,22 @@ Generate only the email body text, no subject line.`;
           error: "Order not found",
           messageForAgent: "I'm sorry, I'm having a hard time finding your order. I'm going to assign this to one of our team members who can investigate further. We'll be in touch soon."
         });
+      }
+
+      // Customer-ownership binding (P4): the shared GHL secret authenticates the
+      // platform, not the customer. The found order must belong to the caller's
+      // contact, or anyone with the secret could create a return for any order.
+      // Fail closed unless the GHL_AGENT_REQUIRE_CUSTOMER=false escape hatch is set.
+      {
+        const reqId = extractCustomerIdentity({ phone, email }, req.body);
+        const allowUnverified = process.env.GHL_AGENT_REQUIRE_CUSTOMER === "false";
+        if (!reqId.hasAny && !allowUnverified) {
+          return res.status(403).json({ success: false, error: "Customer identity required", messageForAgent: "Before I start a return I need to confirm the email or phone number on the order. Can you share one of those?" });
+        }
+        if (reqId.hasAny && !orderMatchesCustomer(salesOrder, reqId)) {
+          console.warn(`[GHL Custom Action] OWNERSHIP DENIED on create-return-label: order ${salesOrder.externalOrderId || (salesOrder as any).id}`);
+          return res.status(404).json({ success: false, error: "Order not found", messageForAgent: "I couldn't find an order matching those details. Let me get a team member to help you." });
+        }
       }
 
       console.log(`[GHL Custom Action] Found order: ${salesOrder.id} (${salesOrder.orderNumber}), status: ${salesOrder.status}`);
@@ -20195,8 +20211,36 @@ Generate only the email body text, no subject line.`;
 
   // POST /api/ghl/review-trigger
   // Called when a Shopify order is marked as delivered. Triggers GHL review workflow.
+  // Shared-secret gate for the public GHL PII endpoints (P9). They return customer
+  // data by phone/email, so they must not be world-open. FAIL-CLOSED by default:
+  // a missing/invalid x-ghl-secret (or an unconfigured GHL_WEBHOOK_SECRET) is
+  // rejected. GHL_ALLOW_UNSIGNED="true" is a TEMPORARY escape hatch for the window
+  // while GHL is being updated to send the header — it re-opens the endpoints, so
+  // remove it once GHL sends x-ghl-secret. Returns true to proceed.
+  function ghlPublicSecretGate(req: Request, res: Response, action: string): boolean {
+    const ghlSecret = process.env.GHL_WEBHOOK_SECRET;
+    const provided = req.headers['x-ghl-secret'] as string | undefined;
+    const allowUnsigned = process.env.GHL_ALLOW_UNSIGNED === 'true';
+    if (ghlSecret && provided) {
+      const a = Buffer.from(ghlSecret, 'utf-8');
+      const b = Buffer.from(provided, 'utf-8');
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        res.status(401).json({ success: false, error: "Unauthorized: invalid GHL secret" });
+        return false;
+      }
+      return true;
+    }
+    if (allowUnsigned) {
+      console.warn(`[GHL] PUBLIC PII endpoint ${action} served WITHOUT secret verification (GHL_ALLOW_UNSIGNED=true escape hatch). Configure GHL_WEBHOOK_SECRET, send x-ghl-secret from GHL, then remove the escape hatch.`);
+      return true;
+    }
+    res.status(401).json({ success: false, error: "Unauthorized: GHL secret required" });
+    return false;
+  }
+
   app.post("/api/ghl/review-trigger", async (req: Request, res: Response) => {
     try {
+      if (!ghlPublicSecretGate(req, res, "ghl/review-trigger")) return;
       const { order_id, delivery_date } = req.body;
       
       if (!order_id) {
@@ -20291,6 +20335,7 @@ Generate only the email body text, no subject line.`;
   // GHL calls this to get order details when customer reports a product issue
   app.post("/api/ghl/order-lookup", async (req: Request, res: Response) => {
     try {
+      if (!ghlPublicSecretGate(req, res, "ghl/order-lookup")) return;
       const { phone, email, contact_name } = req.body;
       
       if (!phone && !email) {
@@ -20414,6 +20459,7 @@ Generate only the email body text, no subject line.`;
   // GHL checks if a replacement order has been placed and shipped
   app.post("/api/ghl/order-status", async (req: Request, res: Response) => {
     try {
+      if (!ghlPublicSecretGate(req, res, "ghl/order-status")) return;
       const { phone, email, product_type } = req.body;
       
       if (!phone && !email) {

@@ -95,6 +95,60 @@ async function requireGhlAgentAuth(req: Request, res: Response, next: NextFuncti
   }
 }
 
+// ── Customer-ownership binding (P4) ─────────────────────────────────────────
+// The GHL agent (ROLL.E) talks to ONE customer at a time and GHL knows that
+// contact's email/phone. Every PII/refund/return action must therefore be bound
+// to that customer: we verify the looked-up order actually belongs to the caller's
+// contact before returning data or acting. Without this, the shared connector key
+// authenticates the GHL platform but NOT the customer, so anyone with the key (or
+// any contact) could read/refund/return ANY order by guessing an order number.
+//
+// Rollout: FAIL-CLOSED by default. A call with no resolvable customer identity is
+// denied, and a mismatch is ALWAYS denied. GHL_AGENT_REQUIRE_CUSTOMER="false" is a
+// TEMPORARY escape hatch that allows identity-less calls on the standalone endpoints
+// while the GHL workflows are updated to pass {{contact.email}}/{{contact.phone}};
+// it NEVER relaxes /action (whose SMS callback would text another customer's PII back
+// to the caller) or the by-name search (an enumeration primitive). Because the default
+// is fail-closed, deploy AFTER GHL passes the identity, or set the escape hatch during
+// the transition and remove it once GHL sends identity.
+export function normEmail(e?: string | null): string { return (e || "").trim().toLowerCase(); }
+export function normPhone(p?: string | null): string { return (p || "").replace(/\D/g, "").slice(-10); }
+
+export function extractCustomerIdentity(params: Record<string, any>, body: any): { email: string; phone: string; hasAny: boolean } {
+  const b = body || {};
+  const email = normEmail(params?.customer_email ?? params?.email ?? b.email ?? b.contact_email ?? b.contact?.email);
+  const phone = normPhone(params?.customer_phone ?? params?.phone ?? b.phone ?? b.contact_phone ?? b.contact?.phone);
+  return { email, phone, hasAny: !!(email || phone) };
+}
+
+export function orderMatchesCustomer(
+  order: { customerEmail?: string | null; customerPhone?: string | null },
+  id: { email: string; phone: string },
+): boolean {
+  if (id.email && order.customerEmail && normEmail(order.customerEmail) === id.email) return true;
+  if (id.phone && order.customerPhone && normPhone(order.customerPhone) === id.phone) return true;
+  return false;
+}
+
+export type OwnershipDecision =
+  | { allow: true; unverified?: boolean }
+  | { allow: false; code: number; errorCode: string; msg: string };
+
+export function ownershipDecision(
+  order: { customerEmail?: string | null; customerPhone?: string | null },
+  id: { email: string; phone: string; hasAny: boolean },
+  strict: boolean,
+): OwnershipDecision {
+  if (!id.hasAny) {
+    if (strict) return { allow: false, code: 403, errorCode: "CUSTOMER_REQUIRED", msg: "Customer identity required (customer_email or customer_phone)." };
+    return { allow: true, unverified: true };
+  }
+  if (!orderMatchesCustomer(order, id)) {
+    return { allow: false, code: 404, errorCode: "NOT_FOUND", msg: "Order not found for this customer." };
+  }
+  return { allow: true };
+}
+
 function handleError(res: Response, error: unknown, errorCode: string = "INTERNAL_ERROR") {
   console.error(`[GHL Agent API] Error:`, error);
   const message = error instanceof Error ? error.message : "An unexpected error occurred";
@@ -206,6 +260,32 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
     return params;
   }
   
+  // FAIL-CLOSED by default: a call with no resolvable customer identity is denied.
+  // GHL_AGENT_REQUIRE_CUSTOMER="false" is a TEMPORARY escape hatch for the window
+  // while GHL is being updated to pass {{contact.email}}/{{contact.phone}} — it
+  // re-opens the per-customer hole for the standalone endpoints (never for /action,
+  // which always has the contact identity), so remove it once GHL sends identity.
+  const ALLOW_UNVERIFIED = process.env.GHL_AGENT_REQUIRE_CUSTOMER === "false";
+
+  // Enforce that `order` belongs to the caller's customer. Returns true to proceed;
+  // on denial it writes the response and returns false (caller should `return`).
+  // forceStrict ignores the escape hatch — used for /action, whose SMS callback
+  // would otherwise text another customer's PII back to the caller.
+  function enforceOwnership(res: Response, order: any, params: Record<string, any>, body: any, action: string, forceStrict = false): boolean {
+    const id = extractCustomerIdentity(params, body);
+    const strict = forceStrict || !ALLOW_UNVERIFIED;
+    const d = ownershipDecision(order, id, strict);
+    if (!d.allow) {
+      console.warn(`[GHL Agent API] OWNERSHIP DENIED on ${action}: order=${order?.externalOrderId || order?.id} (${d.errorCode})`);
+      res.status(d.code).json({ status: "error", message: d.msg, error_code: d.errorCode });
+      return false;
+    }
+    if ((d as any).unverified) {
+      console.warn(`[GHL Agent API] OWNERSHIP UNVERIFIED on ${action}: no customer identity provided; allowed only because GHL_AGENT_REQUIRE_CUSTOMER=false (escape hatch). Remove it once GHL passes contact email/phone.`);
+    }
+    return true;
+  }
+
   router.post("/inventory/reorder-status", async (req: Request, res: Response) => {
     try {
       const db = getDb();
@@ -298,7 +378,8 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       }
       
       const order = orders[0];
-      
+      if (!enforceOwnership(res, order, params, req.body, "orders/lookup")) return;
+
       const lines = await db
         .select()
         .from(salesOrderLines)
@@ -366,16 +447,27 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
         .where(ilike(salesOrders.customerName, `%${name}%`))
         .orderBy(desc(salesOrders.orderDate))
         .limit(50);
-      
-      if (orders.length === 0) {
+
+      // Customer-ownership binding: a by-name search would otherwise return every
+      // matching customer's orders + PII. Filter to the caller's own contact.
+      // By-name search is an enumeration primitive — always fail closed (no escape
+      // hatch). Without a verified customer identity it would return every matching
+      // customer's PII, so require identity and filter to the caller's own orders.
+      const searchId = extractCustomerIdentity(params, req.body);
+      if (!searchId.hasAny) {
+        return res.status(403).json({ status: "error", message: "Customer identity required (customer_email or customer_phone).", error_code: "CUSTOMER_REQUIRED" });
+      }
+      const ownedOrders = orders.filter((o: SalesOrder) => orderMatchesCustomer(o, searchId));
+
+      if (ownedOrders.length === 0) {
         return res.status(404).json({
           status: "error",
           message: "No orders found for that name",
           error_code: "NOT_FOUND"
         });
       }
-      
-      const matches = await Promise.all(orders.map(async (order: SalesOrder) => {
+
+      const matches = await Promise.all(ownedOrders.map(async (order: SalesOrder) => {
         const lines = await db
           .select()
           .from(salesOrderLines)
@@ -411,7 +503,8 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.post("/refunds/calculate", async (req: Request, res: Response) => {
     try {
-      const parsed = refundCalculateSchema.safeParse(extractGhlParams(req.body));
+      const params = extractGhlParams(req.body);
+      const parsed = refundCalculateSchema.safeParse(params);
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
@@ -443,7 +536,8 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       }
       
       const order = orders[0];
-      
+      if (!enforceOwnership(res, order, params, req.body, "refunds")) return;
+
       const isDelivered = order.status === "DELIVERED" && order.deliveredAt;
       const daysSinceDelivery = isDelivered && order.deliveredAt
         ? Math.floor((Date.now() - new Date(order.deliveredAt).getTime()) / (1000 * 60 * 60 * 24))
@@ -510,7 +604,8 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.post("/refunds/process", async (req: Request, res: Response) => {
     try {
-      const parsed = refundProcessSchema.safeParse(extractGhlParams(req.body));
+      const params = extractGhlParams(req.body);
+      const parsed = refundProcessSchema.safeParse(params);
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
@@ -551,7 +646,8 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       }
       
       const order = orders[0];
-      
+      if (!enforceOwnership(res, order, params, req.body, "refunds")) return;
+
       const isDelivered = order.status === "DELIVERED" && order.deliveredAt;
       const daysSinceDelivery = isDelivered && order.deliveredAt
         ? Math.floor((Date.now() - new Date(order.deliveredAt).getTime()) / (1000 * 60 * 60 * 24))
@@ -944,7 +1040,8 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
 
   router.post("/returns/initiate", async (req: Request, res: Response) => {
     try {
-      const parseResult = initiateReturnSchema.safeParse(extractGhlParams(req.body));
+      const params = extractGhlParams(req.body);
+      const parseResult = initiateReturnSchema.safeParse(params);
       if (!parseResult.success) {
         return res.status(400).json({
           status: "error",
@@ -976,7 +1073,8 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       }
       
       const order = matchingOrders[0];
-      
+      if (!enforceOwnership(res, order, params, req.body, "returns/initiate")) return;
+
       const orderLines = await db
         .select()
         .from(salesOrderLines)
@@ -1309,6 +1407,8 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       const ghlContactId = rawBody.contact_id || rawBody.contactId || params.contact_id || params.contactId || '';
       const ghlLocationId = rawBody.location_id || rawBody.locationId || params.location_id || params.locationId || '';
       const ghlContactPhone = rawBody.phone || rawBody.contact_phone || params.phone || '';
+      // Customer-ownership identity for this conversation (from the GHL contact).
+      const actionIdentity = extractCustomerIdentity(params, rawBody);
       const ghlContactName = rawBody.first_name || rawBody.full_name || rawBody.contact_name || params.first_name || '';
       
       // Log if this came from a GHL conversation workflow
@@ -1524,6 +1624,7 @@ Response format: {"intent": "intent_name", "params": {extracted params}, "confid
             return res.json({ status: "success", message: `No order found matching "${orderNum}"` });
           }
           const order = orders[0];
+          if (!enforceOwnership(res, order, params, rawBody, "action:lookup_order", true)) return;
           const lines = await db.select().from(salesOrderLines).where(eq(salesOrderLines.salesOrderId, order.id));
           return res.json({
             status: "success",
@@ -1551,9 +1652,14 @@ Response format: {"intent": "intent_name", "params": {extracted params}, "confid
           if (!searchName) {
             return res.json({ status: "error", message: "I need a customer name to search for. What name should I look up?" });
           }
-          const matchedOrders = await db.select().from(salesOrders).where(
+          const matchedOrdersRaw = await db.select().from(salesOrders).where(
             ilike(salesOrders.customerName, `%${searchName}%`)
           ).orderBy(desc(salesOrders.orderDate)).limit(10);
+          // Customer-ownership binding: always fail closed (enumeration primitive).
+          if (!actionIdentity.hasAny) {
+            return res.json({ status: "error", message: "I can't verify your identity to search orders.", error_code: "CUSTOMER_REQUIRED" });
+          }
+          const matchedOrders = matchedOrdersRaw.filter((o: any) => orderMatchesCustomer(o, actionIdentity));
           return res.json({
             status: "success",
             intent,
@@ -1586,6 +1692,7 @@ Response format: {"intent": "intent_name", "params": {extracted params}, "confid
             return res.json({ status: "success", message: `No order found matching "${refundOrderNum}"` });
           }
           const refundOrder = refundOrders[0];
+          if (!enforceOwnership(res, refundOrder, params, rawBody, "action:calculate_refund", true)) return;
           const refundLines = await db.select().from(salesOrderLines).where(eq(salesOrderLines.salesOrderId, refundOrder.id));
           const subtotal = refundLines.reduce((sum: number, l: any) => sum + ((l.unitPrice || 0) * (l.quantity || 0)), 0);
           return res.json({
@@ -1623,6 +1730,7 @@ Response format: {"intent": "intent_name", "params": {extracted params}, "confid
             return res.json({ status: "success", message: `No order found matching "${processOrderNum}"` });
           }
           const processOrder = processOrders[0];
+          if (!enforceOwnership(res, processOrder, params, rawBody, "action:process_refund", true)) return;
           const processLines = await db.select().from(salesOrderLines).where(eq(salesOrderLines.salesOrderId, processOrder.id));
           const processSubtotal = processLines.reduce((sum: number, l: any) => sum + ((l.unitPrice || 0) * (l.quantity || 0)), 0);
           
@@ -1720,6 +1828,7 @@ Response format: {"intent": "intent_name", "params": {extracted params}, "confid
           }
           
           const returnOrder = returnOrders[0];
+          if (!enforceOwnership(res, returnOrder, params, rawBody, "action:initiate_return", true)) return;
           const returnLines = await db.select().from(salesOrderLines).where(eq(salesOrderLines.salesOrderId, returnOrder.id));
           
           return res.json({

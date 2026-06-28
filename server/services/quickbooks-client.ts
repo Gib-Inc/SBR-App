@@ -484,6 +484,24 @@ export class QuickBooksClient {
   }
 
   /**
+   * A/R Aging summary report. Unlike the open-Invoice query in fetchFinancialRaw,
+   * this captures the FULL receivable balance per customer — including marketplace
+   * settlement balances (e.g. the Amazon payout receivable, ~$102K) that are NOT
+   * booked as open Invoices and so are invisible to a `Balance > 0` Invoice query.
+   * Returns the raw Intuit report (parsed by parseArAgingTotal) or null on failure,
+   * so the caller degrades to the open-invoice total rather than fabricating.
+   */
+  async fetchArAging(): Promise<any | null> {
+    if (!this.auth) throw new Error('QuickBooks not authenticated');
+    try {
+      return await this.apiRequest<any>(`/reports/AgedReceivables?accounting_method=Accrual`);
+    } catch (e: any) {
+      console.warn('[QuickBooks] A/R aging report fetch failed:', e?.message ?? e);
+      return null;
+    }
+  }
+
+  /**
    * Focused, read-only A/R pull for the collections worklist: open invoices
    * (Balance > 0, positive) AND unapplied credit memos (Balance > 0, returned as
    * NEGATIVE so the worklist nets them against invoices the way QuickBooks' A/R

@@ -15,7 +15,7 @@ interface Obligation {
 }
 interface Position {
   cashOnHand: number; cashAsOf: string | null; dailySalesRunRate: number; windowDays: number;
-  projectedIncome: number; totalDue: number; tier1Due: number; projectedLow: number;
+  projectedIncome: number; receivablesInbound: number; totalDue: number; tier1Due: number; projectedLow: number;
 }
 interface CashFlow { success: boolean; position: Position; obligations: Obligation[]; generatedAt: string; }
 
@@ -71,12 +71,14 @@ export default function CashFlow() {
       </div>
 
       {/* Runway */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Tile label="Cash on hand" value={money(p?.cashOnHand)} sub={p?.cashAsOf ? `as of ${p.cashAsOf}` : ""} />
+        <Tile label="+ Money on its way" value={money(p?.receivablesInbound)} accent={p && p.receivablesInbound > 0 ? "green" : undefined}
+              sub="A/R already earned (e.g. Amazon payout)" />
         <Tile label={`+ Projected income (${p?.windowDays ?? windowDays}d)`} value={money(p?.projectedIncome)} sub={p ? `${money(p.dailySalesRunRate)}/day run-rate` : ""} />
         <Tile label="− Due in window" value={money(p?.totalDue)} sub={p ? `${money(p.tier1Due)} tax/payroll` : ""} />
         <Tile label="= Projected low" value={money(p?.projectedLow)} accent={p && p.projectedLow < 0 ? "red" : "green"}
-              sub={p && p.projectedLow < 0 ? "short before income lands" : "covered"} />
+              sub={p && p.projectedLow < 0 ? "short even after money lands" : "covered"} />
       </div>
 
       <div className="flex items-center gap-2 text-sm">

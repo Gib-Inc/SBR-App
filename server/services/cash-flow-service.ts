@@ -60,7 +60,8 @@ export interface CashPosition {
   cashAsOf: string | null;
   dailySalesRunRate: number;
   windowDays: number;
-  projectedIncome: number;
+  projectedIncome: number;     // projected sales over the window (run-rate * days)
+  receivablesInbound: number;  // A/R already earned, in transit (e.g. Amazon payout) — "money on its way"
   totalDue: number;
   tier1Due: number;       // tax + payroll
   projectedLow: number;
@@ -187,10 +188,13 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
   // a row with cash_on_hand = NULL, which would coalesce to $0 and fabricate a
   // shortfall. The canonical accessor (getLatestQbLiveSnapshot) filters these too.
   const cashRow = rows(await db.execute(sql`
-    select cash_on_hand, captured_at::date as cash_as_of
+    select cash_on_hand, accounts_receivable, captured_at::date as cash_as_of
     from qb_financial_snapshots where cash_on_hand is not null
     order by captured_at desc limit 1`))[0];
   const cashOnHand = num(cashRow?.cash_on_hand);
+  // A/R already earned and in transit (e.g. the Amazon marketplace payout) — real
+  // "money on its way" the runway otherwise ignores. From the aging-report total.
+  const receivablesInbound = r2(num(cashRow?.accounts_receivable));
 
   // Daily run-rate = trailing-30-day net revenue over a FIXED 30-day denominator.
   // avg() would divide by the count of present rows, so missing snapshot days
@@ -204,7 +208,7 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
   return {
     asOf, cashOnHand, cashAsOf: cashRow?.cash_as_of ?? null,
     dailySalesRunRate: r2(dailyRunRate), windowDays, projectedIncome: r2(dailyRunRate * windowDays),
-    totalDue: 0, tier1Due: 0, projectedLow: 0,
+    receivablesInbound, totalDue: 0, tier1Due: 0, projectedLow: 0,
   };
 }
 
@@ -403,9 +407,13 @@ export async function compute13WeekForecast(db: any, asOf?: string): Promise<{
     const wsS = fmt(ws), weS = fmt(we);
     const outflows = r2(obls.filter((o: any) => o.due >= wsS && o.due <= weS).reduce((s: number, o: any) => s + num(o.amount), 0));
     const opening = cash;
-    cash = r2(opening + weeklyInflow - outflows);
+    // A/R already earned (e.g. Amazon payout) lands in the first week — a one-time
+    // inflow on top of the ongoing sales run-rate, not double-counted with it.
+    const oneTimeInflow = w === 0 ? r2(pos.receivablesInbound) : 0;
+    const inflows = r2(weeklyInflow + oneTimeInflow);
+    cash = r2(opening + inflows - outflows);
     if (cash < lowestCash) { lowestCash = cash; lowestWeek = wsS; }
-    weeks.push({ weekStart: wsS, weekEnd: weS, openingCash: r2(opening), inflows: weeklyInflow, outflows, endingCash: cash });
+    weeks.push({ weekStart: wsS, weekEnd: weS, openingCash: r2(opening), inflows, outflows, endingCash: cash });
   }
   return {
     startingCash: r2(pos.cashOnHand), weeklyInflow, weeks, lowestCash, lowestWeek,
@@ -449,7 +457,7 @@ export async function getCashFlow(db: any, opts: { windowDays?: number; asOf?: s
   const tier1Due = r2(active.filter((o) => o.tier === "tier1").reduce((s, o) => s + o.amount, 0));
 
   return {
-    position: { ...position, totalDue, tier1Due, projectedLow: r2(position.cashOnHand + position.projectedIncome - totalDue) },
+    position: { ...position, totalDue, tier1Due, projectedLow: r2(position.cashOnHand + position.receivablesInbound + position.projectedIncome - totalDue) },
     obligations: ranked,
     generatedAt: new Date().toISOString(),
   };

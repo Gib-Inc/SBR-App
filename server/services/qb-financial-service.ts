@@ -578,6 +578,43 @@ const toNumericString = (n: number | null): string | null => (n == null ? null :
  * Returns ok:false (no throw) when QB isn't connected so callers/schedulers
  * degrade gracefully.
  */
+/**
+ * Parse the total A/R from an Intuit "AgedReceivables" summary report. Returns the
+ * GrandTotal of the Total column (the complete receivable across all customers,
+ * including marketplace settlement balances that aren't open Invoices). Returns
+ * null if the report can't be parsed — never a fabricated number. Pure + tested.
+ */
+export function parseArAgingTotal(report: any): number | null {
+  try {
+    const cols: any[] = report?.Columns?.Column ?? [];
+    let totalIdx = cols.findIndex((c) => String(c?.ColTitle ?? "").trim().toLowerCase() === "total");
+    if (totalIdx < 0) totalIdx = cols.length - 1; // Total is conventionally the last column
+    if (totalIdx < 0) return null;
+
+    const toNum = (v: any): number => {
+      const n = parseFloat(String(v ?? "").replace(/[^0-9.\-]/g, ""));
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const flat: any[] = [];
+    const walk = (rs: any[]) => { for (const r of rs ?? []) { flat.push(r); if (r?.Rows?.Row) walk(r.Rows.Row); } };
+    walk(report?.Rows?.Row ?? []);
+
+    // Prefer the report's own GrandTotal/summary row.
+    const grand = flat.find((r) => String(r?.group ?? "").toLowerCase() === "grandtotal" && r?.Summary?.ColData);
+    if (grand) return round2(toNum(grand.Summary.ColData[totalIdx]?.value));
+
+    // Fallback: sum leaf data rows (a ColData row with no child Rows).
+    let sum = 0; let saw = false;
+    for (const r of flat) {
+      if (r?.ColData && !r?.Rows) { sum += toNum(r.ColData[totalIdx]?.value); saw = true; }
+    }
+    return saw ? round2(sum) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function captureFinancialSnapshot(
   userId: string,
 ): Promise<{ ok: boolean; snapshot?: QbFinancialSnapshot; error?: string }> {
@@ -601,6 +638,19 @@ export async function captureFinancialSnapshot(
   if (raw.openInvoices != null) {
     accountsReceivable = round2(raw.openInvoices.reduce((s, i) => s + (Number(i.Balance) || 0), 0));
     arAging = bucketAging(raw.openInvoices.map((i) => ({ balance: Number(i.Balance) || 0, dueDate: i.DueDate })));
+  }
+  // Override A/R with the aging-report total when available. The open-Invoice query
+  // above misses marketplace settlement balances (e.g. the Amazon payout receivable,
+  // which is not booked as an Invoice) and reads ~$0 when real A/R is ~$102K. The
+  // aging report is the complete A/R. Degrade silently to the open-invoice value.
+  try {
+    const arReport = await client.fetchArAging();
+    const arTotal = arReport ? parseArAgingTotal(arReport) : null;
+    if (arTotal != null && arTotal >= 0) {
+      accountsReceivable = arTotal;
+    }
+  } catch (e: any) {
+    gaps.push(`A/R aging report unavailable (used open-invoice total) — ${e?.message ?? e}`);
   }
 
   // Accounts Payable + aging

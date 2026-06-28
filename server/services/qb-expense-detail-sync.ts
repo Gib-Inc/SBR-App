@@ -40,6 +40,7 @@ export interface SyncResult {
   windows?: number;
   plRows?: number;
   vendorRows?: number;
+  monthlyFinancials?: { updated: number; skipped: number };
   gaps?: string[];
 }
 
@@ -120,10 +121,20 @@ export async function syncQbExpenseDetail(
   const plInserted = await storage.bulkInsertQbPlDetail(plRows);
   const vendorRows = await storage.rebuildQbVendorExpense(realmId);
 
+  // Derive monthly_financials from the freshly-synced GL so the Executive Summary and
+  // COGS baseline stay current without manual P&L uploads (QB is the book of record).
+  let monthlyFin = { updated: 0, skipped: 0 };
+  try {
+    const { syncQbMonthlyFinancials } = await import("./qb-monthly-financials-sync");
+    monthlyFin = await syncQbMonthlyFinancials();
+  } catch (e: any) {
+    console.error("[QB ExpenseDetail] monthly_financials derive failed:", e?.message ?? e);
+  }
+
   console.log(
-    `[QB ExpenseDetail] synced ${windows.length} weekly windows: ${plInserted} P&L lines, ${vendorRows} vendor rollups, ${gaps.length} gap(s)`,
+    `[QB ExpenseDetail] synced ${windows.length} weekly windows: ${plInserted} P&L lines, ${vendorRows} vendor rollups, ${monthlyFin.updated} months, ${gaps.length} gap(s)`,
   );
-  return { ok: true, windows: windows.length, plRows: plInserted, vendorRows, gaps };
+  return { ok: true, windows: windows.length, plRows: plInserted, vendorRows, monthlyFinancials: monthlyFin, gaps };
 }
 
 let backfillArmed = false;

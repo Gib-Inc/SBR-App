@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, sodBlocksPaid, type Obligation } from "./cash-flow-service";
+import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, sodBlocksPaid, setObligationStatus, type Obligation } from "./cash-flow-service";
+
+// Minimal db.execute mock: returns queued results in call order (rows() reads `.rows`).
+function mockDb(responses: any[]) {
+  let i = 0;
+  return { execute: async () => responses[i++] ?? { rows: [] } };
+}
 
 function obl(p: Partial<Obligation>): Obligation {
   return {
@@ -44,21 +50,27 @@ describe("debtTier", () => {
   });
 });
 
-describe("sodBlocksPaid (segregation of duties)", () => {
-  it("blocks the approver from marking a material item paid", () => {
-    expect(sodBlocksPaid("paid", 5000, "userA", "userA", 1000)).toBe(true);
+describe("sodBlocksPaid (segregation of duties — state machine)", () => {
+  // signature: (targetStatus, currentStatus, amount, approvedBy, actor, threshold)
+  it("blocks the approver from marking their own approved item paid (self-pay)", () => {
+    expect(sodBlocksPaid("paid", "approved", 5000, "userA", "userA", 1000)).toBe(true);
   });
-  it("allows a different person to mark it paid", () => {
-    expect(sodBlocksPaid("paid", 5000, "userA", "userB", 1000)).toBe(false);
+  it("allows a different person to mark an approved item paid", () => {
+    expect(sodBlocksPaid("paid", "approved", 5000, "userA", "userB", 1000)).toBe(false);
   });
   it("allows self-pay below the dual-control threshold", () => {
-    expect(sodBlocksPaid("paid", 200, "userA", "userA", 1000)).toBe(false);
+    expect(sodBlocksPaid("paid", "approved", 200, "userA", "userA", 1000)).toBe(false);
   });
   it("only gates the paid action (approve/defer are unaffected)", () => {
-    expect(sodBlocksPaid("approved", 5000, "userA", "userA", 1000)).toBe(false);
+    expect(sodBlocksPaid("approved", "pending", 5000, null, "userA", 1000)).toBe(false);
   });
-  it("does not block when there is no prior approver", () => {
-    expect(sodBlocksPaid("paid", 5000, null, "userA", 1000)).toBe(false);
+  it("BLOCKS pending -> paid in one step (the prior bypass: no approval ever happened)", () => {
+    expect(sodBlocksPaid("paid", "pending", 5000, null, "userA", 1000)).toBe(true);
+    // even a different person cannot pay an unapproved material item
+    expect(sodBlocksPaid("paid", "pending", 5000, null, "userB", 1000)).toBe(true);
+  });
+  it("blocks paying a material item that is still in a non-approved state", () => {
+    expect(sodBlocksPaid("paid", "deferred", 5000, "userA", "userB", 1000)).toBe(true);
   });
 });
 
@@ -129,5 +141,58 @@ describe("taxObligationSeeds", () => {
     const q4 = seeds.find((s) => s.externalKey === "tax:941:2026-01-31");
     expect(q4).toBeTruthy();
     expect(q4?.dueDate).toBe("2026-01-31");
+  });
+});
+
+describe("setObligationStatus — SoD enforcement + single-operator handling", () => {
+  it("blocks self-pay of an approved material item when 2+ admins exist", async () => {
+    const db = mockDb([
+      { rows: [{ amount: 5000, approved_by: "userA", status: "approved" }] }, // load obligation
+      { rows: [{ c: 2 }] }, // eligible approver count
+    ]);
+    const r = await setObligationStatus(db, "obl1", "paid" as any, "userA", "User A");
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("sod_block");
+  });
+
+  it("allows self-pay when only one admin exists (dual control is impossible — don't deadlock)", async () => {
+    const db = mockDb([
+      { rows: [{ amount: 5000, approved_by: "userA", status: "approved" }] },
+      { rows: [{ c: 1 }] }, // solo operator
+      {}, // update
+      {}, // audit insert
+    ]);
+    const r = await setObligationStatus(db, "obl1", "paid" as any, "userA", "User A");
+    expect(r.ok).toBe(true);
+  });
+
+  it("allows a DIFFERENT admin to mark an approved item paid (the normal dual-control path)", async () => {
+    const db = mockDb([
+      { rows: [{ amount: 5000, approved_by: "userA", status: "approved" }] },
+      {}, // update (no count query — not SoD-blocked)
+      {}, // audit insert
+    ]);
+    const r = await setObligationStatus(db, "obl1", "paid" as any, "userB", "User B");
+    expect(r.ok).toBe(true);
+  });
+
+  it("treats an idempotent re-mark (paid -> paid) as a no-op success, not a 409", async () => {
+    const db = mockDb([{ rows: [{ amount: 5000, approved_by: "userA", status: "paid" }] }]);
+    const r = await setObligationStatus(db, "obl1", "paid" as any, "userA", "User A");
+    expect(r.ok).toBe(true);
+  });
+
+  it("refuses an unknown obligation id", async () => {
+    const db = mockDb([{ rows: [] }]);
+    const r = await setObligationStatus(db, "missing", "paid" as any, "userA");
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("not_found");
+  });
+
+  it("refuses when there is no authenticated actor", async () => {
+    const db = mockDb([{ rows: [{ amount: 5000, approved_by: "userA", status: "approved" }] }]);
+    const r = await setObligationStatus(db, "obl1", "paid" as any, undefined);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("no_actor");
   });
 });

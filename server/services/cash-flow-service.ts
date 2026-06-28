@@ -487,24 +487,42 @@ const ACTION_FOR: Record<OblStatus, string> = { approved: "approved", deferred: 
  *  different person than the approver. Configurable via env (default $1,000). */
 const DUAL_CONTROL_THRESHOLD = Number(process.env.FINANCE_DUAL_CONTROL_THRESHOLD || 1000);
 
-/** Segregation of duties: a material obligation cannot be marked paid by the same
- *  person who approved it. Pure + unit-tested. */
-export function sodBlocksPaid(status: OblStatus, amount: number, approvedBy: string | null, actor: string, threshold = DUAL_CONTROL_THRESHOLD): boolean {
-  return status === "paid" && amount >= threshold && !!approvedBy && approvedBy === actor;
+/** Segregation of duties (state machine): a material obligation may be marked
+ *  paid ONLY from an 'approved' state, by a person OTHER than the approver.
+ *  This blocks BOTH defeats of dual control:
+ *    - pending -> paid in one step (no approval ever happened), and
+ *    - self-approve -> self-pay (approver == payer).
+ *  Non-material items (below the threshold) are not gated. Pure + unit-tested. */
+export function sodBlocksPaid(targetStatus: OblStatus, currentStatus: OblStatus, amount: number, approvedBy: string | null, actor: string, threshold = DUAL_CONTROL_THRESHOLD): boolean {
+  if (targetStatus !== "paid" || amount < threshold) return false;
+  return currentStatus !== "approved" || !approvedBy || approvedBy === actor;
 }
 
 export type StatusResult = { ok: boolean; reason?: "not_found" | "no_actor" | "sod_block" };
 
 export async function setObligationStatus(db: any, id: string, status: OblStatus, by?: string, byName?: string): Promise<StatusResult> {
-  const o = rows(await db.execute(sql`select amount::float8 as amount, approved_by from cash_obligations where id = ${id}`))[0];
+  const o = rows(await db.execute(sql`select amount::float8 as amount, approved_by, status from cash_obligations where id = ${id}`))[0];
   // Unknown/stale/deleted/forged id: refuse so we never write an orphan audit row.
   if (!o) return { ok: false, reason: "not_found" };
   // Every action must attribute to a real authenticated person — never a placeholder
   // like "team" (which destroys the audit trail's evidentiary value).
   if (!by) return { ok: false, reason: "no_actor" };
-  // Segregation of duties: the payer must differ from the approver on material items.
-  if (sodBlocksPaid(status, num(o.amount), o.approved_by ?? null, by)) {
-    return { ok: false, reason: "sod_block" };
+  const currentStatus = (o.status ?? "pending") as OblStatus;
+  // Idempotent re-mark (e.g. re-confirming an already-paid item) is a no-op, not
+  // an SoD violation — avoid rewriting timestamps or returning a spurious 409.
+  if (currentStatus === status) return { ok: true };
+
+  let action: string = ACTION_FOR[status] ?? status;
+  // Segregation of duties: a material item reaches 'paid' only from 'approved',
+  // by someone other than the approver — no pending->paid shortcut, no self-pay.
+  if (sodBlocksPaid(status, currentStatus, num(o.amount), o.approved_by ?? null, by)) {
+    // Dual control needs a SECOND eligible approver. In a single-admin org that is
+    // impossible, so rather than permanently deadlock material payments we allow
+    // the self-pay but record it as a distinct, auditable action. With 2+ admins
+    // the block stands.
+    const eligible = num(rows(await db.execute(sql`select count(*)::int as c from users where role in ('admin','owner')`))[0]?.c ?? 0);
+    if (eligible > 1) return { ok: false, reason: "sod_block" };
+    action = "marked_paid_single_operator";
   }
   await db.execute(sql`
     update cash_obligations set
@@ -518,6 +536,6 @@ export async function setObligationStatus(db: any, id: string, status: OblStatus
   // ACH fraud history. Best-effort insert; never block the recorded decision.
   await db.execute(sql`
     insert into payment_actions (obligation_id, action, acted_by, acted_by_name, amount)
-    values (${id}, ${ACTION_FOR[status] ?? status}, ${by}, ${byName ?? null}, ${num(o.amount)})`).catch(() => {});
+    values (${id}, ${action}, ${by}, ${byName ?? null}, ${num(o.amount)})`).catch(() => {});
   return { ok: true };
 }

@@ -16520,7 +16520,7 @@ Notes: ${po.notes || 'None'}
     }
   });
 
-  app.post("/api/purchase-orders/:id/mark-paid", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/purchase-orders/:id/mark-paid", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const updated = await storage.updatePurchaseOrder(id, {
@@ -22726,7 +22726,7 @@ Generate only the email body text, no subject line.`;
   });
 
   // POST /api/quickbooks/refresh-tokens - Manually trigger token refresh
-  app.post("/api/quickbooks/refresh-tokens", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/quickbooks/refresh-tokens", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { triggerManualTokenRefresh } = await import("./services/quickbooks-token-refresh-scheduler");
       const result = await triggerManualTokenRefresh();
@@ -22750,7 +22750,7 @@ Generate only the email body text, no subject line.`;
   });
 
   // POST /api/quickbooks/sync-sales - Sync historical sales data (legacy snapshots)
-  app.post("/api/quickbooks/sync-sales", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/quickbooks/sync-sales", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       if (!isQuickBooksConfigured()) {
         return res.status(400).json({ 
@@ -22969,7 +22969,7 @@ Generate only the email body text, no subject line.`;
   });
 
   // POST /api/purchase-orders/:id/create-bill - Create QuickBooks Bill from PO
-  app.post("/api/purchase-orders/:id/create-bill", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/purchase-orders/:id/create-bill", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       if (!isQuickBooksConfigured()) {
         return res.status(400).json({ 
@@ -23019,7 +23019,7 @@ Generate only the email body text, no subject line.`;
   // to QuickBooks as a Bill. Uses the same idempotent sync as auto-push-on-send so
   // it stamps externalAccountingId, but (unlike the fire-and-forget auto path) it
   // awaits the result and surfaces the exact error to the UI.
-  app.post("/api/purchase-orders/:id/push-to-quickbooks", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/purchase-orders/:id/push-to-quickbooks", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { syncApprovedPOToQuickBooks } = await import("./services/po-quickbooks-sync");
       const result = await syncApprovedPOToQuickBooks(req.params.id, req.session.userId || 'system');
@@ -23424,7 +23424,7 @@ Generate only the email body text, no subject line.`;
   });
 
   // POST /api/quickbooks/disconnect - Disconnect QuickBooks
-  app.post("/api/quickbooks/disconnect", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/quickbooks/disconnect", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId || 'system';
       const auth = await storage.getQuickbooksAuth(userId);
@@ -23550,7 +23550,7 @@ Generate only the email body text, no subject line.`;
   // CIPH.R — sync transaction-level expense detail (ProfitAndLossDetail) into
   // qb_pl_detail + qb_vendor_expense so spend is queryable by vendor and account.
   // Read-only against QuickBooks. ?months=N (default 13, max 36).
-  app.post("/api/quickbooks/expense-detail/sync", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/quickbooks/expense-detail/sync", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const userId = (await storage.getConnectedQuickbooksUserId()) || req.session.userId || 'system';
       const months = typeof req.query.months === 'string'
@@ -23637,7 +23637,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.post("/api/finances/credit-lines/sync", requireAuth, async (_req: Request, res: Response) => {
+  app.post("/api/finances/credit-lines/sync", requireAuth, requireRole(["admin", "owner"]), async (_req: Request, res: Response) => {
     try {
       const { syncCreditLineBalances } = await import("./services/credit-lines-service");
       res.json(await syncCreditLineBalances());
@@ -23646,7 +23646,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.post("/api/finances/credit-lines", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/finances/credit-lines", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { createCreditLine } = await import("./services/credit-lines-service");
       const { name, type, creditLimit, apr, dueDay } = req.body || {};
@@ -23658,7 +23658,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.patch("/api/finances/credit-lines/:id", requireAuth, async (req: Request, res: Response) => {
+  app.patch("/api/finances/credit-lines/:id", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { updateCreditLine } = await import("./services/credit-lines-service");
       await updateCreditLine(req.params.id, req.body || {});
@@ -25425,7 +25425,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.post("/api/finances/forecast-accuracy/run", requireAuth, async (_req: Request, res: Response) => {
+  app.post("/api/finances/forecast-accuracy/run", requireAuth, requireRole(["admin", "owner"]), async (_req: Request, res: Response) => {
     try {
       const { runNightlyForecastTuning } = await import("./services/forecast-tuning-service");
       res.json({ success: true, result: await runNightlyForecastTuning() });
@@ -25587,7 +25587,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.put("/api/finances/period/:period/checklist", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/finances/period/:period/checklist", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { key, done } = req.body || {};
       if (!key) return res.status(400).json({ success: false, error: "key required" });
@@ -25603,7 +25603,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.post("/api/finances/period/:period/lock", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/finances/period/:period/lock", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const lock = req.body?.locked !== false; // default true
       const { financePinConfigured, verifyFinancePin } = await import("./services/finance-lock");
@@ -26015,7 +26015,7 @@ Generate only the email body text, no subject line.`;
   });
 
   // Set a category's target % of net sales.
-  app.put("/api/finances/budget-target", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/finances/budget-target", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const account = typeof req.body?.account === "string" ? req.body.account : "";
       const targetPct = Number(req.body?.targetPct);
@@ -26052,7 +26052,7 @@ Generate only the email body text, no subject line.`;
   });
 
   // Save a per-category projection assumption (driver + rate or fixed amount).
-  app.put("/api/finances/projection-assumption", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/finances/projection-assumption", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const account = typeof req.body?.account === "string" ? req.body.account : "";
       const driver = req.body?.driver === "variable" ? "variable" : "fixed";
@@ -26076,7 +26076,7 @@ Generate only the email body text, no subject line.`;
   });
 
   // Save the revenue forecast settings (base method, monthly growth %, per-month overrides).
-  app.put("/api/finances/projection-settings", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/finances/projection-settings", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const baseMethod = typeof req.body?.baseMethod === "string" ? req.body.baseMethod : undefined;
       const growthPct = req.body?.growthPct != null ? Number(req.body.growthPct) : undefined;
@@ -26109,7 +26109,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.put("/api/finances/cash-obligation/:id/status", requireAuth, async (req: Request, res: Response) => {
+  app.put("/api/finances/cash-obligation/:id/status", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const status = String(req.body?.status || "");
       if (!["pending", "approved", "deferred", "paid"].includes(status)) {
@@ -26125,7 +26125,7 @@ Generate only the email body text, no subject line.`;
       if (by) { const u = await storage.getUser(by).catch(() => null); byName = u?.name || u?.email || null; }
       const r = await setObligationStatus(db, req.params.id, status as any, by, byName);
       if (!r.ok) {
-        if (r.reason === "sod_block") return res.status(409).json({ success: false, error: "Segregation of duties: a different person must mark this paid than the one who approved it." });
+        if (r.reason === "sod_block") return res.status(409).json({ success: false, error: "Segregation of duties: a second admin must mark this paid (a different person than the approver). Add a second admin in Settings → Team, or raise FINANCE_DUAL_CONTROL_THRESHOLD to relax dual control." });
         if (r.reason === "no_actor") return res.status(401).json({ success: false, error: "Sign in to record a pay action." });
         return res.status(404).json({ success: false, error: "obligation not found" });
       }
@@ -26136,7 +26136,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.post("/api/finances/cash-obligation", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/finances/cash-obligation", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const b = req.body || {};
       if (!b.label) return res.status(400).json({ success: false, error: "label required" });

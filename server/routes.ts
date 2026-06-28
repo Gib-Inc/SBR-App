@@ -17215,14 +17215,39 @@ Notes: ${po.notes || 'None'}
 
       const userId = adminUser.id;
       const context = { topic, shopDomain, webhookId };
-      
+
+      // Idempotency: atomically claim this webhook id before processing. A duplicate
+      // delivery or Shopify retry (e.g. when our 200 was slow/lost) is skipped, so an
+      // order can't double-decrement stock. On error below we release the claim so a
+      // genuine failure still re-processes on Shopify's next retry.
+      if (webhookId) {
+        const { db } = await import("./db");
+        const claimed = (((await db.execute(sql`
+          INSERT INTO shopify_webhook_events (webhook_id, topic) VALUES (${webhookId}, ${topic})
+          ON CONFLICT (webhook_id) DO NOTHING RETURNING webhook_id`)).rows ?? []) as any[]).length > 0;
+        if (!claimed) {
+          console.log(`[Shopify Webhook] Duplicate ${topic} (id ${webhookId}) — already processed, skipping`);
+          return res.status(200).json({ message: "duplicate, already processed" });
+        }
+      }
+
       // Route to appropriate handler
       const result = await routeWebhookToHandler(topic, payload, context, userId);
 
       res.status(200).json(result);
     } catch (error: any) {
       console.error("[Shopify Webhook] Error processing webhook:", error);
-      
+
+      // Release the idempotency claim so a future redelivery/replay can re-process this
+      // failure (the claim only exists to skip duplicates of a SUCCESSFUL delivery).
+      try {
+        const wid = req.headers['x-shopify-webhook-id'] as string;
+        if (wid) {
+          const { db } = await import("./db");
+          await db.execute(sql`DELETE FROM shopify_webhook_events WHERE webhook_id = ${wid}`);
+        }
+      } catch { /* best-effort release */ }
+
       await logService.logShopifyWebhookError({
         topic: req.headers['x-shopify-topic'] as string,
         shopDomain: req.headers['x-shopify-shop-domain'] as string,

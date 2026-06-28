@@ -182,6 +182,16 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "qb_financial_snapshots.captured_at_idx",
     sql: `CREATE INDEX IF NOT EXISTS qb_financial_snapshots_captured_at_idx ON qb_financial_snapshots (captured_at)`,
   },
+  // Idempotency ledger for inbound Shopify webhooks — one row per delivered webhook id,
+  // so a retry/duplicate delivery can't double-process (e.g. double-decrement stock).
+  {
+    name: "shopify_webhook_events.table",
+    sql: `CREATE TABLE IF NOT EXISTS shopify_webhook_events (
+            webhook_id text PRIMARY KEY,
+            topic text,
+            processed_at timestamptz NOT NULL DEFAULT now()
+          )`,
+  },
   // CIPH.R Phase 2 — cash runway / burn-rate forecasts.
   {
     name: "financial_runway_forecasts.table",

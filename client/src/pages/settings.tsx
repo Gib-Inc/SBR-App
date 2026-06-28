@@ -15,11 +15,14 @@ import { Link } from "wouter";
 import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
 
 export default function Settings() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin" || user?.role === "owner";
   return (
     <div className="flex flex-col gap-6 p-6">
       {/* Page Header */}
@@ -51,10 +54,12 @@ export default function Settings() {
             <Megaphone className="mr-2 h-4 w-4" />
             Marketing
           </TabsTrigger>
-          <TabsTrigger value="team" data-testid="tab-team">
-            <Users className="mr-2 h-4 w-4" />
-            Team
-          </TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="team" data-testid="tab-team">
+              <Users className="mr-2 h-4 w-4" />
+              Team
+            </TabsTrigger>
+          )}
           <TabsTrigger value="data-quality" data-testid="tab-data-quality">
             <Database className="mr-2 h-4 w-4" />
             Data Quality
@@ -86,9 +91,11 @@ export default function Settings() {
           <WeeklyDigestCard />
         </TabsContent>
 
-        <TabsContent value="team" className="space-y-4">
-          <TeamManagement />
-        </TabsContent>
+        {isAdmin && (
+          <TabsContent value="team" className="space-y-4">
+            <TeamManagement />
+          </TabsContent>
+        )}
 
         <TabsContent value="data-quality" className="space-y-4">
           <DataQualityTab />
@@ -1432,7 +1439,7 @@ function TeamManagement() {
   const [inviteRole, setInviteRole] = useState("member");
   const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const [resetDialog, setResetDialog] = useState<{ open: boolean; user: TeamUser | null; result: { link: string; emailSent: boolean; sentTo: string } | null }>({ open: false, user: null, result: null });
+  const [resetDialog, setResetDialog] = useState<{ open: boolean; user: TeamUser | null; result: { link?: string; emailSent: boolean; sentTo: string } | null }>({ open: false, user: null, result: null });
   const [removeDialog, setRemoveDialog] = useState<{ open: boolean; user: TeamUser | null }>({ open: false, user: null });
 
   const { data: currentUser } = useQuery<{ id: string; email: string }>({ queryKey: ["/api/auth/me"] });
@@ -1573,16 +1580,12 @@ function TeamManagement() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {/* New role taxonomy. Legacy values kept so an
-                              admin/member row still renders correctly until
-                              the operator picks a new role. */}
-                          <SelectItem value="owner">Owner</SelectItem>
-                          <SelectItem value="manager">Manager</SelectItem>
-                          <SelectItem value="floor">Floor</SelectItem>
-                          <SelectItem value="office">Office</SelectItem>
-                          <SelectItem value="admin" disabled>Admin (legacy)</SelectItem>
-                          <SelectItem value="member" disabled>Member (legacy)</SelectItem>
-                          <SelectItem value="warehouse" disabled>Warehouse (legacy)</SelectItem>
+                          {/* The assignable roles the server accepts. admin =
+                              full access; member = view/edit inventory + build
+                              POs; warehouse = production, counts, receiving. */}
+                          <SelectItem value="admin">Admin — full access</SelectItem>
+                          <SelectItem value="member">Member — view + edit inventory</SelectItem>
+                          <SelectItem value="warehouse">Warehouse — production + counts</SelectItem>
                         </SelectContent>
                       </Select>
                       <Button
@@ -1697,6 +1700,7 @@ function TeamManagement() {
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="member">Member — can view and edit inventory</SelectItem>
+                    <SelectItem value="warehouse">Warehouse — production, counts, receiving</SelectItem>
                     <SelectItem value="admin">Admin — full access including team management</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1738,16 +1742,18 @@ function TeamManagement() {
                   </>
                 )}
               </div>
-              <div className="space-y-2">
-                <Label>Reset Link</Label>
-                <div className="flex gap-2">
-                  <Input value={resetDialog.result.link} readOnly className="text-xs font-mono bg-muted" />
-                  <Button size="icon" variant="outline" onClick={() => copyToClipboard(resetDialog.result!.link)}>
-                    <Copy className="h-4 w-4" />
-                  </Button>
+              {!resetDialog.result.emailSent && resetDialog.result.link && (
+                <div className="space-y-2">
+                  <Label>Reset Link</Label>
+                  <div className="flex gap-2">
+                    <Input value={resetDialog.result.link ?? ""} readOnly className="text-xs font-mono bg-muted" />
+                    <Button size="icon" variant="outline" onClick={() => copyToClipboard(resetDialog.result?.link ?? "")}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">This link expires in 24 hours. The server only returns it when email is not configured.</p>
                 </div>
-                <p className="text-xs text-muted-foreground">This link expires in 24 hours.</p>
-              </div>
+              )}
               <DialogFooter>
                 <Button variant="outline" onClick={() => setResetDialog({ open: false, user: null, result: null })}>Done</Button>
               </DialogFooter>

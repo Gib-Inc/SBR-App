@@ -467,10 +467,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // --- INVITE SYSTEM ---
 
   // Admin: send an invite
-  app.post("/api/admin/invite-user", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/admin/invite-user", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { email, role } = req.body;
       if (!email) return res.status(400).json({ error: "Email is required" });
+      // Validate the requested role against the assignable set — never store an
+      // arbitrary caller-supplied string that accept-invite would later grant.
+      if (role && !["admin", "member", "warehouse"].includes(role)) {
+        return res.status(400).json({ error: "Role must be 'admin', 'member', or 'warehouse'" });
+      }
 
       const existingUser = await storage.getUserByEmail(email);
       if (existingUser) return res.status(409).json({ error: "A user with that email already exists" });
@@ -510,7 +515,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.status(201).json({ invite, inviteLink });
+      // Strip the raw token from the returned invite object — the inviteLink
+      // already carries it for the admin to share. Keeps parity with the
+      // GET /api/admin/invites hardening.
+      const { token: _t, ...inviteSafe } = invite as any;
+      res.status(201).json({ invite: inviteSafe, inviteLink });
     } catch (error) {
       console.error("Error creating invite:", error);
       res.status(500).json({ error: "Failed to create invite" });
@@ -518,17 +527,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: list pending invites
-  app.get("/api/admin/invites", requireAuth, async (_req: Request, res: Response) => {
+  app.get("/api/admin/invites", requireAuth, requireRole(["admin", "owner"]), async (_req: Request, res: Response) => {
     try {
       const invites = await storage.getPendingInvites();
-      res.json(invites);
+      // Never serialize the raw invite token — anyone with it can accept the
+      // invite and create an account. The Team UI only needs metadata.
+      res.json(invites.map(({ token: _t, ...rest }: any) => rest));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch invites" });
     }
   });
 
   // Admin: revoke an invite
-  app.delete("/api/admin/invites/:id", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/admin/invites/:id", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const deleted = await storage.deleteInvite(req.params.id);
       res.json({ success: deleted });
@@ -590,7 +601,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: list all team members
-  app.get("/api/admin/users", requireAuth, async (_req: Request, res: Response) => {
+  app.get("/api/admin/users", requireAuth, requireRole(["admin", "owner"]), async (_req: Request, res: Response) => {
     try {
       const users = await storage.getAllUsers();
       res.json(users.map(({ password: _, ...u }) => u));
@@ -600,10 +611,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: remove a team member
-  app.delete("/api/admin/users/:id", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/admin/users/:id", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       if (req.params.id === req.session.userId) {
         return res.status(400).json({ error: "You cannot remove yourself" });
+      }
+      // Guard: never delete the last admin (mirrors the role-demote guard).
+      const target = await storage.getUser(req.params.id);
+      if (target && (target.role === "admin" || target.role === "owner")) {
+        const all = await storage.getAllUsers();
+        const adminCount = all.filter((u) => u.role === "admin" || u.role === "owner").length;
+        if (adminCount <= 1) {
+          return res.status(400).json({ error: "Cannot remove the last admin — promote another user to admin first" });
+        }
       }
       const deleted = await storage.deleteUser(req.params.id);
       res.json({ success: deleted });
@@ -613,11 +633,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: update a user's role
-  app.patch("/api/admin/users/:id/role", requireAuth, async (req: Request, res: Response) => {
+  app.patch("/api/admin/users/:id/role", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { role } = req.body;
       if (!["admin", "member", "warehouse"].includes(role)) {
-        return res.status(400).json({ error: "Role must be 'admin' or 'member'" });
+        return res.status(400).json({ error: "Role must be 'admin', 'member', or 'warehouse'" });
+      }
+      // Guard: never strip the last admin. Registration is bootstrap-only, so a
+      // zero-admin state is unrecoverable without direct DB access.
+      if (role !== "admin") {
+        const target = await storage.getUser(req.params.id);
+        if (target && (target.role === "admin" || target.role === "owner")) {
+          const all = await storage.getAllUsers();
+          const adminCount = all.filter((u) => u.role === "admin" || u.role === "owner").length;
+          if (adminCount <= 1) {
+            return res.status(400).json({ error: "Cannot demote the last admin — promote another user to admin first" });
+          }
+        }
       }
       const user = await storage.updateUser(req.params.id, { role });
       if (!user) return res.status(404).json({ error: "User not found" });
@@ -629,7 +661,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin: trigger password reset for a user
-  app.post("/api/admin/reset-password", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/admin/reset-password", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { userId } = req.body;
       if (!userId) return res.status(400).json({ error: "userId is required" });
@@ -670,7 +702,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.json({ success: true, resetLink, emailSent, sentTo: user.email });
+      // Security: never return the reset link when it was delivered by email.
+      // The link is an account-takeover primitive — it is only echoed back as an
+      // admin-only fallback when email is not configured / failed to send, so the
+      // (now role-gated) operator still has a recovery path. The Team UI shows
+      // this field only when emailSent is false.
+      res.json({ success: true, emailSent, sentTo: user.email, ...(emailSent ? {} : { resetLink }) });
     } catch (error) {
       console.error("Error creating password reset:", error);
       res.status(500).json({ error: "Failed to create password reset" });
@@ -1270,7 +1307,7 @@ RULES:
   // ADMIN - SINGLE USER MODE ENFORCEMENT
   // ============================================================================
 
-  app.post("/api/admin/enforce-single-user", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/admin/enforce-single-user", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const currentUserId = req.session.userId;
       
@@ -1301,7 +1338,7 @@ RULES:
     }
   });
 
-  app.get("/api/admin/user-count", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/admin/user-count", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const users = await storage.getAllUsers();
       res.json({ 
@@ -4462,7 +4499,7 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  app.post("/api/suppliers", requireAuth, requireRole("manager"), async (req: Request, res: Response) => {
+  app.post("/api/suppliers", requireAuth, requireRole(["admin", "member", "warehouse"]), async (req: Request, res: Response) => {
     try {
       const validated = insertSupplierSchema.parse(req.body);
       const supplier = await storage.createSupplier(validated);
@@ -12822,7 +12859,7 @@ Notes: ${po.notes || 'None'}
   // over an item returns the net stock movement directly.
   // Hard floor: refuses to drop the resulting balance below -10 to prevent
   // accidental wipeouts from typos.
-  app.post("/api/inventory/writeoff", requireAuth, requireRole("manager"), async (req: Request, res: Response) => {
+  app.post("/api/inventory/writeoff", requireAuth, requireRole(["admin", "member", "warehouse"]), async (req: Request, res: Response) => {
     try {
       const { itemId, location, quantity, reason, notes } = req.body as {
         itemId?: string;
@@ -13683,7 +13720,7 @@ Notes: ${po.notes || 'None'}
   // ============================================================================
 
   // POST /api/cycle-counts — create a new session, pre-populate all components
-  app.post("/api/cycle-counts", requireAuth, requireRole(["admin", "member"]), async (req: Request, res: Response) => {
+  app.post("/api/cycle-counts", requireAuth, requireRole(["admin", "member", "warehouse"]), async (req: Request, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const sessionNumber = await storage.getNextCycleCountSessionNumber();
@@ -13772,7 +13809,7 @@ Notes: ${po.notes || 'None'}
   // Teaching note: This is the "point of no return" — once committed, each variance
   // fires an inventory adjustment that changes live stock numbers.
   // We only commit entries that HAVE been counted (countedQty != null).
-  app.post("/api/cycle-counts/:id/commit", requireAuth, requireRole(["admin", "member"]), async (req: Request, res: Response) => {
+  app.post("/api/cycle-counts/:id/commit", requireAuth, requireRole(["admin", "member", "warehouse"]), async (req: Request, res: Response) => {
     try {
       const session = await storage.getCycleCountSession(req.params.id);
       if (!session) return res.status(404).json({ error: "Session not found" });
@@ -26315,7 +26352,7 @@ Generate only the email body text, no subject line.`;
   // ============================================================================
   // MIGRATION ENDPOINT: Set isHistorical for existing records based on terminal status
   // ============================================================================
-  app.post("/api/admin/migrate-historical-status", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/admin/migrate-historical-status", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const { isPOStatusTerminal, isSalesOrderStatusTerminal, isReturnStatusTerminal } = await import("@shared/schema");
       

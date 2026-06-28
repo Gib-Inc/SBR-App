@@ -26,6 +26,11 @@ export interface ScenarioInputs {
   dailyFixedOverhead: number | null; // OpEx / day
   dailyAdSpend: number | null; // variable ad spend / day
   dailyMarginContribution: number | null; // sales velocity * net margin / day (cash inflow)
+  inboundReceivables?: number | null; // A/R already earned + in transit (e.g. Amazon
+  // payout). Near-cash that lands within the horizon, so it extends the runway. Adds
+  // to the starting cash, NOT to the burn rate. Optional: absent/null counts as 0
+  // (it never gaps the runway), so the daily margin contribution is the only inflow
+  // when it's not supplied.
 }
 
 export interface ScenarioResult {
@@ -56,6 +61,9 @@ export function computeScenarioRunway(inputs: ScenarioInputs): ScenarioResult {
   }
 
   const cash = inputs.cashOnHand as number;
+  // Money already earned and in transit (A/R) is near-cash within the horizon, so
+  // it extends the runway as additional starting cash — NOT as a reduction to burn.
+  const startingCash = round2(cash + (isNum(inputs.inboundReceivables) ? (inputs.inboundReceivables as number) : 0));
   const burnRate = round2(
     (inputs.dailyFixedOverhead as number) + (inputs.dailyAdSpend as number) - (inputs.dailyMarginContribution as number),
   );
@@ -64,7 +72,7 @@ export function computeScenarioRunway(inputs: ScenarioInputs): ScenarioResult {
   if (burnRate <= 0) {
     return { runwayDays: null, burnRate, cashFlowPositive: true, gaps: [] };
   }
-  return { runwayDays: Math.floor(cash / burnRate), burnRate, cashFlowPositive: false, gaps: [] };
+  return { runwayDays: Math.floor(startingCash / burnRate), burnRate, cashFlowPositive: false, gaps: [] };
 }
 
 /**

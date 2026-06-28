@@ -155,3 +155,20 @@ describe("computeRunwayForecast", () => {
     expect(f.netMarginAverage).toBeNull();
   });
 });
+
+describe("inbound receivables (money on its way) extend the runway", () => {
+  const b: ScenarioInputs = { cashOnHand: 1_000, dailyFixedOverhead: 800, dailyAdSpend: 200, dailyMarginContribution: 300 };
+  it("adds A/R to starting cash, not to the burn rate", () => {
+    const without = computeScenarioRunway(b);
+    const withAr = computeScenarioRunway({ ...b, inboundReceivables: 1_100 });
+    expect(without.burnRate).toBe(700);
+    expect(without.runwayDays).toBe(1);   // floor(1000 / 700)
+    expect(withAr.burnRate).toBe(700);    // burn unchanged
+    expect(withAr.runwayDays).toBe(3);    // floor((1000 + 1100) / 700)
+  });
+  it("treats absent/null inbound receivables as 0 (existing callers unchanged)", () => {
+    expect(computeScenarioRunway(b).runwayDays).toBe(1);
+    expect(computeScenarioRunway({ ...b, inboundReceivables: null }).runwayDays).toBe(1);
+    expect(computeScenarioRunway({ ...b, inboundReceivables: undefined }).runwayDays).toBe(1);
+  });
+});

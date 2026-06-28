@@ -53,6 +53,10 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
   }
 
   const cashOnHand = snap.cashOnHand != null ? Number(snap.cashOnHand) : null;
+  // Money already earned + in transit (A/R from the aging report — e.g. the Amazon
+  // payout). Near-cash that extends the runway. Same source the Cash Flow Command's
+  // "Money on its way" reads, so all runway views agree on the incoming money.
+  const receivablesInbound = (snap as any).accountsReceivable != null ? Number((snap as any).accountsReceivable) : 0;
   const dailyFixedOverhead = snap.operatingExpenses != null ? round2(Number(snap.operatingExpenses) / 30) : null;
 
   const grossProfit = snap.grossProfit != null ? Number(snap.grossProfit) : null;
@@ -85,7 +89,7 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     const avgDailyRevenue = (totalNetRevenue / windowDays) * biasFactor;
     const dailyMarginContribution = netMargin != null ? round2(avgDailyRevenue * netMargin) : null;
 
-    return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution };
+    return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution, inboundReceivables: receivablesInbound };
   };
 
   const scenarioInputs: Record<ScenarioKey, ScenarioInputs> = {

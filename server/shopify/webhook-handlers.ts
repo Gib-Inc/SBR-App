@@ -249,9 +249,25 @@ export async function handleOrderCreated(
     // prevent duplicate lines AND double inventory decrements.
     const existingLines = await storage.getSalesOrderLines(salesOrder.id);
     if (existingLines.length > 0) {
+      // Don't re-create lines (that was the duplicate-line bug). But DO reconcile
+      // fulfillment: a later webhook (paid/fulfilled/updated) is how an order
+      // becomes SHIPPED/DELIVERED. Mark the existing lines fulfilled so the
+      // Available/Committed calc (ordered - fulfilled) stops counting an order we
+      // already shipped as still-owed — the cause of the "-1,559 Available" bug.
+      if (orderStatus === 'SHIPPED' || orderStatus === 'DELIVERED') {
+        for (const el of existingLines) {
+          if ((el.qtyFulfilled ?? 0) < (el.qtyOrdered ?? 0)) {
+            await storage.updateSalesOrderLine(el.id, {
+              qtyFulfilled: el.qtyOrdered,
+              qtyShipped: el.qtyOrdered,
+              backorderQty: 0,
+            });
+          }
+        }
+      }
       return {
         success: true,
-        message: `Order ${orderName} already has ${existingLines.length} line(s); skipping duplicate line creation`,
+        message: `Order ${orderName} already has ${existingLines.length} line(s); reconciled fulfillment, skipped duplicate line creation`,
         data: { salesOrderId: salesOrder.id, alreadyProcessed: true },
       };
     }
@@ -280,6 +296,10 @@ export async function handleOrderCreated(
       const qtyToAllocate = lineItem.productId ? Math.min(lineItem.qtyOrdered, availableStock) : 0;
       const qtyBackordered = lineItem.qtyOrdered - qtyToAllocate;
       
+      // If the order already shipped/delivered when first seen (Amazon sync,
+      // historical backfill), record the line as fulfilled so Available/Committed
+      // is correct from the start rather than counting it as open.
+      const lineFulfilled = (orderStatus === 'SHIPPED' || orderStatus === 'DELIVERED') ? lineItem.qtyOrdered : 0;
       // ALWAYS create sales order line (even for unmapped SKUs)
       await storage.createSalesOrderLine({
         salesOrderId: salesOrder.id,
@@ -288,7 +308,9 @@ export async function handleOrderCreated(
         productName: lineItem.productName,
         qtyOrdered: lineItem.qtyOrdered,
         qtyAllocated: qtyToAllocate,
-        backorderQty: qtyBackordered,
+        qtyShipped: lineFulfilled,
+        qtyFulfilled: lineFulfilled,
+        backorderQty: lineFulfilled > 0 ? 0 : qtyBackordered,
         unitPrice: lineItem.unitPrice,
       });
       

@@ -25415,6 +25415,20 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Inventory health/velocity: turnover + days-on-hand + costed coverage (read-only).
+  // The measurement layer the audit flagged as missing. Turnover is a range (app-WAC
+  // vs QB inventory) — directional until COGS coverage + the valuation gap are fixed.
+  app.get("/api/finances/inventory-health", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getInventoryHealth } = await import("./services/inventory-health-service");
+      res.json({ success: true, ...(await getInventoryHealth(db)) });
+    } catch (error: any) {
+      console.error('[Inventory Health] error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to compute inventory health' });
+    }
+  });
+
   // Reconcile the app's WAC inventory valuation against QuickBooks' booked Inventory
   // asset (sign-off blocker: the two must tie). Read-only from QB; the app flags a
   // material variance for Roger to book the adjusting entry — it never posts to QB.

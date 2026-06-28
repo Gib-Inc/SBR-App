@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft, MinusCircle, Plus } from "lucide-react";
+import { InventoryHealthCard } from "@/components/inventory-health-card";
 import { TransferToPyvottDialog } from "@/components/transfer-to-pyvott-dialog";
 import { WriteOffStockDialog } from "@/components/write-off-stock-dialog";
 import { FxInProcessDialog, type FxItem } from "@/components/fx-in-process-dialog";
@@ -452,6 +453,9 @@ export default function Inventory() {
           </Button>
         </div>
       </div>
+
+      {/* Inventory health: turnover / days-on-hand / costed coverage / valuation tie-out */}
+      <InventoryHealthCard />
 
       <TransferToPyvottDialog
         isOpen={transferOpen}

@@ -35,13 +35,48 @@ export interface ResetImpactPace {
   // postings lag, so a red "collapse" would be a data artifact, not reality.
   currentDataPending: boolean;
 }
+export interface LossTrend {
+  completeMonths: number;
+  negativeCount: number; // how many of the complete months were a loss
+  allNegative: boolean;
+  latest: { month: string; netIncome: number } | null;
+  baseline: { month: string; netIncome: number } | null; // ~lookback complete months earlier
+  monthsBetween: number;
+  improvedBy: number | null; // latest − baseline (>0 = less in the red / better)
+  direction: "improving" | "worsening" | "flat" | "unknown";
+}
+
 export interface ResetImpact {
   months: ResetImpactMonth[];
   pace: ResetImpactPace | null;
+  lossTrend: LossTrend;
   asOf: string;
   postedThrough: string | null; // last date posted to the GL for the current month
   notes: string[];
   source: string; authoritative: string;
+}
+
+/** Pure: summarize the monthly net-income trend over the complete months — are we
+ *  in the red every month, and less so than ~`lookback` months ago? */
+export function computeLossTrend(months: ResetImpactMonth[], lookback = 6): LossTrend {
+  const complete = months.filter((m) => !m.partial);
+  const negativeCount = complete.filter((m) => m.netIncome < 0).length;
+  const lastIdx = complete.length - 1;
+  const latest = lastIdx >= 0 ? complete[lastIdx] : null;
+  const baseIdx = Math.max(0, lastIdx - lookback);
+  const baseline = lastIdx > baseIdx ? complete[baseIdx] : null; // null when only one complete month
+  const improvedBy = latest && baseline ? r2(latest.netIncome - baseline.netIncome) : null;
+  const direction = improvedBy == null ? "unknown" : improvedBy > 1 ? "improving" : improvedBy < -1 ? "worsening" : "flat";
+  return {
+    completeMonths: complete.length,
+    negativeCount,
+    allNegative: complete.length > 0 && negativeCount === complete.length,
+    latest: latest ? { month: latest.month, netIncome: latest.netIncome } : null,
+    baseline: baseline ? { month: baseline.month, netIncome: baseline.netIncome } : null,
+    monthsBetween: baseline ? lastIdx - baseIdx : 0,
+    improvedBy,
+    direction,
+  };
 }
 
 /** Pure: assemble per-month rows + blended MER from grouped account rows. */
@@ -85,7 +120,7 @@ export function paceRanges(today: string): { curStart: string; curEnd: string; p
   };
 }
 
-export async function getResetImpact(db: DB, monthsBack = 4): Promise<ResetImpact> {
+export async function getResetImpact(db: DB, monthsBack = 7): Promise<ResetImpact> {
   // Mountain-time clock — txn_date is the business's local calendar date, so the
   // month/day boundary must be Mountain, not the server's UTC (else the "current
   // month" flips early each evening / at month-end).
@@ -173,7 +208,7 @@ export async function getResetImpact(db: DB, monthsBack = 4): Promise<ResetImpac
   }
 
   return {
-    months, pace, asOf: today, postedThrough: glThrough,
+    months, pace, lossTrend: computeLossTrend(months), asOf: today, postedThrough: glThrough,
     notes: [
       "Net sales, margins and net income are from the QuickBooks GL (qb_pl_detail) by calendar month — same source as the Budget Scorecard.",
       glThrough

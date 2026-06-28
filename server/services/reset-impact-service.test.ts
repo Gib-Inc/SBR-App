@@ -1,5 +1,39 @@
 import { describe, it, expect } from "vitest";
-import { assembleResetMonths, paceRanges } from "./reset-impact-service";
+import { assembleResetMonths, paceRanges, computeLossTrend } from "./reset-impact-service";
+
+const mo = (month: string, netIncome: number, partial = false): any => ({ month, partial, netIncome });
+
+describe("computeLossTrend", () => {
+  it("flags all-negative but improving (less in the red than 6 months ago)", () => {
+    const months = [
+      mo("2025-12", -100000), mo("2026-01", -90000), mo("2026-02", -80000), mo("2026-03", -70000),
+      mo("2026-04", -60000), mo("2026-05", -50000), mo("2026-06", -40000),
+      mo("2026-07", -5000, true), // current partial — excluded
+    ];
+    const t = computeLossTrend(months);
+    expect(t.completeMonths).toBe(7);
+    expect(t.allNegative).toBe(true);
+    expect(t.negativeCount).toBe(7);
+    expect(t.latest).toEqual({ month: "2026-06", netIncome: -40000 });
+    expect(t.baseline).toEqual({ month: "2025-12", netIncome: -100000 }); // 6 complete months back
+    expect(t.improvedBy).toBe(60000); // -40k − (-100k) = +60k, less negative
+    expect(t.direction).toBe("improving");
+  });
+
+  it("reports worsening when the latest loss is deeper than the baseline", () => {
+    const t = computeLossTrend([mo("2026-05", -20000), mo("2026-06", -50000)]);
+    expect(t.improvedBy).toBe(-30000);
+    expect(t.direction).toBe("worsening");
+  });
+
+  it("has no baseline (unknown direction) with a single complete month", () => {
+    const t = computeLossTrend([mo("2026-06", -10000), mo("2026-07", -1000, true)]);
+    expect(t.completeMonths).toBe(1);
+    expect(t.baseline).toBeNull();
+    expect(t.improvedBy).toBeNull();
+    expect(t.direction).toBe("unknown");
+  });
+});
 
 describe("paceRanges", () => {
   it("compares this month-to-date to the prior month's same day-range", () => {

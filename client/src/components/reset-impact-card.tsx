@@ -17,6 +17,13 @@ interface Resp {
   success: boolean;
   months: Month[];
   pace: { throughDay: number; current: PaceSide; prior: PaceSide; delta: { netSales: number; netIncome: number; blendedMer: number | null }; currentDataPending: boolean } | null;
+  lossTrend?: {
+    completeMonths: number; negativeCount: number; allNegative: boolean;
+    latest: { month: string; netIncome: number } | null;
+    baseline: { month: string; netIncome: number } | null;
+    monthsBetween: number; improvedBy: number | null;
+    direction: "improving" | "worsening" | "flat" | "unknown";
+  };
   asOf: string; postedThrough: string | null; notes: string[];
 }
 
@@ -40,6 +47,8 @@ export function ResetImpactCard() {
   const { data } = useQuery<Resp>({ queryKey: ["/api/finances/reset-impact"] });
   if (!data?.months?.length) return null;
   const p = data.pace;
+  const lt = data.lossTrend;
+  const maxAbsNi = Math.max(...data.months.map((m) => Math.abs(m.netIncome)), 1);
 
   return (
     <Card data-testid="card-reset-impact">
@@ -48,6 +57,51 @@ export function ResetImpactCard() {
         <CardDescription>Since the May reset: losses per month and blended MER, straight from the GL. Updates as data flows in.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {lt?.latest && (
+          <div className="rounded-lg border p-3">
+            <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+              <div className="text-sm font-semibold">
+                {lt.allNegative
+                  ? `Net loss every month — ${lt.completeMonths} of ${lt.completeMonths}`
+                  : `${lt.negativeCount} of ${lt.completeMonths} months at a loss`}
+              </div>
+              {lt.improvedBy != null && lt.baseline ? (
+                <span className={`inline-flex items-center gap-1 text-sm font-medium ${lt.direction === "improving" ? "text-emerald-600 dark:text-emerald-400" : lt.direction === "worsening" ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
+                  {lt.direction === "improving" ? <TrendingUp className="h-4 w-4" /> : lt.direction === "worsening" ? <TrendingDown className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
+                  {lt.direction === "improving"
+                    ? `${money(lt.improvedBy)} less in the red vs ${monthLabel(lt.baseline.month)}`
+                    : lt.direction === "worsening"
+                      ? `${money(lt.improvedBy)} deeper vs ${monthLabel(lt.baseline.month)}`
+                      : `flat vs ${monthLabel(lt.baseline.month)}`}
+                </span>
+              ) : null}
+            </div>
+            {/* Net-income bars: red below the zero line = loss, green above = profit */}
+            <div className="flex items-stretch gap-1">
+              {data.months.map((m) => {
+                const h = Math.max(2, Math.round((Math.abs(m.netIncome) / maxAbsNi) * 40));
+                const loss = m.netIncome < 0;
+                return (
+                  <div key={m.month} className="flex-1 flex flex-col items-center" title={`${monthLabel(m.month)}: ${money(m.netIncome)}${m.partial ? " (MTD)" : ""}`}>
+                    <div className="flex h-11 w-full flex-col justify-end items-center">
+                      {!loss && <div className="w-3/5 rounded-t bg-emerald-500" style={{ height: `${h}px` }} />}
+                    </div>
+                    <div className="h-px w-full bg-border" />
+                    <div className="flex h-11 w-full flex-col justify-start items-center">
+                      {loss && <div className={`w-3/5 rounded-b ${m.partial ? "bg-red-300 dark:bg-red-900" : "bg-red-500"}`} style={{ height: `${h}px` }} />}
+                    </div>
+                    <div className="text-[9px] text-muted-foreground mt-0.5 whitespace-nowrap">{monthLabel(m.month).slice(0, 3)}{m.partial ? "*" : ""}</div>
+                  </div>
+                );
+              })}
+            </div>
+            {lt.latest ? (
+              <div className="text-[11px] text-muted-foreground mt-1.5">
+                Latest full month {monthLabel(lt.latest.month)}: <span className={lt.latest.netIncome < 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}>{money(lt.latest.netIncome)}</span>. Bars are monthly net income (red = loss); * = current month-to-date.
+              </div>
+            ) : null}
+          </div>
+        )}
         {p && (
           <div className="rounded-lg border p-3">
             <div className="text-xs font-medium text-muted-foreground mb-2">

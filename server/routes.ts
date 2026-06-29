@@ -24112,10 +24112,28 @@ Generate only the email body text, no subject line.`;
         billsDue: ((qbLive as any).raw)?.billsDue ?? [],             // ranked "what to pay"
       } : null;
 
-      // Net cash position = live cash + receivables − payables (what cash would be
-      // if everything outstanding settled). A blunt but honest liquidity read.
+      // Expected channel payouts — the DEFENSIBLE "money on its way" (Amazon trailing
+      // 14d + Shopify trailing 3d, sales-derived, net of fees). This REPLACES the QB
+      // A/R accrual in the net-cash math: marketplace A/R books as one unverified
+      // journal entry (~$102K) that is ~2x the real ~$59K pipeline, so counting it
+      // overstates liquidity. DB-only; failure leaves it null (no fabrication).
+      let expectedPayouts: { amazonNet: number; shopifyNet: number; totalNet: number } | null = null;
+      try {
+        const { computeExpectedPayouts } = await import("./services/expected-payouts-service");
+        const epAsOf = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+        const ep = await computeExpectedPayouts(db, epAsOf);
+        expectedPayouts = { amazonNet: ep.amazon.netExpected, shopifyNet: ep.shopify.netExpected, totalNet: ep.totalNetExpected };
+      } catch (e: any) {
+        console.warn("[CIPH.R] overview expected-payouts failed:", e?.message ?? e);
+      }
+
+      // Net cash position = live cash + money on its way (expected payouts) − payables
+      // (what cash would be once the near-term payouts land and bills are paid). Uses
+      // the sales-derived pipeline, NOT the inflated QB A/R accrual; falls back to 0
+      // inbound if the payout calc is unavailable (never banks on the accrual).
+      const netCashInbound = expectedPayouts ? expectedPayouts.totalNet : 0;
       const netCashPosition = (qbLiveOut && qbLiveOut.cashOnHand != null)
-        ? Math.round(((qbLiveOut.cashOnHand) + (qbLiveOut.accountsReceivable || 0) - (qbLiveOut.accountsPayable || 0)) * 100) / 100
+        ? Math.round(((qbLiveOut.cashOnHand) + netCashInbound - (qbLiveOut.accountsPayable || 0)) * 100) / 100
         : null;
 
       // Live QB cash is the freshest cash-on-hand — overlay it onto the balance
@@ -24133,6 +24151,7 @@ Generate only the email body text, no subject line.`;
         balanceSheetDataGaps: useUploaded ? ((bsSnapshot as any)?.dataGaps ?? []) : [],
         qbLive: qbLiveOut,
         netCashPosition,
+        expectedPayouts,
         adChannels,
         adChannelsWindowDays: 30,
       });

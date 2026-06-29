@@ -68,7 +68,9 @@ function AgingRow({ buckets, overdueTone }: { buckets: AgingBuckets | null; over
   );
 }
 
-export function QuickBooksLiveCard({ qbLive, netCashPosition }: { qbLive: QbLive | null; netCashPosition?: number | null }) {
+export interface ExpectedPayouts { amazonNet: number; shopifyNet: number; totalNet: number; }
+
+export function QuickBooksLiveCard({ qbLive, netCashPosition, expectedPayouts }: { qbLive: QbLive | null; netCashPosition?: number | null; expectedPayouts?: ExpectedPayouts | null }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const refresh = useMutation({
@@ -112,15 +114,34 @@ export function QuickBooksLiveCard({ qbLive, netCashPosition }: { qbLive: QbLive
               <div className="text-[11px] text-muted-foreground mt-1">across bank accounts</div>
             </div>
             <div className="rounded-lg border p-3">
-              <div className="text-xs text-muted-foreground flex items-center gap-1"><ArrowDownCircle className="h-3.5 w-3.5" /> Receivables (owed to you)</div>
+              <div className="text-xs text-muted-foreground flex items-center gap-1"><ArrowDownCircle className="h-3.5 w-3.5" /> Receivables (QB accrual)</div>
               <div className="text-2xl font-bold tabular-nums">{fmt(qbLive.accountsReceivable)}</div>
               <AgingRow buckets={qbLive.arAging} overdueTone="text-amber-600 dark:text-amber-400" />
+              <div className="text-[10px] text-muted-foreground mt-1">QB books marketplace A/R as one accrual — not counted in net cash. See "money on its way" below.</div>
             </div>
             <div className="rounded-lg border p-3">
               <div className="text-xs text-muted-foreground flex items-center gap-1"><ArrowUpCircle className="h-3.5 w-3.5" /> Bills Due (you owe)</div>
               <div className="text-2xl font-bold tabular-nums text-red-600 dark:text-red-400">{fmt(qbLive.accountsPayable)}</div>
               <AgingRow buckets={qbLive.apAging} overdueTone="text-red-600 dark:text-red-400" />
               {apOverdue > 0 && <div className="text-[11px] text-red-600 dark:text-red-400 mt-1">{fmt(apOverdue)} overdue</div>}
+            </div>
+          </div>
+        )}
+
+        {/* Money on its way — sales-derived expected channel payouts (net of fees),
+            the defensible near-cash that net-cash-position counts (vs the QB accrual). */}
+        {qbLive && expectedPayouts && expectedPayouts.totalNet > 0 && (
+          <div className="mt-3 rounded-lg border border-green-200 dark:border-green-900/40 bg-green-50/40 dark:bg-green-950/10 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1"><ArrowDownCircle className="h-3.5 w-3.5 text-green-600 dark:text-green-400" /> Money on its way</div>
+                <div className="text-2xl font-bold tabular-nums text-green-700 dark:text-green-300">{fmt(expectedPayouts.totalNet)}</div>
+                <div className="text-[10px] text-muted-foreground">expected channel payouts, net of fees · from real recent sales · counted in net cash</div>
+              </div>
+              <div className="flex gap-4 text-right">
+                <div><div className="text-[10px] uppercase text-muted-foreground">Amazon</div><div className="text-sm font-semibold tabular-nums">{fmt(expectedPayouts.amazonNet)}</div><div className="text-[10px] text-muted-foreground">~14d settle</div></div>
+                <div><div className="text-[10px] uppercase text-muted-foreground">Shopify</div><div className="text-sm font-semibold tabular-nums">{fmt(expectedPayouts.shopifyNet)}</div><div className="text-[10px] text-muted-foreground">~3d settle</div></div>
+              </div>
             </div>
           </div>
         )}
@@ -147,7 +168,7 @@ export function QuickBooksLiveCard({ qbLive, netCashPosition }: { qbLive: QbLive
               <div><div className="text-muted-foreground">Equity</div><div className={`font-semibold tabular-nums ${(qbLive.balanceSheet?.totalEquity ?? 0) < 0 ? "text-red-600 dark:text-red-400" : ""}`}>{fmt(qbLive.balanceSheet?.totalEquity)}</div></div>
               <div><div className="text-muted-foreground">Net Cash Position</div><div className={`font-semibold tabular-nums ${(netCashPosition ?? 0) < 0 ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>{fmt(netCashPosition)}</div></div>
             </div>
-            <div className="text-[11px] text-muted-foreground mt-1">Net cash position = cash + receivables − bills due (what cash would be if everything outstanding settled).</div>
+            <div className="text-[11px] text-muted-foreground mt-1">Net cash position = cash + money on its way − bills due (what cash would be once near-term payouts land and bills are paid). Uses the sales-derived payout pipeline, not the QB A/R accrual.</div>
           </div>
         )}
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, sodBlocksPaid, setObligationStatus, type Obligation } from "./cash-flow-service";
+import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, sodBlocksPaid, setObligationStatus, countUnfunded, type Obligation } from "./cash-flow-service";
 
 // Minimal db.execute mock: returns queued results in call order (rows() reads `.rows`).
 function mockDb(responses: any[]) {
@@ -88,6 +88,25 @@ describe("classifyVendorTier", () => {
   it("leaves everything else important (tier3)", () => {
     expect(classifyVendorTier("Gurr & Brande PLLC")).toEqual({ tier: "tier3", criticality: "important" });
     expect(classifyVendorTier("Some Random Vendor")).toEqual({ tier: "tier3", criticality: "important" });
+  });
+});
+
+describe("countUnfunded (FLAG-DON'T-FABRICATE: runway can't see estimated-$0 outflows)", () => {
+  it("counts active obligations with an unknown (estimated $0) amount, and the must-pay subset", () => {
+    const active = [
+      { amount: 0, amountEstimated: true, tier: "mca" as const },     // unfunded + must-pay
+      { amount: 0, amountEstimated: true, tier: "tier1" as const },    // unfunded + must-pay (tax)
+      { amount: 0, amountEstimated: true, tier: "tier4" as const },    // unfunded, deferrable
+      { amount: 2500, amountEstimated: true, tier: "tier2" as const }, // estimated but HAS an amount → funded
+      { amount: 0, amountEstimated: false, tier: "tier2" as const },   // a real $0 bill → not unfunded
+    ];
+    const r = countUnfunded(active);
+    expect(r.unfundedCount).toBe(3);
+    expect(r.unfundedMustPayCount).toBe(2); // mca + tier1 only
+  });
+  it("is all-clear when every amount is known", () => {
+    expect(countUnfunded([{ amount: 100, amountEstimated: false, tier: "mca" as const }]))
+      .toEqual({ unfundedCount: 0, unfundedMustPayCount: 0 });
   });
 });
 

@@ -77,6 +77,14 @@ export interface CashPosition {
   totalDue: number;
   tier1Due: number;       // tax + payroll
   projectedLow: number;
+  // FLAG-DON'T-FABRICATE: obligations seeded with an unknown amount (amountEstimated &&
+  // amount<=0 — e.g. MCAs/tax/debt before the operator enters the real figure) contribute
+  // $0 to totalDue, so projectedLow OMITS them and reads optimistic. These flags say how
+  // many real outflows the runway can't see yet, so the UI never presents projectedLow as
+  // a clean/complete number while a top-ranked MCA shows $0.
+  unfundedCount: number;          // active obligations with an unknown (estimated $0) amount
+  unfundedMustPayCount: number;   // of those, the unavoidable ones (mca/tier1/tier2)
+  projectedLowComplete: boolean;  // false when unfundedCount > 0 — projectedLow is a ceiling, not exact
 }
 
 export interface CashFlowResult {
@@ -116,6 +124,21 @@ export function debtTier(name: string, type: string): Tier {
   if (/shopify capital|fresh funding|paypal|loanbuilder|uncapped|capital on tap|\bfora\b|\bmca\b/.test(n)) return "mca";
   if (type === "loan") return "tier2";       // SBA / bank term loans
   return "tier3";                            // cards / LOCs
+}
+
+/**
+ * Pure: count active obligations whose amount is UNKNOWN (estimated $0) — the real
+ * outflows projectedLow can't see — and how many of those are unavoidable (mca/tier1/
+ * tier2). When unfundedCount > 0, projectedLow is a best-case ceiling, not the true floor.
+ */
+export function countUnfunded(
+  active: Array<{ amount: number; amountEstimated: boolean; tier: Tier }>,
+): { unfundedCount: number; unfundedMustPayCount: number } {
+  const u = active.filter((o) => o.amountEstimated && o.amount <= 0);
+  return {
+    unfundedCount: u.length,
+    unfundedMustPayCount: u.filter((o) => o.tier === "mca" || o.tier === "tier1" || o.tier === "tier2").length,
+  };
 }
 
 /**
@@ -259,6 +282,7 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
     asOf, cashOnHand, cashAsOf: cashRow?.cash_as_of ?? null,
     dailySalesRunRate: r2(dailyRunRate), windowDays, projectedIncome,
     receivablesInbound, expectedPayouts, inboundWindow, totalDue: 0, tier1Due: 0, projectedLow: 0,
+    unfundedCount: 0, unfundedMustPayCount: 0, projectedLowComplete: true,
   };
 }
 
@@ -527,14 +551,23 @@ export async function getCashFlow(db: any, opts: { windowDays?: number; asOf?: s
   const totalDue = r2(active.reduce((s, o) => s + o.amount, 0));
   const tier1Due = r2(active.filter((o) => o.tier === "tier1").reduce((s, o) => s + o.amount, 0));
 
+  // FLAG-DON'T-FABRICATE: an active obligation seeded with an unknown amount (estimated
+  // $0) draws $0 from totalDue, so projectedLow can't see it. Count them — and the
+  // unavoidable ones (mca/tier1/tier2) — so projectedLow is surfaced as a CEILING (best
+  // case), never a clean number, while a top-ranked MCA bucket still reads $0.
+  const { unfundedCount, unfundedMustPayCount } = countUnfunded(active);
+
   return {
     // projectedLow COUNTS inboundWindow — the sales-derived expected channel payouts
     // (Amazon + Shopify, net of fees) that actually land within this window. That is
     // defensible near-cash, unlike the QB A/R accrual (receivablesInbound), which is
     // a single unverified Amazon journal entry shown for reference only and NOT added.
+    // It does NOT subtract unfunded (estimated-$0) obligations — so when unfundedCount
+    // > 0 it is a CEILING (projectedLowComplete=false), not the true floor.
     position: {
       ...position, totalDue, tier1Due,
       projectedLow: r2(position.cashOnHand + position.projectedIncome + position.inboundWindow - totalDue),
+      unfundedCount, unfundedMustPayCount, projectedLowComplete: unfundedCount === 0,
     },
     obligations: ranked,
     generatedAt: new Date().toISOString(),

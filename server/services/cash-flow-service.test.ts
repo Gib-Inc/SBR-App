@@ -72,6 +72,15 @@ describe("sodBlocksPaid (segregation of duties — state machine)", () => {
   it("blocks paying a material item that is still in a non-approved state", () => {
     expect(sodBlocksPaid("paid", "deferred", 5000, "userA", "userB", 1000)).toBe(true);
   });
+  it("treats an UNKNOWN (estimated $0) amount as material — no pending->paid bypass for a $0-seeded 941/MCA", () => {
+    // amount 0 < threshold would have slipped through; amountEstimated=true forces the gate.
+    expect(sodBlocksPaid("paid", "pending", 0, null, "userA", 1000, true)).toBe(true);
+    expect(sodBlocksPaid("paid", "approved", 0, "userA", "userA", 1000, true)).toBe(true); // self-pay still blocked
+    expect(sodBlocksPaid("paid", "approved", 0, "userA", "userB", 1000, true)).toBe(false); // proper dual-control passes
+  });
+  it("a KNOWN $0 (not estimated) stays non-material", () => {
+    expect(sodBlocksPaid("paid", "pending", 0, null, "userA", 1000, false)).toBe(false);
+  });
 });
 
 describe("classifyVendorTier", () => {

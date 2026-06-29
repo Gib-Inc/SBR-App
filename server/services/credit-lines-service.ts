@@ -43,7 +43,7 @@ export async function syncCreditLineBalances(): Promise<{ synced: number; skippe
       INSERT INTO credit_lines (name, type, qb_account_id, qb_account_name, balance, balance_synced_at)
       VALUES (${a.name}, ${t}, ${a.id}, ${a.name}, ${owed}, now())
       ON CONFLICT (qb_account_id) WHERE qb_account_id IS NOT NULL
-      DO UPDATE SET balance = EXCLUDED.balance, type = EXCLUDED.type, qb_account_name = EXCLUDED.qb_account_name,
+      DO UPDATE SET balance = EXCLUDED.balance, qb_account_name = EXCLUDED.qb_account_name,
                     balance_synced_at = now(), updated_at = now()
     `).catch((e: any) => console.error(`[CreditLines] upsert ${a.name} failed:`, e?.message ?? e));
     synced++;

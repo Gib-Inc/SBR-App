@@ -611,16 +611,21 @@ const DUAL_CONTROL_THRESHOLD = Number(process.env.FINANCE_DUAL_CONTROL_THRESHOLD
  *  This blocks BOTH defeats of dual control:
  *    - pending -> paid in one step (no approval ever happened), and
  *    - self-approve -> self-pay (approver == payer).
- *  Non-material items (below the threshold) are not gated. Pure + unit-tested. */
-export function sodBlocksPaid(targetStatus: OblStatus, currentStatus: OblStatus, amount: number, approvedBy: string | null, actor: string, threshold = DUAL_CONTROL_THRESHOLD): boolean {
-  if (targetStatus !== "paid" || amount < threshold) return false;
+ *  Non-material items (a KNOWN amount below the threshold) are not gated. An
+ *  UNKNOWN amount (amountEstimated — the $0-seeded MCA/941 tax/debt rows) is
+ *  treated as material and gated: those are exactly the high-consequence payments,
+ *  so they must NOT slip under the threshold as a fabricated $0. Pure + unit-tested. */
+export function sodBlocksPaid(targetStatus: OblStatus, currentStatus: OblStatus, amount: number, approvedBy: string | null, actor: string, threshold = DUAL_CONTROL_THRESHOLD, amountEstimated = false): boolean {
+  if (targetStatus !== "paid") return false;
+  const material = amountEstimated || amount >= threshold; // unknown amount = material (fail-safe)
+  if (!material) return false;
   return currentStatus !== "approved" || !approvedBy || approvedBy === actor;
 }
 
 export type StatusResult = { ok: boolean; reason?: "not_found" | "no_actor" | "sod_block" };
 
 export async function setObligationStatus(db: any, id: string, status: OblStatus, by?: string, byName?: string): Promise<StatusResult> {
-  const o = rows(await db.execute(sql`select amount::float8 as amount, approved_by, status from cash_obligations where id = ${id}`))[0];
+  const o = rows(await db.execute(sql`select amount::float8 as amount, amount_estimated, approved_by, status from cash_obligations where id = ${id}`))[0];
   // Unknown/stale/deleted/forged id: refuse so we never write an orphan audit row.
   if (!o) return { ok: false, reason: "not_found" };
   // Every action must attribute to a real authenticated person — never a placeholder
@@ -634,7 +639,7 @@ export async function setObligationStatus(db: any, id: string, status: OblStatus
   let action: string = ACTION_FOR[status] ?? status;
   // Segregation of duties: a material item reaches 'paid' only from 'approved',
   // by someone other than the approver — no pending->paid shortcut, no self-pay.
-  if (sodBlocksPaid(status, currentStatus, num(o.amount), o.approved_by ?? null, by)) {
+  if (sodBlocksPaid(status, currentStatus, num(o.amount), o.approved_by ?? null, by, DUAL_CONTROL_THRESHOLD, o.amount_estimated === true)) {
     // Dual control needs a SECOND eligible approver. In a single-admin org that is
     // impossible, so rather than permanently deadlock material payments we allow
     // the self-pay but record it as a distinct, auditable action. With 2+ admins

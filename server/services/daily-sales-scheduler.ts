@@ -369,8 +369,15 @@ async function runNightlyAggregation(): Promise<void> {
   try {
     const { db } = await import("../db");
     const { syncGeneratedObligations } = await import("./cash-flow-service");
-    const res = await syncGeneratedObligations(db, getMountainDateString(new Date()));
-    console.log(`[Cash Command] Nightly obligation refresh: ${res.tax} tax, ${res.debt} debt`);
+    const asOf = getMountainDateString(new Date());
+    const res = await syncGeneratedObligations(db, asOf);
+    // syncGeneratedObligations → writeCashPosition persists expected_payouts_net
+    // ("total on its way"). Recompute once more purely to LOG it for the audit trail.
+    const { computeExpectedPayouts } = await import("./expected-payouts-service");
+    const ep = await computeExpectedPayouts(db, asOf);
+    console.log(
+      `[Cash Command] Nightly post: ${res.tax} tax, ${res.debt} debt; money on its way $${ep.totalNetExpected.toLocaleString("en-US")} (Amazon $${ep.amazon.netExpected.toLocaleString("en-US")} + Shopify $${ep.shopify.netExpected.toLocaleString("en-US")})`,
+    );
   } catch (err: any) {
     console.warn("[Cash Command] Nightly obligation refresh failed:", err?.message ?? err);
   }

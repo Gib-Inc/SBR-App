@@ -18,10 +18,13 @@
 import { storage } from "../storage";
 import {
   computeRunwayForecast,
+  computeScenarioRunway,
   type RunwayForecast,
   type ScenarioInputs,
+  type ScenarioResult,
   type ScenarioKey,
 } from "./runway-engine";
+import type { ExpectedPayouts } from "./expected-payouts-service";
 import type { InsertFinancialRunwayForecast, FinancialRunwayForecast } from "@shared/schema";
 
 const WINDOW_DAYS: Record<ScenarioKey, number> = { conservative: 90, realistic: 30, aggressive: 7 };
@@ -29,10 +32,25 @@ const WINDOW_DAYS: Record<ScenarioKey, number> = { conservative: 90, realistic: 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const isoDaysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 const isoToday = () => new Date().toISOString().slice(0, 10);
+/** "Today" in SBR's operating timezone — the seasonal lookup keys off the month. */
+const todayMountain = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+
+/** "Same as last year" scenario: last year's same upcoming months drive sales. */
+export interface SeasonalScenario {
+  result: ScenarioResult;
+  inputs: ScenarioInputs;
+  dailyRevenue: number | null; // last-year seasonal daily net-sales rate
+  basisMonths: Array<{ year: number; month: number }>;
+  gaps: Array<{ year: number; month: number }>;
+}
 
 export interface RunwayComputation {
   forecast: RunwayForecast;
   scenarioInputs: Record<ScenarioKey, ScenarioInputs>;
+  /** "If we sell the same as last year" — seasonal scenario (null if no last-year data). */
+  seasonal: SeasonalScenario | null;
+  /** Sales-derived expected channel payouts (Amazon + Shopify, net of fees) fed into every scenario. */
+  inboundReceivables: number;
   snapshotId: string | null;
   netMargin: number | null;
   /** Pillar 4 self-tuning multiplier applied to revenue inputs (1 = untuned). */
@@ -53,11 +71,41 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
   }
 
   const cashOnHand = snap.cashOnHand != null ? Number(snap.cashOnHand) : null;
-  // NOTE: A/R (snap.accountsReceivable) is intentionally NOT fed into the runway
-  // yet — it's currently a single unverified Amazon accrual journal entry, not a
-  // granular payout feed. The engine supports an `inboundReceivables` input; wire
-  // it here once A/R is reconciled to real settlements.
   const dailyFixedOverhead = snap.operatingExpenses != null ? round2(Number(snap.operatingExpenses) / 30) : null;
+
+  const asOf = todayMountain();
+
+  // Money on its way — the DEFENSIBLE near-cash fed into each scenario's starting
+  // cash. This is the sales-derived expected channel payout (Amazon trailing-14d +
+  // Shopify trailing-3d, net of fees) — NOT the QB A/R accrual (snap.accountsReceivable),
+  // which is a single unverified Amazon journal entry ~2x the real pipeline. Failure
+  // leaves it 0 (the runway simply omits the bump — never a fabricated number).
+  let ep: ExpectedPayouts | null = null;
+  let inboundWithinDays: ((p: ExpectedPayouts, days: number) => number) | null = null;
+  try {
+    const { db } = await import("../db");
+    const mod = await import("./expected-payouts-service");
+    ep = await mod.computeExpectedPayouts(db, asOf);
+    inboundWithinDays = mod.inboundWithinDays;
+  } catch (err: any) {
+    console.warn("[CIPH.R] expected-payouts for runway failed:", err?.message ?? err);
+  }
+  const inboundReceivables = ep ? ep.totalNetExpected : 0; // full pipeline (for display)
+
+  // Credit only the pipeline cash that lands BEFORE the runway runs out. Feeding the
+  // full payout to every scenario overstates a distress runway (e.g. a 10-day runway
+  // counting Amazon cash that takes 14 days to arrive). 2-pass: compute the runway on
+  // cash alone, then re-credit the inbound that settles within that many days. Adding
+  // inbound only lengthens the runway, so this single re-pass is conservative (safe).
+  const withWindowedInbound = (inputs: ScenarioInputs): ScenarioInputs => {
+    if (!ep || !inboundWithinDays || ep.totalNetExpected <= 0) return { ...inputs, inboundReceivables: 0 };
+    const prelim = computeScenarioRunway({ ...inputs, inboundReceivables: 0 });
+    const inbound =
+      prelim.runwayDays == null
+        ? ep.totalNetExpected // gapped or cash-flow positive: the full pipeline lands eventually
+        : inboundWithinDays(ep, prelim.runwayDays);
+    return { ...inputs, inboundReceivables: inbound };
+  };
 
   const grossProfit = snap.grossProfit != null ? Number(snap.grossProfit) : null;
   const totalIncome = snap.totalIncome != null ? Number(snap.totalIncome) : null;
@@ -89,13 +137,15 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     const avgDailyRevenue = (totalNetRevenue / windowDays) * biasFactor;
     const dailyMarginContribution = netMargin != null ? round2(avgDailyRevenue * netMargin) : null;
 
+    // inboundReceivables is applied by withWindowedInbound (2-pass) below, so the
+    // amount credited never exceeds what settles before the runway ends.
     return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution };
   };
 
   const scenarioInputs: Record<ScenarioKey, ScenarioInputs> = {
-    conservative: await buildScenario(WINDOW_DAYS.conservative),
-    realistic: await buildScenario(WINDOW_DAYS.realistic),
-    aggressive: await buildScenario(WINDOW_DAYS.aggressive),
+    conservative: withWindowedInbound(await buildScenario(WINDOW_DAYS.conservative)),
+    realistic: withWindowedInbound(await buildScenario(WINDOW_DAYS.realistic)),
+    aggressive: withWindowedInbound(await buildScenario(WINDOW_DAYS.aggressive)),
   };
 
   const forecast = computeRunwayForecast({
@@ -105,7 +155,38 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     netMarginAverage: netMargin,
   });
 
-  return { ok: true, data: { forecast, scenarioInputs, snapshotId: snap.id, netMargin, biasCorrectionFactor: biasFactor } };
+  // "Same as last year" seasonal scenario: last year's same upcoming months drive
+  // sales (current overhead/ad-spend/margin held constant), so it answers "if this
+  // season matches last year, how long does our money last?". Uses the REALISTIC
+  // 30-day ad-spend as the held-constant cost basis. Gaps → null (no fabrication).
+  let seasonal: SeasonalScenario | null = null;
+  try {
+    const { db } = await import("../db");
+    const { getSeasonalDailyRevenue } = await import("./seasonal-runway");
+    const sr = await getSeasonalDailyRevenue(db, asOf, 3);
+    const dailyMarginContribution =
+      sr.dailyRevenue != null && netMargin != null ? round2(sr.dailyRevenue * biasFactor * netMargin) : null;
+    const inputs = withWindowedInbound({
+      cashOnHand,
+      dailyFixedOverhead,
+      dailyAdSpend: scenarioInputs.realistic.dailyAdSpend,
+      dailyMarginContribution,
+    });
+    seasonal = {
+      result: computeScenarioRunway(inputs),
+      inputs,
+      dailyRevenue: sr.dailyRevenue,
+      basisMonths: sr.basisMonths,
+      gaps: sr.gaps,
+    };
+  } catch (err: any) {
+    console.warn("[CIPH.R] seasonal runway failed:", err?.message ?? err);
+  }
+
+  return {
+    ok: true,
+    data: { forecast, scenarioInputs, seasonal, inboundReceivables, snapshotId: snap.id, netMargin, biasCorrectionFactor: biasFactor },
+  };
 }
 
 /** Compute + persist a forecast row (used by the daily scheduler). */

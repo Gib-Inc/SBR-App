@@ -21,12 +21,21 @@ interface ScenarioInputs {
   dailyFixedOverhead: number | null;
   dailyAdSpend: number | null;
   dailyMarginContribution: number | null;
+  inboundReceivables?: number | null;
 }
 type ScenarioKey = "conservative" | "realistic" | "aggressive";
+interface SeasonalScenario {
+  inputs: ScenarioInputs;
+  dailyRevenue: number | null;
+  basisMonths: Array<{ year: number; month: number }>;
+  gaps: Array<{ year: number; month: number }>;
+}
 interface RunwayResponse {
   success: boolean;
   forecast?: { status: string; dataGaps: string[]; netMarginAverage: number | null };
   scenarioInputs?: Record<ScenarioKey, ScenarioInputs>;
+  seasonal?: SeasonalScenario | null;
+  inboundReceivables?: number;
 }
 
 const REQUIRED: Array<[keyof ScenarioInputs, string]> = [
@@ -42,7 +51,9 @@ interface ScenarioCalc {
   gaps: string[];
 }
 
-/** Client-side mirror of the runway engine, with What-If variance applied. */
+/** Client-side mirror of the runway engine, with What-If variance applied.
+ *  Mirrors server runway-engine: inbound receivables (money on its way) extend the
+ *  STARTING cash, not the burn rate. */
 function calcScenario(s: ScenarioInputs | undefined, adPct: number, velPct: number): ScenarioCalc {
   if (!s) return { days: null, cashFlowPositive: false, gaps: ["no data"] };
   const gaps = REQUIRED.filter(([k]) => s[k] == null || Number.isNaN(Number(s[k]))).map(([, label]) => label);
@@ -51,7 +62,8 @@ function calcScenario(s: ScenarioInputs | undefined, adPct: number, velPct: numb
   const margin = (s.dailyMarginContribution as number) * (1 + velPct / 100);
   const burn = (s.dailyFixedOverhead as number) + adSpend - margin;
   if (burn <= 0) return { days: null, cashFlowPositive: true, gaps: [] };
-  return { days: Math.floor((s.cashOnHand as number) / burn), cashFlowPositive: false, gaps: [] };
+  const inbound = typeof s.inboundReceivables === "number" && !Number.isNaN(s.inboundReceivables) ? s.inboundReceivables : 0;
+  return { days: Math.floor(((s.cashOnHand as number) + inbound) / burn), cashFlowPositive: false, gaps: [] };
 }
 
 const SCENARIOS: Array<{ key: ScenarioKey; label: string; sub: string }> = [
@@ -59,6 +71,9 @@ const SCENARIOS: Array<{ key: ScenarioKey; label: string; sub: string }> = [
   { key: "realistic", label: "Realistic", sub: "30-day trend" },
   { key: "aggressive", label: "Aggressive", sub: "7-day trend" },
 ];
+
+const money = (n: number | null | undefined) =>
+  n == null ? "—" : `${n < 0 ? "-" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
 
 function ScenarioColumn({ label, sub, calc }: { label: string; sub: string; calc: ScenarioCalc }) {
   let display: string;
@@ -93,6 +108,7 @@ export function CashRunwayCard() {
   const [velPct, setVelPct] = useState(0);
 
   const inputs = data?.scenarioInputs;
+  const seasonal = data?.seasonal ?? null;
   const gapped = data?.forecast?.status === "CALCULATION_GAPPED";
   const calcs = useMemo(
     () => ({
@@ -101,6 +117,10 @@ export function CashRunwayCard() {
       aggressive: calcScenario(inputs?.aggressive, adPct, velPct),
     }),
     [inputs, adPct, velPct],
+  );
+  const seasonalCalc = useMemo(
+    () => (seasonal?.dailyRevenue != null ? calcScenario(seasonal.inputs, adPct, velPct) : null),
+    [seasonal, adPct, velPct],
   );
 
   const hasInputs = !!inputs;
@@ -136,7 +156,29 @@ export function CashRunwayCard() {
               {SCENARIOS.map((s) => (
                 <ScenarioColumn key={s.key} label={s.label} sub={s.sub} calc={calcs[s.key]} />
               ))}
+              {seasonalCalc && (
+                <div className="border-l pl-2">
+                  <ScenarioColumn label="Last Year" sub="same season" calc={seasonalCalc} />
+                </div>
+              )}
             </div>
+
+            {(typeof data?.inboundReceivables === "number" || seasonal) && (
+              <div className="text-[11px] text-muted-foreground space-y-0.5">
+                {typeof data?.inboundReceivables === "number" && data.inboundReceivables > 0 && (
+                  <div>Includes up to {money(data.inboundReceivables)} of Amazon + Shopify payouts on the way (added to starting cash, capped at what settles before the runway ends).</div>
+                )}
+                {seasonalCalc && seasonal?.dailyRevenue != null && (
+                  <div>
+                    "Last Year" = if this season matches last year ({money(seasonal.dailyRevenue)}/day net sales vs the recent run-rate).
+                    {seasonal.gaps.length > 0 && ` Missing ${seasonal.gaps.length} month(s) of history.`}
+                  </div>
+                )}
+                {seasonal && seasonal.dailyRevenue == null && (
+                  <div className="text-amber-600 dark:text-amber-400">Last-year seasonal runway unavailable — no matching months in history.</div>
+                )}
+              </div>
+            )}
 
             {gapped && (
               <div className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1" data-testid="text-runway-gaps">

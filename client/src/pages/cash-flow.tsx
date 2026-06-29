@@ -5,7 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Wallet, AlertTriangle, ShieldCheck } from "lucide-react";
+import { Wallet, AlertTriangle, ShieldCheck, ArrowDownToLine } from "lucide-react";
 
 interface Obligation {
   id: string; label: string; payee: string | null; category: string; tier: string;
@@ -13,9 +13,16 @@ interface Obligation {
   criticality: string; payFrom: string | null; status: string; rationale: string | null;
   anomalyFlag: boolean; anomalyReason: string | null; runningCashAfter: number | null;
 }
+interface ExpectedPayouts {
+  amazonNet: number; shopifyNet: number; totalNet: number;
+  amazonGross: number; shopifyGross: number;
+  amazonSettlementDays: number; shopifySettlementDays: number;
+}
 interface Position {
   cashOnHand: number; cashAsOf: string | null; dailySalesRunRate: number; windowDays: number;
-  projectedIncome: number; receivablesInbound: number; totalDue: number; tier1Due: number; projectedLow: number;
+  projectedIncome: number; receivablesInbound: number;
+  expectedPayouts: ExpectedPayouts; inboundWindow: number;
+  totalDue: number; tier1Due: number; projectedLow: number;
 }
 interface CashFlow { success: boolean; position: Position; obligations: Obligation[]; generatedAt: string; }
 
@@ -70,17 +77,38 @@ export default function CashFlow() {
         <p className="text-sm text-muted-foreground">What to pay, in what order, before cash runs out. Tax and payroll rank above vendor bills. This view <b>recommends and tracks</b> — it never moves money.</p>
       </div>
 
-      {/* Runway */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      {/* Money on its way — front and center, broken down by channel. This is the
+          sales-derived expected payout (net of fees), counted in the runway. */}
+      <Card className="border-green-200 dark:border-green-900/40 bg-green-50/40 dark:bg-green-950/10">
+        <CardContent className="p-3 md:p-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+                <ArrowDownToLine className="h-3.5 w-3.5 text-green-600 dark:text-green-400" /> Money on its way
+              </div>
+              <div className="text-3xl font-bold tabular-nums text-green-700 dark:text-green-300">{money(p?.expectedPayouts?.totalNet)}</div>
+              <div className="text-[11px] text-muted-foreground">expected channel payouts, net of fees · counted in the runway</div>
+            </div>
+            <div className="flex gap-2">
+              <ChannelPill name="Amazon" value={money(p?.expectedPayouts?.amazonNet)} sub={`~${p?.expectedPayouts?.amazonSettlementDays ?? 14}d settle`} />
+              <ChannelPill name="Shopify" value={money(p?.expectedPayouts?.shopifyNet)} sub={`~${p?.expectedPayouts?.shopifySettlementDays ?? 3}d settle`} />
+            </div>
+          </div>
+          {!!p?.receivablesInbound && (
+            <div className="text-[11px] text-muted-foreground mt-2 pt-2 border-t border-green-200/60 dark:border-green-900/30">
+              For reference, QuickBooks books {money(p.receivablesInbound)} of marketplace A/R (an accrual journal entry) — shown but <b>not</b> counted here; confirm with Roger. The figure above is derived from real recent sales × each channel's payout timing.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Runway math */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Tile label="Cash on hand" value={money(p?.cashOnHand)} sub={p?.cashAsOf ? `as of ${p.cashAsOf}` : ""} />
-        <Tile label={`+ Projected income (${p?.windowDays ?? windowDays}d)`} value={money(p?.projectedIncome)} sub={p ? `${money(p.dailySalesRunRate)}/day run-rate` : ""} />
+        <Tile label={`+ Projected income (${p?.windowDays ?? windowDays}d)`} value={money(p?.projectedIncome)} sub={p ? `${money(p.dailySalesRunRate)}/day, net of settlement lag` : ""} />
         <Tile label="− Due in window" value={money(p?.totalDue)} sub={p ? `${money(p.tier1Due)} tax/payroll` : ""} />
         <Tile label="= Projected low" value={money(p?.projectedLow)} accent={p && p.projectedLow < 0 ? "red" : "green"}
-              sub={p && p.projectedLow < 0 ? "short before income lands" : "covered"} />
-        {/* A/R shown for visibility but NOT counted in the runway: it's currently a
-            single unverified Amazon accrual journal entry, not a granular payout feed. */}
-        <Tile label="Money on its way (A/R)" value={money(p?.receivablesInbound)}
-              sub="unverified accrual · confirm w/ Roger · not in runway" />
+              sub={p ? `incl. ${money(p.inboundWindow)} payouts landing in ${p.windowDays}d` : ""} />
       </div>
 
       <div className="flex items-center gap-2 text-sm">
@@ -138,6 +166,16 @@ export default function CashFlow() {
           <p className="text-[11px] text-muted-foreground pt-3">Every Approve / Defer / Mark-paid is recorded with who and when (audit trail). The app never pays a bill — approval is the signal for a person to pay it in the bank or QuickBooks. Tax figures are working estimates; Roger confirms.</p>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function ChannelPill({ name, value, sub }: { name: string; value: string; sub: string }) {
+  return (
+    <div className="rounded-lg border bg-background px-3 py-1.5 text-right min-w-[110px]">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{name}</div>
+      <div className="text-lg font-semibold tabular-nums">{value}</div>
+      <div className="text-[10px] text-muted-foreground">{sub}</div>
     </div>
   );
 }

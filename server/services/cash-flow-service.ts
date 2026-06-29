@@ -54,6 +54,16 @@ export interface Obligation {
   runningCashAfter: number | null;
 }
 
+export interface ExpectedPayoutsSummary {
+  amazonNet: number;
+  shopifyNet: number;
+  totalNet: number;            // sales-derived "money on its way" (net of fees) — counted in the runway
+  amazonGross: number;
+  shopifyGross: number;
+  amazonSettlementDays: number;
+  shopifySettlementDays: number;
+}
+
 export interface CashPosition {
   asOf: string;
   cashOnHand: number;
@@ -61,7 +71,9 @@ export interface CashPosition {
   dailySalesRunRate: number;
   windowDays: number;
   projectedIncome: number;     // projected sales over the window (run-rate * days)
-  receivablesInbound: number;  // A/R already earned, in transit (e.g. Amazon payout) — "money on its way"
+  receivablesInbound: number;  // QB A/R aging total (accrual — shown for reference, NOT counted)
+  expectedPayouts: ExpectedPayoutsSummary; // sales-derived channel payouts on their way (counted)
+  inboundWindow: number;       // expected payouts that LAND within windowDays (counted in projectedLow)
   totalDue: number;
   tier1Due: number;       // tax + payroll
   projectedLow: number;
@@ -205,10 +217,48 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
     from daily_sales_snapshots where date >= (${asOf}::date - 30)`))[0];
   const dailyRunRate = num(salesRow?.daily_net);
 
+  // Expected channel payouts — the DEFENSIBLE "money on its way": Amazon (trailing
+  // 14d sales) + Shopify (trailing 3d) netted by marketplace fees. Sales-derived
+  // and DB-only (lazy import, no external API in this hot read path). Unlike the
+  // QB A/R accrual above, this is granular near-cash, so it IS counted in the
+  // runway. Failure leaves zeros — never a fabricated number.
+  let expectedPayouts: ExpectedPayoutsSummary = {
+    amazonNet: 0, shopifyNet: 0, totalNet: 0, amazonGross: 0, shopifyGross: 0,
+    amazonSettlementDays: 14, shopifySettlementDays: 3,
+  };
+  let inboundWindow = 0;
+  try {
+    const { computeExpectedPayouts, inboundWithinDays } = await import("./expected-payouts-service");
+    const ep = await computeExpectedPayouts(db, asOf);
+    expectedPayouts = {
+      amazonNet: ep.amazon.netExpected, shopifyNet: ep.shopify.netExpected, totalNet: ep.totalNetExpected,
+      amazonGross: ep.amazon.grossWindow, shopifyGross: ep.shopify.grossWindow,
+      amazonSettlementDays: ep.amazon.settlementDays, shopifySettlementDays: ep.shopify.settlementDays,
+    };
+    inboundWindow = inboundWithinDays(ep, windowDays);
+  } catch (err: any) {
+    console.warn("[Cash Command] expected-payouts compute failed:", err?.message ?? err);
+  }
+
+  // Settlement-aware projected income (avoids double-counting with inboundWindow):
+  // forward sales also take ~3-14 days to settle, so only sales made in the first
+  // (windowDays − blendedLag) days actually turn into cash inside the window. The
+  // trailing pipeline (inboundWindow) covers the near-term cash; this covers the
+  // forward sales that settle before the window ends. blendedLag is the channel-mix
+  // weighted settlement lag (0 when we have no payout data → reverts to run-rate×W).
+  const amazonDaily = expectedPayouts.amazonGross / Math.max(1, expectedPayouts.amazonSettlementDays);
+  const shopifyDaily = expectedPayouts.shopifyGross / Math.max(1, expectedPayouts.shopifySettlementDays);
+  const dailyMix = amazonDaily + shopifyDaily;
+  const blendedLag =
+    dailyMix > 0
+      ? (amazonDaily * expectedPayouts.amazonSettlementDays + shopifyDaily * expectedPayouts.shopifySettlementDays) / dailyMix
+      : 0;
+  const projectedIncome = r2(dailyRunRate * Math.max(0, windowDays - blendedLag));
+
   return {
     asOf, cashOnHand, cashAsOf: cashRow?.cash_as_of ?? null,
-    dailySalesRunRate: r2(dailyRunRate), windowDays, projectedIncome: r2(dailyRunRate * windowDays),
-    receivablesInbound, totalDue: 0, tier1Due: 0, projectedLow: 0,
+    dailySalesRunRate: r2(dailyRunRate), windowDays, projectedIncome,
+    receivablesInbound, expectedPayouts, inboundWindow, totalDue: 0, tier1Due: 0, projectedLow: 0,
   };
 }
 
@@ -220,14 +270,18 @@ export async function writeCashPosition(db: any, asOf: string): Promise<void> {
   // day's row if it already exists, otherwise insert it.
   const existing = rows(await db.execute(sql`
     select id from cash_position where as_of = ${asOf}::date order by updated_at desc limit 1`))[0];
+  // expected_payouts_net = the nightly-posted "total on its way" (sales-derived,
+  // net of fees). Column added defensively in startup-checks (ADD COLUMN IF NOT
+  // EXISTS); write through coalesce so an older schema row can't error the write.
   if (existing?.id) {
     await db.execute(sql`
       update cash_position set cash_on_hand = ${p.cashOnHand}, expected_inflows = ${p.projectedIncome},
-        source = 'qbo', updated_at = now() where id = ${existing.id}`);
+        expected_payouts_net = ${p.expectedPayouts.totalNet}, source = 'qbo', updated_at = now()
+      where id = ${existing.id}`);
   } else {
     await db.execute(sql`
-      insert into cash_position (as_of, cash_on_hand, expected_inflows, source, updated_at)
-      values (${asOf}::date, ${p.cashOnHand}, ${p.projectedIncome}, 'qbo', now())`);
+      insert into cash_position (as_of, cash_on_hand, expected_inflows, expected_payouts_net, source, updated_at)
+      values (${asOf}::date, ${p.cashOnHand}, ${p.projectedIncome}, ${p.expectedPayouts.totalNet}, 'qbo', now())`);
   }
 }
 
@@ -270,7 +324,12 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
       where cash_obligations.status = 'pending'`);
     debt++;
   }
-  await writeCashPosition(db, asOf).catch(() => {});
+  // Surface (don't silently swallow) a failed cash-position write — a persistent
+  // failure here means the nightly "money on its way" post + downstream readers go
+  // stale. The catch keeps a hot page read from 500'ing, but it must be visible.
+  await writeCashPosition(db, asOf).catch((e: any) =>
+    console.error("[Cash Command] writeCashPosition failed (cash_position not updated):", e?.message ?? e),
+  );
   return { tax, debt };
 }
 
@@ -392,6 +451,17 @@ export async function compute13WeekForecast(db: any, asOf?: string): Promise<{
   const fmt = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
   const pos = await getCashPosition(db, 7, startStr);
   const weeklyInflow = r2(pos.dailySalesRunRate * 7);
+  // Expected channel payouts land early: Shopify (~3d) + ~half of Amazon (~14d) in
+  // week 0, the Amazon remainder in week 1; everything settles within ~14 days.
+  let inWk0 = 0, inWk1 = 0;
+  try {
+    const { computeExpectedPayouts, inboundWithinDays } = await import("./expected-payouts-service");
+    const ep = await computeExpectedPayouts(db, startStr);
+    inWk0 = inboundWithinDays(ep, 7);
+    inWk1 = r2(inboundWithinDays(ep, 14) - inboundWithinDays(ep, 7));
+  } catch (err: any) {
+    console.warn("[Cash Command] 13-week expected-payouts failed:", err?.message ?? err);
+  }
   const endStr = fmt(new Date(start.getTime() + 91 * 86_400_000));
   const obls = rows(await db.execute(sql`
     select due_date::text as due, amount::float8 as amount from cash_obligations
@@ -407,16 +477,18 @@ export async function compute13WeekForecast(db: any, asOf?: string): Promise<{
     const wsS = fmt(ws), weS = fmt(we);
     const outflows = r2(obls.filter((o: any) => o.due >= wsS && o.due <= weS).reduce((s: number, o: any) => s + num(o.amount), 0));
     const opening = cash;
-    // Inflow = ongoing sales run-rate only. Inbound A/R is NOT added here yet — it's
-    // an unverified Amazon accrual (see getCashFlow note); shown for visibility, not
-    // forecasted as cash until reconciled.
-    cash = r2(opening + weeklyInflow - outflows);
+    // Inflow = ongoing sales run-rate + the one-time pipeline payouts landing in
+    // weeks 0-1 (Amazon/Shopify cash already earned, net of fees). The QB A/R
+    // accrual is still excluded (unverified — see getCashFlow note).
+    const pipelineInflow = w === 0 ? inWk0 : w === 1 ? inWk1 : 0;
+    const weekInflow = r2(weeklyInflow + pipelineInflow);
+    cash = r2(opening + weekInflow - outflows);
     if (cash < lowestCash) { lowestCash = cash; lowestWeek = wsS; }
-    weeks.push({ weekStart: wsS, weekEnd: weS, openingCash: r2(opening), inflows: weeklyInflow, outflows, endingCash: cash });
+    weeks.push({ weekStart: wsS, weekEnd: weS, openingCash: r2(opening), inflows: weekInflow, outflows, endingCash: cash });
   }
   return {
     startingCash: r2(pos.cashOnHand), weeklyInflow, weeks, lowestCash, lowestWeek,
-    note: "OPTIMISTIC / best-case. Inflows are GROSS trailing-30d sales run-rate × 7 (costs NOT deducted, so true net cash inflow is materially lower), and outflows only include obligations that carry a due date and amount — debt service (MCA daily debits) and tax read $0 until their amounts are entered. Read the SHAPE (weekly bill timing, trajectory), not the level. Operational estimate; QuickBooks is authoritative.",
+    note: "OPTIMISTIC / best-case. Inflows are GROSS trailing-30d sales run-rate × 7 (costs NOT deducted, so true net cash inflow is materially lower) PLUS the one-time Amazon/Shopify pipeline payouts landing in weeks 0-1 (sales-estimate, net of fees). Outflows only include obligations that carry a due date and amount — debt service (MCA daily debits) and tax read $0 until their amounts are entered. Read the SHAPE (weekly bill timing, trajectory), not the level. Operational estimate; QuickBooks is authoritative.",
   };
 }
 
@@ -456,11 +528,14 @@ export async function getCashFlow(db: any, opts: { windowDays?: number; asOf?: s
   const tier1Due = r2(active.filter((o) => o.tier === "tier1").reduce((s, o) => s + o.amount, 0));
 
   return {
-    // projectedLow deliberately EXCLUDES receivablesInbound: the A/R is currently a
-    // single unverified Amazon accrual journal entry (not granular in-transit
-    // settlements), so it is shown for visibility but not counted in the runway
-    // until reconciled. Re-add it here once A/R is a verified payout feed.
-    position: { ...position, totalDue, tier1Due, projectedLow: r2(position.cashOnHand + position.projectedIncome - totalDue) },
+    // projectedLow COUNTS inboundWindow — the sales-derived expected channel payouts
+    // (Amazon + Shopify, net of fees) that actually land within this window. That is
+    // defensible near-cash, unlike the QB A/R accrual (receivablesInbound), which is
+    // a single unverified Amazon journal entry shown for reference only and NOT added.
+    position: {
+      ...position, totalDue, tier1Due,
+      projectedLow: r2(position.cashOnHand + position.projectedIncome + position.inboundWindow - totalDue),
+    },
     obligations: ranked,
     generatedAt: new Date().toISOString(),
   };

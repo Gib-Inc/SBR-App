@@ -116,20 +116,30 @@ export function assembleMonth(month: string, inp: MonthInputs): MonthSpend {
 }
 
 // Short in-process memo: the canonical series is read by many surfaces (Monthly
-// Summary, finances, runway, the per-month ROAS-reconciliation loop) within one
-// request cycle, and the underlying QB/ad data changes at most on a sync (minutes-
-// to-daily). A 60s TTL keyed by monthsBack collapses those repeated reads to one
-// query set without ever serving stale-by-more-than-a-minute numbers.
-const _memo = new Map<number, { at: number; data: MonthSpend[] }>();
+// Summary, finances, runway, the per-month ROAS-reconciliation loop, the range
+// engine) within one request cycle, and the underlying QB/ad data changes at most
+// on a sync (minutes-to-daily). We compute ONE full-horizon snapshot and slice it
+// per caller, so every surface — whatever monthsBack it asks for — reads the SAME
+// snapshot. (Keying by monthsBack would let a 12-month caller and a 14-month caller
+// hold two snapshots up to 60s apart and disagree for a shared month — the exact
+// cross-surface drift this engine exists to kill.) Horizon 48 covers any realistic
+// window; the GROUP-BY-month query only returns months that actually have data.
+const _FULL_HORIZON = 48;
 const _MEMO_TTL_MS = 60_000;
+let _memo: { at: number; data: MonthSpend[] } | null = null;
 
-/** DB (read-only): gather all per-channel sources and assemble the canonical series. */
+/**
+ * DB (read-only): the canonical per-channel monthly series, trailing `monthsBack`
+ * months. Backed by one memoized full-horizon snapshot (see above), so two callers
+ * asking for different monthsBack still read the same underlying numbers. Returns a
+ * fresh array each call (callers must treat the MonthSpend objects as read-only).
+ */
 export async function getCanonicalMonthlySpendByChannel(db: any, monthsBack = 12): Promise<MonthSpend[]> {
-  const hit = _memo.get(monthsBack);
-  if (hit && Date.now() - hit.at < _MEMO_TTL_MS) return hit.data;
-  const data = await _computeCanonicalMonthlySpendByChannel(db, monthsBack);
-  _memo.set(monthsBack, { at: Date.now(), data });
-  return data;
+  if (!_memo || Date.now() - _memo.at >= _MEMO_TTL_MS) {
+    _memo = { at: Date.now(), data: await _computeCanonicalMonthlySpendByChannel(db, _FULL_HORIZON) };
+  }
+  const data = _memo.data;
+  return monthsBack >= data.length ? data.slice() : data.slice(-monthsBack);
 }
 
 async function _computeCanonicalMonthlySpendByChannel(db: any, monthsBack: number): Promise<MonthSpend[]> {

@@ -99,6 +99,57 @@ function monthsSinceStart(start: string, nowMs: number = Date.now()): number {
 }
 
 /**
+ * Channels the canonical engine sources from QuickBooks / the compliant tracker
+ * (NEVER ad_metrics). For these, a canonical gap must NOT fall back to live
+ * ad_metrics spend — that would resurrect the ~3.65x-inflated Google sum or the
+ * compliance-forbidden Meta feed. A gap is reported as 0 (the same way the monthly
+ * Summary folds a null channel into its total: `spend ?? 0`), never an inflated /
+ * fabricated number.
+ */
+export const GOVERNED_CHANNELS = new Set<string>(["GOOGLE", "META"]);
+
+/**
+ * Pure: merge canonical per-channel spend with live ad_metrics into the range
+ * engine's platform list. SPEND = canonical where present; for a canonical gap,
+ * GOVERNED channels report 0 (honest "no booked spend yet"), every other platform
+ * (Amazon/Pinterest — which canonical itself sources from ad_metrics — plus anything
+ * canonical doesn't model) falls back to live ad_metrics. Impressions/clicks always
+ * come from live, so breakdown tabs keep their secondary metrics.
+ */
+export function mergeRangePlatforms(
+  canonical: Record<string, number>,
+  live: Record<string, { spend?: number; impressions?: number | null; clicks?: number | null }>,
+  governed: Set<string> = GOVERNED_CHANNELS,
+): MergedPlatform[] {
+  const names = new Set<string>([...Object.keys(canonical), ...Object.keys(live)]);
+  const out: MergedPlatform[] = [];
+  for (const p of Array.from(names)) {
+    const canon = canonical[p];
+    let spend: number;
+    let source: MergedPlatform["source"];
+    if (canon != null) {
+      spend = canon;
+      source = "canonical";
+    } else if (governed.has(p)) {
+      spend = 0; // QB/tracker channel with a gap → honest 0, never the inflated live feed
+      source = "canonical";
+    } else {
+      spend = live[p]?.spend ?? 0;
+      source = "live";
+    }
+    out.push({
+      platform: p,
+      spend: r2(spend),
+      impressions: live[p]?.impressions ?? null,
+      clicks: live[p]?.clicks ?? null,
+      source,
+    });
+  }
+  out.sort((a, b) => b.spend - a.spend);
+  return out;
+}
+
+/**
  * Per-platform corrected ad spend over [start, end] (YYYY-MM-DD, inclusive).
  *
  * SPEND comes from the canonical monthly engine (canonical-spend-service:
@@ -138,37 +189,20 @@ export async function getCorrectedAdSpendRange(
   try {
     const { getCanonicalMonthlySpendByChannel } = await import("./canonical-spend-service");
     const { db } = await import("../db");
-    // Round monthsBack up to a stable bucket (≥14) so per-month loop callers
-    // (e.g. ROAS-by-channel reconciliation) all share one cache key — the canonical
-    // engine memoizes by monthsBack, so this collapses an N-month loop's N fetches
-    // to 1. Over-fetching months is harmless: proration only counts overlap.
-    const monthsBack = Math.min(24, Math.max(14, monthsSinceStart(start) + 1));
+    // Cover the whole window back to its start (no upper cap — the canonical engine
+    // computes one memoized full-horizon snapshot and slices it, so asking for more
+    // months is free and never silently truncates a wide window's early months).
+    const monthsBack = Math.max(14, monthsSinceStart(start) + 1);
     const months = await getCanonicalMonthlySpendByChannel(db, monthsBack);
     canonical = prorateMonthsToRange(months, start, end);
   } catch {
     /* canonical unavailable → fall back to live ad_metrics below (never empty) */
   }
 
-  // MERGE: spend = canonical (authoritative) where present, else the live
-  // ad_metrics fallback; impressions/clicks always live.
-  const names = new Set<string>([...Object.keys(canonical), ...Object.keys(live)]);
-  const platforms: MergedPlatform[] = [];
-  for (const p of Array.from(names)) {
-    const canon = canonical[p];
-    // Use canonical whenever it HAS data for this platform (key present) — including
-    // a real 0. Only a platform canonical can't cover at all (key absent) falls back
-    // to live ad_metrics. A `> 0` guard here would resurrect inflated ad_metrics for
-    // a legitimately-zero canonical month.
-    const useCanon = canon != null;
-    platforms.push({
-      platform: p,
-      spend: r2(useCanon ? (canon as number) : (live[p]?.spend ?? 0)),
-      impressions: live[p]?.impressions ?? null,
-      clicks: live[p]?.clicks ?? null,
-      source: useCanon ? "canonical" : "live",
-    });
-  }
-  platforms.sort((a, b) => b.spend - a.spend);
+  // MERGE: spend = canonical where present; a canonical gap on a GOVERNED channel
+  // (Google/Meta — QB/tracker-sourced) reports 0 rather than the inflated/forbidden
+  // live ad_metrics feed; other platforms fall back to live. Impressions/clicks live.
+  const platforms = mergeRangePlatforms(canonical, live);
 
   const spendByPlatform: Record<string, number> = {};
   let total = 0;
@@ -285,8 +319,20 @@ export async function getAdSpendCorrection(
   for (const [p, c] of Object.entries(corrected.spendByPlatform)) {
     if (raw[p] && raw[p] > 0) factorByPlatform[p] = c / raw[p];
   }
-  const correctedTotal = corrected.totalAdSpend || 0;
-  const globalFactor = rawTotal > 0 ? correctedTotal / rawTotal : 1;
+  // globalFactor reconciles ONLY the platforms that actually appear in raw
+  // ad_metrics_daily. A canonical-only channel (Meta = QB/tracker, ZERO ad_metrics
+  // rows) must not be folded into a blended factor that then scales platformless /
+  // per-SKU ad_metrics breakdowns (querySpendPacing, queryProductPerformance, the
+  // YTD weekly column) — that would smear Meta's dollars onto the Google/Amazon SKUs
+  // that are the only ones carrying rows, inflating their spend and crushing their
+  // ROAS into false "loser" flags. Per-platform callers use factorByPlatform; this
+  // blended factor lives entirely inside the ad_metrics universe.
+  let correctedForRaw = 0;
+  for (const p of Object.keys(raw)) {
+    const c = corrected.spendByPlatform[p];
+    correctedForRaw += c != null ? c : raw[p];
+  }
+  const globalFactor = rawTotal > 0 ? correctedForRaw / rawTotal : 1;
   const correctSpend = (platform: string | null | undefined, rawSpend: number) => {
     const f = factorByPlatform[String(platform || "").toUpperCase()];
     const factor = f != null && isFinite(f) ? f : globalFactor;

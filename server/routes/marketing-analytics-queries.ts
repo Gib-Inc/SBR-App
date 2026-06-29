@@ -206,9 +206,12 @@ export async function querySeasonalIntelligence(db: DB, currentYear: number, com
   // up with every other spend figure on the page.
   let factor = 1;
   try {
-    const { corrected } = await getAdSpendCorrection(365);
-    const rawYtd = rows(convTrends).reduce((s: number, r: any) => s + (Number(r.spend) || 0), 0);
-    if (rawYtd > 0 && corrected.totalAdSpend != null) factor = (corrected.totalAdSpend || 0) / rawYtd;
+    // Use the ad_metrics-restricted globalFactor (NOT corrected.totalAdSpend / rawYtd):
+    // totalAdSpend now includes canonical Meta, which has no rows in this weekly
+    // ad_metrics series, so dividing by it would smear Meta's spend across the
+    // Google/Amazon weeks. globalFactor reconciles only the platforms present here.
+    const { globalFactor } = await getAdSpendCorrection(365);
+    if (globalFactor > 0 && isFinite(globalFactor)) factor = globalFactor;
   } catch { /* leave unscaled */ }
 
   return {

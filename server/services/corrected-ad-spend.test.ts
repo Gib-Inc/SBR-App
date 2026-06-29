@@ -33,6 +33,7 @@ import {
   daysInMonth,
   monthRangeOverlapFraction,
   prorateMonthsToRange,
+  mergeRangePlatforms,
 } from "./corrected-ad-spend";
 
 describe("allocateBreakdownToTotal", () => {
@@ -168,5 +169,48 @@ describe("prorateMonthsToRange", () => {
     const out = prorateMonthsToRange(months, "2026-03-30", "2026-03-31");
     expect(out.GOOGLE).toBeCloseTo(5000 * (2 / 31), 2);
     expect(out.META).toBeCloseTo(63164 * (2 / 31), 2);
+  });
+});
+
+describe("mergeRangePlatforms (canonical vs live fallback)", () => {
+  it("uses canonical spend (incl. a real 0) when canonical has the channel", () => {
+    const out = mergeRangePlatforms(
+      { GOOGLE: 4059, AMAZON: 0 },
+      { GOOGLE: { spend: 99999, impressions: 10, clicks: 2 }, AMAZON: { spend: 5, impressions: 1, clicks: 1 } },
+    );
+    const g = out.find((p) => p.platform === "GOOGLE")!;
+    const a = out.find((p) => p.platform === "AMAZON")!;
+    expect(g.spend).toBe(4059); // canonical, NOT the inflated live 99999
+    expect(g.source).toBe("canonical");
+    expect(a.spend).toBe(0); // real canonical 0 trusted, not live 5
+  });
+
+  it("a GOVERNED-channel gap (Google/Meta) reports 0, NEVER the inflated/forbidden live feed", () => {
+    // QB hasn't booked this window yet -> canonical has no GOOGLE/META key. live
+    // ad_metrics carries the 3.65x-inflated Google sum and the compliance-forbidden
+    // Meta feed. The merge must NOT resurrect them.
+    const out = mergeRangePlatforms(
+      {}, // canonical gap for everything
+      {
+        GOOGLE: { spend: 25713, impressions: 100, clicks: 20 },
+        META: { spend: 8000, impressions: 50, clicks: 5 },
+      },
+    );
+    const g = out.find((p) => p.platform === "GOOGLE")!;
+    const m = out.find((p) => p.platform === "META")!;
+    expect(g.spend).toBe(0); // not 25713
+    expect(m.spend).toBe(0); // not 8000
+    expect(g.source).toBe("canonical");
+    expect(g.impressions).toBe(100); // impressions still surfaced from live
+  });
+
+  it("a NON-governed gap (Amazon/Pinterest) falls back to live ad_metrics (its real source)", () => {
+    const out = mergeRangePlatforms(
+      {}, // canonical gap
+      { AMAZON: { spend: 2150, impressions: 9, clicks: 3 }, PINTEREST: { spend: 0, impressions: 0, clicks: 0 } },
+    );
+    const a = out.find((p) => p.platform === "AMAZON")!;
+    expect(a.spend).toBe(2150); // live fallback is correct for ad_metrics-sourced channels
+    expect(a.source).toBe("live");
   });
 });

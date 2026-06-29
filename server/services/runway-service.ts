@@ -124,8 +124,18 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     const start = isoDaysAgo(windowDays);
     const end = isoToday();
 
-    const adRows = await storage.getAdMetricsInRange(start, end);
-    const totalAdSpend = adRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
+    // Corrected ad spend (Windsor-authoritative > upload > deduped live), NOT the raw
+    // ad_metrics_daily sum — that table has overlapping SKU/campaign-grain rows that
+    // multi-count spend ~3x, which would overstate burn and shorten the runway falsely.
+    let totalAdSpend = 0;
+    try {
+      const { getCorrectedAdSpendRange } = await import("./corrected-ad-spend");
+      const corrected = await getCorrectedAdSpendRange(start, end);
+      totalAdSpend = corrected.totalAdSpend ?? 0;
+    } catch {
+      const adRows = await storage.getAdMetricsInRange(start, end);
+      totalAdSpend = adRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
+    }
     const dailyAdSpend = round2(totalAdSpend / windowDays);
 
     const salesRows = await storage.getDailySalesSnapshotsInRange(start, end);

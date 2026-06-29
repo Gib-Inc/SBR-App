@@ -22,7 +22,9 @@ const MONTHS: Record<string, number> = {
   jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
 };
 function parseMonth(m: string): { year: number; idx: number } | null {
-  const mm = String(m || "").trim().match(/^([A-Za-z]{3})[A-Za-z]*\s+(\d{4})$/);
+  // Allow a trailing partial-period suffix like "Jun 2026 (1-20)" — the anchored $
+  // silently dropped the current/in-progress month, so the summary looked stale.
+  const mm = String(m || "").trim().match(/^([A-Za-z]{3})[A-Za-z]*\s+(\d{4})\b/);
   if (!mm) return null;
   const idx = MONTHS[mm[1].toLowerCase()];
   if (idx == null) return null;

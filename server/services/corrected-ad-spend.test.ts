@@ -103,46 +103,9 @@ describe("reconcileRoasByMonthChannel", () => {
   });
 });
 
-describe("getCorrectedMonthlyAdSpend — collapse + precedence (anti-double-count)", () => {
-  it("collapses overlapping Windsor rolling-30d windows to ONE (never sums them)", async () => {
-    // Three daily rolling windows, all period_start in May, overlapping ~29 days.
-    // Blind sum would be 9234+9613+9871 = 28,718. Correct = latest window 9,871.
-    h.state.active = [
-      snap("GOOGLE", "windsor:google_ads", "2026-05-08", "2026-06-06", 9234),
-      snap("GOOGLE", "windsor:google_ads", "2026-05-09", "2026-06-07", 9613),
-      snap("GOOGLE", "windsor:google_ads", "2026-05-10", "2026-06-08", 9871),
-    ];
-    const out = await getCorrectedMonthlyAdSpend();
-    expect(out.get("2026-05")!.byPlatform.GOOGLE).toBe(9871);
-    expect(out.get("2026-05")!.byPlatform.GOOGLE).not.toBe(28718);
-  });
-
-  it("Windsor beats an overlapping upload for the same channel/month (no sum)", async () => {
-    h.state.active = [
-      snap("GOOGLE", "windsor:google_ads", "2026-05-01", "2026-05-31", 10000),
-      snap("GOOGLE", "upload:google.csv", "2026-05-02", "2026-05-30", 50000),
-    ];
-    const out = await getCorrectedMonthlyAdSpend();
-    expect(out.get("2026-05")!.byPlatform.GOOGLE).toBe(10000); // windsor wins, CSV not added
-  });
-
-  it("keeps non-overlapping months separate (legitimately additive)", async () => {
-    h.state.active = [
-      snap("GOOGLE", "windsor:google_ads", "2026-04-01", "2026-04-30", 4000),
-      snap("GOOGLE", "windsor:google_ads", "2026-05-01", "2026-05-31", 5000),
-    ];
-    const out = await getCorrectedMonthlyAdSpend();
-    expect(out.get("2026-04")!.byPlatform.GOOGLE).toBe(4000);
-    expect(out.get("2026-05")!.byPlatform.GOOGLE).toBe(5000);
-  });
-
-  it("keeps Meta from the manual tracker (Windsor doesn't cover Meta)", async () => {
-    h.state.active = [
-      snap("META", "manual:meta-tracker", "2026-06-01", "2026-06-07", 2073.67),
-      snap("META", "manual:meta-tracker", "2026-06-08", "2026-06-14", 3636.37),
-    ];
-    const out = await getCorrectedMonthlyAdSpend();
-    // two non-overlapping weekly windows in June → summed (correct): 5710.04
-    expect(out.get("2026-06")!.byPlatform.META).toBeCloseTo(5710.04, 2);
-  });
-});
+// NOTE: getCorrectedMonthlyAdSpend is now a thin wrapper over the canonical spend
+// engine (canonical-spend-service). Its snapshot collapse/precedence behavior moved
+// there; coverage lives in canonical-spend-service.test.ts (assembleMonth) +
+// unified-performance-service.test.ts (monthlyOverlapSplit, filterCompliantSnapshots,
+// collapseOverlappingSnapshots). The old snapshot-mock tests for this function were
+// removed as obsolete.

@@ -245,44 +245,27 @@ export interface MonthlyPlatformSpend {
  * Returns Map<'YYYY-MM', MonthlyPlatformSpend>.
  */
 export async function getCorrectedMonthlyAdSpend(): Promise<Map<string, MonthlyPlatformSpend>> {
+  // CANONICAL: source per-channel monthly spend from the single source of truth
+  // (canonical-spend-service: Google=QB validated, Meta=QB-Facebook/compliant-tracker,
+  // Amazon/Pinterest=ad_metrics) instead of the snapshot pile, which carried the
+  // Windsor-Google ~3x inflation, no Windsor-Meta compliance filter, and the
+  // period_start-only month-straddle bug. Every consumer (Monthly Ad Spend, LTV-CAC,
+  // breakeven trend) inherits the correction here. Failure → empty map (callers fall
+  // back to historical_monthly_sales).
   const out = new Map<string, MonthlyPlatformSpend>();
-  let snaps: any[] = [];
   try {
-    snaps = (await storage.getActiveMarketingSpendSnapshots()) as any[]; // superseded=false only
+    const { getCanonicalMonthlySpendByChannel } = await import("./canonical-spend-service");
+    const { db } = await import("../db");
+    for (const m of await getCanonicalMonthlySpendByChannel(db, 14)) {
+      const byPlatform: Record<string, number> = {};
+      for (const ch of Object.keys(m.byChannel)) {
+        const sp = (m.byChannel as any)[ch]?.spend;
+        if (sp != null && sp > 0) byPlatform[ch] = r2(sp);
+      }
+      out.set(m.month, { byPlatform, total: r2(m.channelTotal) });
+    }
   } catch {
-    return out;
-  }
-  // Group rows by (month, platform, tier), COLLAPSE overlapping windows within each
-  // group before summing (Layer A — stops Windsor's daily rolling-30d windows from
-  // multi-counting), THEN apply cross-tier precedence: windsor beats upload for the
-  // same (month, platform). See ADSPEND-DEDUP-SPEC.md.
-  const groups = new Map<string, any[]>(); // key: `${month}|${platform}|${tier}`
-  for (const s of snaps) {
-    const ps = String(s.periodStart || s.period_start || "");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(ps)) continue;
-    const month = ps.slice(0, 7); // YYYY-MM
-    const platform = String(s.platform || "OTHER").toUpperCase();
-    const tier = String(s.source || "").toLowerCase().startsWith("windsor") ? "windsor" : "upload";
-    const key = `${month}|${platform}|${tier}`;
-    const g = groups.get(key);
-    if (g) g.push(s); else groups.set(key, [s]);
-  }
-  const tierTotals = new Map<string, { windsor?: number; upload?: number }>(); // key: month|platform
-  for (const [key, group] of Array.from(groups.entries())) {
-    const [month, platform, tier] = key.split("|");
-    const sum = collapseOverlappingSnapshots(group).reduce((acc, s: any) => acc + (Number(s.spend) || 0), 0);
-    const mk = `${month}|${platform}`;
-    const t = tierTotals.get(mk) || {};
-    (t as any)[tier] = ((t as any)[tier] || 0) + sum;
-    tierTotals.set(mk, t);
-  }
-  for (const [mk, t] of Array.from(tierTotals.entries())) {
-    const [month, platform] = mk.split("|");
-    const val = t.windsor != null ? t.windsor : (t.upload || 0); // windsor beats upload
-    const cur = out.get(month) || { byPlatform: {}, total: 0 };
-    cur.byPlatform[platform] = (cur.byPlatform[platform] || 0) + val;
-    cur.total = r2(cur.total + val);
-    out.set(month, cur);
+    /* canonical unavailable → empty map (callers fall back to historical_monthly_sales) */
   }
   return out;
 }

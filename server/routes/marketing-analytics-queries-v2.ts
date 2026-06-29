@@ -621,6 +621,16 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
   const adsMap = new Map((rows(adsRaw) as any[]).map(r => [r.month, r]));
   const histMap = new Map((rows(hist) as any[]).map(r => [r.month, r]));
 
+  // Canonical per-channel MEDIA spend (Google=QB, Meta=QB-Facebook/compliant-tracker,
+  // Amazon/Pinterest=ad_metrics). This is the MEDIA-ROAS basis — distinct from the
+  // blendedRoas below, which is MER (revenue ÷ total booked marketing incl. agency/
+  // creative). Keyed YYYY-MM. Failure → media fields omitted (never fabricated).
+  const canonByMonth = new Map<string, any>();
+  try {
+    const { getCanonicalMonthlySpendByChannel } = await import("../services/canonical-spend-service");
+    for (const c of await getCanonicalMonthlySpendByChannel(db, months)) canonByMonth.set(c.month, c);
+  } catch { /* canonical unavailable → media fields null */ }
+
   // The current calendar month is always LIVE (QB lags a month), so never let a
   // partial QB row override it. Window the output to the requested months.
   const dNow = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Denver" }));
@@ -629,7 +639,7 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
   const cutMonth = `${cut.getFullYear()}-${String(cut.getMonth() + 1).padStart(2, "0")}-01`;
 
   const allMonths = new Set(
-    [...salesMap.keys(), ...adsMap.keys(), ...histMap.keys()].filter((m) => m >= cutMonth),
+    [...Array.from(salesMap.keys()), ...Array.from(adsMap.keys()), ...Array.from(histMap.keys())].filter((m) => m >= cutMonth),
   );
 
   return Array.from(allMonths).sort().map(month => {
@@ -656,14 +666,22 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
     const spendSource = useQbSpend ? 'quickbooks' : (liveSpend > 0 ? 'ad_metrics' : 'none');
 
     const adRevenue = Number(a.ad_revenue) || 0;
+    const canon = canonByMonth.get(month.slice(0, 7));
+    const channelMediaSpend = canon ? canon.channelTotal : null; // media only (Google+Meta+Amazon+Pinterest)
     return {
       month,
       totalRevenue,
       revenueSource,
-      adSpend,
+      adSpend, // = total booked marketing (MER denominator: media + agency/creative/etc.)
       adRevenue,
       spendSource,
-      blendedRoas: adSpend > 0 ? r2(totalRevenue / adSpend) : null,
+      blendedRoas: adSpend > 0 ? r2(totalRevenue / adSpend) : null, // MER (revenue ÷ all marketing)
+      // MEDIA layer (canonical engine) — kept DISTINCT from MER so a channel slice is
+      // never read as the company. mediaRoas = revenue ÷ channel media spend.
+      channelMediaSpend,
+      mediaRoas: channelMediaSpend && channelMediaSpend > 0 ? r2(totalRevenue / channelMediaSpend) : null,
+      byChannel: canon ? canon.byChannel : null,
+      otherMarketing: canon ? canon.otherMarketing : null,
       adRoas: liveSpend > 0 && adRevenue > 0 ? r2(adRevenue / liveSpend) : null,
       cac: s.new_customers > 0 && adSpend > 0 ? r2(adSpend / s.new_customers) : null,
       newCustomers: s.new_customers,

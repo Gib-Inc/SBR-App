@@ -104,7 +104,13 @@ export async function computeCreditLines(): Promise<{
   const totalBalance = Math.round(lines.reduce((s, l) => s + l.balance, 0) * 100) / 100;
   const withLimit = lines.filter((l) => l.creditLimit != null);
   const totalLimit = withLimit.length ? Math.round(withLimit.reduce((s, l) => s + (l.creditLimit || 0), 0) * 100) / 100 : null;
-  const totalAvailable = totalLimit != null ? Math.round((totalLimit - withLimit.reduce((s, l) => s + l.balance, 0)) * 100) / 100 : null;
+  // Sum the already-floored per-line available (each = max(0, limit-balance)) instead of
+  // pooled (totalLimit - totalBalance): you can't draw one line's room to cover another's
+  // over-limit balance, and this guarantees the headline equals the sum of the lines the
+  // operator sees. (Audit #19.)
+  const totalAvailable = withLimit.length
+    ? Math.round(withLimit.reduce((s, l) => s + (l.available || 0), 0) * 100) / 100
+    : null;
   const blendedUtilization = totalLimit && totalLimit > 0 ? Math.round((withLimit.reduce((s, l) => s + l.balance, 0) / totalLimit) * 1000) / 10 : null;
 
   // Loans/MCAs (not cards) are where APR + due day drive DSCR / runway / payoff order;

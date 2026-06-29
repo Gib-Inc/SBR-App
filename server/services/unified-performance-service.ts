@@ -141,6 +141,66 @@ export function normalizeAdPlatform(raw: string): string | null {
   return null; // traffic source, not a paid-ad platform
 }
 
+/**
+ * Split a spend window [periodStart, periodEnd] across the calendar months it
+ * touches, by INCLUSIVE day-fraction (assumes ~uniform daily spend). Returns
+ * [{month:'YYYY-MM', spend}], one entry per month touched. A window inside one
+ * month returns a single entry; a straddling window splits proportionally — e.g.
+ * Apr 27→May 19 ($11,733) → ~$2,041 Apr / ~$9,692 May. This is the per-month
+ * counterpart of overlapFraction, and fixes the bug where snapshots were keyed by
+ * period_start month only (losing the spill into later months). Degenerate /
+ * unparseable input → [] (caller skips; never fabricates a month). Pure.
+ */
+export function monthlyOverlapSplit(
+  periodStart: string,
+  periodEnd: string,
+  spend: number,
+): Array<{ month: string; spend: number }> {
+  const DAY = 86400000;
+  const ps = Date.parse(String(periodStart).slice(0, 10) + "T00:00:00Z");
+  const pe = Date.parse(String(periodEnd).slice(0, 10) + "T00:00:00Z");
+  if (Number.isNaN(ps) || Number.isNaN(pe) || pe < ps) return [];
+  const totalDays = (pe - ps) / DAY + 1;
+  const amt = Number(spend) || 0;
+  const out: Array<{ month: string; spend: number }> = [];
+  let y = new Date(ps).getUTCFullYear();
+  let m = new Date(ps).getUTCMonth();
+  // Hard cap (a window can't span more than ~its day count in months) so a bad
+  // date can never loop forever.
+  for (let guard = 0; guard < 600; guard++) {
+    const mStart = Date.UTC(y, m, 1);
+    const mEndExcl = Date.UTC(y, m + 1, 1);
+    const mEnd = mEndExcl - DAY; // last day of month (inclusive)
+    const ovStart = Math.max(ps, mStart);
+    const ovEnd = Math.min(pe, mEnd);
+    const ovDays = (ovEnd - ovStart) / DAY + 1;
+    if (ovDays > 0) {
+      out.push({ month: `${y}-${String(m + 1).padStart(2, "0")}`, spend: r2(amt * (ovDays / totalDays)) });
+    }
+    if (mEndExcl > pe) break;
+    m += 1;
+    if (m > 11) { m = 0; y += 1; }
+  }
+  return out;
+}
+
+/**
+ * Compliance guard: Meta ad spend must NEVER come from Windsor. Drops every
+ * snapshot row whose normalized platform is META AND whose source starts with
+ * 'windsor'. Every other platform (and any non-Windsor Meta upload/CSV) passes
+ * through untouched. Enforce this in CODE, not just by what data happens to exist.
+ * Pure.
+ */
+export function filterCompliantSnapshots<T extends { platform?: string | null; source?: string | null }>(
+  rows: T[],
+): T[] {
+  return (rows || []).filter((s) => {
+    const isMeta = normalizeAdPlatform(String(s.platform || "")) === "META";
+    const isWindsor = String(s.source || "").toLowerCase().startsWith("windsor");
+    return !(isMeta && isWindsor);
+  });
+}
+
 const MONTH_NUM: Record<string, number> = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
 
 /**

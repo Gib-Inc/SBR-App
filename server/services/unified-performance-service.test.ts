@@ -5,8 +5,67 @@ import {
   normalizeAdPlatform,
   proratePLMarketing,
   overlapFraction,
+  monthlyOverlapSplit,
+  filterCompliantSnapshots,
   type UnifiedInput,
 } from "./unified-performance-service";
+
+describe("monthlyOverlapSplit (split a window across calendar months)", () => {
+  it("a window inside one month returns one entry with the full spend", () => {
+    expect(monthlyOverlapSplit("2026-06-01", "2026-06-09", 2652)).toEqual([{ month: "2026-06", spend: 2652 }]);
+  });
+  it("splits a straddling window by inclusive day-fraction (the Apr27-May19 Meta CSV)", () => {
+    // Apr 27-30 = 4 days, May 1-19 = 19 days, total 23. $11,733 → 4/23 + 19/23.
+    const parts = monthlyOverlapSplit("2026-04-27", "2026-05-19", 11733);
+    expect(parts).toEqual([
+      { month: "2026-04", spend: 2040.52 }, // 11733 * 4/23
+      { month: "2026-05", spend: 9692.48 }, // 11733 * 19/23
+    ]);
+    // The split must conserve the total (no spend created or lost).
+    expect(parts.reduce((s, p) => s + p.spend, 0)).toBeCloseTo(11733, 1);
+  });
+  it("handles a window spanning three months, conserving the total", () => {
+    const parts = monthlyOverlapSplit("2026-05-15", "2026-07-10", 30000);
+    expect(parts.map((p) => p.month)).toEqual(["2026-05", "2026-06", "2026-07"]);
+    expect(parts.reduce((s, p) => s + p.spend, 0)).toBeCloseTo(30000, 1);
+  });
+  it("a single-day window returns that month at full spend", () => {
+    expect(monthlyOverlapSplit("2026-06-20", "2026-06-20", 8344.81)).toEqual([{ month: "2026-06", spend: 8344.81 }]);
+  });
+  it("degenerate / unparseable input returns [] (never fabricates a month)", () => {
+    expect(monthlyOverlapSplit("2026-06-10", "2026-06-01", 100)).toEqual([]); // end before start
+    expect(monthlyOverlapSplit("", "2026-06-01", 100)).toEqual([]);
+    expect(monthlyOverlapSplit("not-a-date", "also-bad", 100)).toEqual([]);
+  });
+});
+
+describe("filterCompliantSnapshots (Meta must never come from Windsor)", () => {
+  const rows = [
+    { platform: "META", source: "windsor:meta" },
+    { platform: "FACEBOOK", source: "windsor:facebook_ads" },
+    { platform: "META", source: "manual:meta-csv" },
+    { platform: "META", source: "upload:facebook-tracker-june" },
+    { platform: "GOOGLE", source: "windsor:google_ads" },
+    { platform: "AMAZON", source: "windsor:amazon_ads" },
+  ];
+  it("drops Windsor Meta/Facebook rows but keeps compliant Meta + all other channels", () => {
+    const out = filterCompliantSnapshots(rows);
+    expect(out).toEqual([
+      { platform: "META", source: "manual:meta-csv" },
+      { platform: "META", source: "upload:facebook-tracker-june" },
+      { platform: "GOOGLE", source: "windsor:google_ads" }, // Windsor Google is allowed
+      { platform: "AMAZON", source: "windsor:amazon_ads" },
+    ]);
+  });
+  it("is case-insensitive on the windsor source prefix and the Meta aliases", () => {
+    expect(filterCompliantSnapshots([{ platform: "fb", source: "WINDSOR:meta" }])).toEqual([]);
+    expect(filterCompliantSnapshots([{ platform: "Instagram", source: "Windsor:ig" }])).toEqual([]);
+  });
+  it("empty / missing input is safe", () => {
+    expect(filterCompliantSnapshots([])).toEqual([]);
+    expect(filterCompliantSnapshots(undefined as any)).toEqual([]);
+  });
+});
 
 describe("overlapFraction (prorate windows to a query range)", () => {
   const RS = "2026-05-16", RE = "2026-06-15"; // a ~last-30-days range

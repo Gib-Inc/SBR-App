@@ -85,11 +85,20 @@ export default function Finances() {
   const monthly = data?.monthly ?? [];
   const bs = data?.balanceSheet;
 
-  const months = monthly.map((m) => m.month);
-  const income = monthly.map((m) => n(m.totalIncome));
-  const netInc = monthly.map((m) => n(m.netIncome));
+  // Closed months only — exclude any partial-period row (label like "Jun 2026 (1-20)")
+  // so an in-progress month never distorts YTD or the burn/runway headline.
+  const closed = monthly.filter((m) => !/\(/.test(String(m.month)));
+  const months = closed.map((m) => m.month);
+  const income = closed.map((m) => n(m.totalIncome));
+  const netInc = closed.map((m) => n(m.netIncome));
   const last = monthly[monthly.length - 1];
-  const burn3 = avg(netInc.slice(-3).map((x) => -x));
+  // Burn / runway / company-health come from the LIVE QB trailing-30d P&L
+  // (qbLive.netIncome) — the truth — NOT the monthly_financials rollup, which lagged
+  // and was inflated by the QB "Match Shopify" double-count (it showed phantom profit
+  // and a "HEALTHY" badge while the company is losing money). Fall back to the
+  // trailing-3-closed-month average only when no live snapshot exists.
+  const liveNet = data?.qbLive?.netIncome ?? null;
+  const burn3 = liveNet != null ? -liveNet : avg(netInc.slice(-3).map((x) => -x));
   const cash = bs && bs.cash != null ? bs.cash : 0;
   const runwayMo = burn3 > 0 ? cash / burn3 : null;
   const ytdIdx = months.map((m, i) => (/2026/.test(m) ? i : -1)).filter((i) => i >= 0);
@@ -134,7 +143,7 @@ export default function Finances() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <Kpi label="Cash on Hand" value={fmt(cash)} sub="bank accounts" tone={runwayMo != null && runwayMo < 2 ? "crit" : ""} />
             <Kpi label="Cash Runway" value={runwayMo != null ? `${runwayMo.toFixed(1)} mo` : "—"} sub={runwayMo != null ? `~${Math.round(runwayMo * 30.4)} days` : "cash-flow +"} tone={status.tone} />
-            <Kpi label="Monthly Burn" value={fmt(-burn3)} sub="3-mo avg net" tone={burn3 > 0 ? "warn" : ""} />
+            <Kpi label="Monthly Burn" value={burn3 > 0 ? fmt(burn3) : "cash-flow +"} sub="trailing-30d net · live QB" tone={burn3 > 0 ? "crit" : ""} />
             <Kpi label="2026 Revenue" value={fmt(ytdRev)} sub="YTD" />
             <Kpi label="2026 Net Income" value={fmt(ytdNI)} sub="YTD" tone={ytdNI < 0 ? "crit" : ""} />
             <Kpi label="Total Liabilities" value={bs ? fmt(bs.totalLiabilities) : "—"} sub="all debt" tone="crit" />

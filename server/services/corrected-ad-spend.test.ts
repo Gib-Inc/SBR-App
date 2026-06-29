@@ -1,13 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 
 /**
- * Tests for corrected-ad-spend:
- *  - allocateBreakdownToTotal (pure)
- *  - getCorrectedMonthlyAdSpend READER must COLLAPSE overlapping snapshot windows
- *    before summing (Layer A of ADSPEND-DEDUP-SPEC.md). Windsor writes a fresh
- *    rolling-30d window DAILY; a blind SUM multi-counts them (the ~6.5x bug). The
- *    reader must keep one window per (platform, overlapping period) and apply
- *    windsor-beats-upload precedence.
+ * Tests for corrected-ad-spend (pure helpers, no DB):
+ *  - allocateBreakdownToTotal / reconcileRoasByMonthChannel — proportional scaling
+ *  - daysInMonth / monthRangeOverlapFraction / prorateMonthsToRange — the day-proration
+ *    that makes getCorrectedAdSpendRange a faithful slice of the canonical monthly
+ *    truth (so the range view can never disagree with the monthly Summary).
+ *
+ * The DB-integrated readers (getCorrectedMonthlyAdSpend / getCorrectedAdSpendRange)
+ * are thin wrappers over the canonical engine; their source precedence + snapshot
+ * collapse is covered in canonical-spend-service.test.ts and
+ * unified-performance-service.test.ts.
  */
 
 const h = vi.hoisted(() => {
@@ -24,10 +27,13 @@ const h = vi.hoisted(() => {
 
 vi.mock("../storage", () => ({ storage: h.storage }));
 
-import { allocateBreakdownToTotal, getCorrectedMonthlyAdSpend, reconcileRoasByMonthChannel } from "./corrected-ad-spend";
-
-const snap = (platform: string, source: string, periodStart: string, periodEnd: string, spend: number) =>
-  ({ platform, source, periodStart, periodEnd, spend });
+import {
+  allocateBreakdownToTotal,
+  reconcileRoasByMonthChannel,
+  daysInMonth,
+  monthRangeOverlapFraction,
+  prorateMonthsToRange,
+} from "./corrected-ad-spend";
 
 describe("allocateBreakdownToTotal", () => {
   it("scales a breakdown proportionally so it sums to the corrected total", () => {
@@ -103,9 +109,64 @@ describe("reconcileRoasByMonthChannel", () => {
   });
 });
 
-// NOTE: getCorrectedMonthlyAdSpend is now a thin wrapper over the canonical spend
-// engine (canonical-spend-service). Its snapshot collapse/precedence behavior moved
-// there; coverage lives in canonical-spend-service.test.ts (assembleMonth) +
+// NOTE: getCorrectedMonthlyAdSpend / getCorrectedAdSpendRange are thin wrappers over
+// the canonical spend engine (canonical-spend-service). Source precedence + snapshot
+// collapse coverage lives in canonical-spend-service.test.ts (assembleMonth) +
 // unified-performance-service.test.ts (monthlyOverlapSplit, filterCompliantSnapshots,
 // collapseOverlappingSnapshots). The old snapshot-mock tests for this function were
 // removed as obsolete.
+
+describe("daysInMonth", () => {
+  it("knows month lengths incl. 2026 (non-leap) February", () => {
+    expect(daysInMonth("2026-01")).toBe(31);
+    expect(daysInMonth("2026-02")).toBe(28);
+    expect(daysInMonth("2026-04")).toBe(30);
+    expect(daysInMonth("2024-02")).toBe(29); // leap
+  });
+});
+
+describe("monthRangeOverlapFraction", () => {
+  it("is 1 when the month is fully inside the window", () => {
+    expect(monthRangeOverlapFraction("2026-03", "2026-01-01", "2026-12-31")).toBe(1);
+  });
+  it("is 0 when the month is fully outside the window", () => {
+    expect(monthRangeOverlapFraction("2026-01", "2026-03-01", "2026-04-30")).toBe(0);
+  });
+  it("prorates a partial leading month by in-window days ÷ days-in-month", () => {
+    // last 2 days of a 31-day month → 2/31
+    expect(monthRangeOverlapFraction("2026-05", "2026-05-30", "2026-06-28")).toBeCloseTo(2 / 31, 6);
+  });
+  it("prorates a partial trailing month", () => {
+    // first 28 days of June (30-day month) → 28/30
+    expect(monthRangeOverlapFraction("2026-06", "2026-05-30", "2026-06-28")).toBeCloseTo(28 / 30, 6);
+  });
+});
+
+describe("prorateMonthsToRange", () => {
+  const months = [
+    { month: "2026-03", byChannel: { GOOGLE: { spend: 5000 }, META: { spend: 63164 }, AMAZON: { spend: null } } },
+    { month: "2026-04", byChannel: { GOOGLE: { spend: 4059 }, META: { spend: 57164 } } },
+  ];
+
+  it("sums whole months at fraction 1", () => {
+    const out = prorateMonthsToRange(months, "2026-03-01", "2026-04-30");
+    expect(out.GOOGLE).toBeCloseTo(9059, 2);
+    expect(out.META).toBeCloseTo(120328, 2);
+  });
+
+  it("keeps Meta present for the daily-card era (the bug the old engine had: Meta→0)", () => {
+    const out = prorateMonthsToRange(months, "2026-03-01", "2026-03-31");
+    expect(out.META).toBeCloseTo(63164, 2); // NOT 0 — canonical carries QB Meta
+  });
+
+  it("treats a null channel-month as a gap, never a fabricated 0", () => {
+    const out = prorateMonthsToRange(months, "2026-03-01", "2026-04-30");
+    expect(out.AMAZON).toBeUndefined(); // null spend contributed nothing, no 0 key
+  });
+
+  it("day-prorates a partial month (last 2 days of March)", () => {
+    const out = prorateMonthsToRange(months, "2026-03-30", "2026-03-31");
+    expect(out.GOOGLE).toBeCloseTo(5000 * (2 / 31), 2);
+    expect(out.META).toBeCloseTo(63164 * (2 / 31), 2);
+  });
+});

@@ -115,8 +115,24 @@ export function assembleMonth(month: string, inp: MonthInputs): MonthSpend {
   return { month, byChannel, channelTotal, bookedMarketingTotal, otherMarketing };
 }
 
+// Short in-process memo: the canonical series is read by many surfaces (Monthly
+// Summary, finances, runway, the per-month ROAS-reconciliation loop) within one
+// request cycle, and the underlying QB/ad data changes at most on a sync (minutes-
+// to-daily). A 60s TTL keyed by monthsBack collapses those repeated reads to one
+// query set without ever serving stale-by-more-than-a-minute numbers.
+const _memo = new Map<number, { at: number; data: MonthSpend[] }>();
+const _MEMO_TTL_MS = 60_000;
+
 /** DB (read-only): gather all per-channel sources and assemble the canonical series. */
 export async function getCanonicalMonthlySpendByChannel(db: any, monthsBack = 12): Promise<MonthSpend[]> {
+  const hit = _memo.get(monthsBack);
+  if (hit && Date.now() - hit.at < _MEMO_TTL_MS) return hit.data;
+  const data = await _computeCanonicalMonthlySpendByChannel(db, monthsBack);
+  _memo.set(monthsBack, { at: Date.now(), data });
+  return data;
+}
+
+async function _computeCanonicalMonthlySpendByChannel(db: any, monthsBack: number): Promise<MonthSpend[]> {
   const dNow = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Denver" }));
   const cut = new Date(dNow.getFullYear(), dNow.getMonth() - monthsBack, 1);
   const cutStr = `${cut.getFullYear()}-${String(cut.getMonth() + 1).padStart(2, "0")}-01`;

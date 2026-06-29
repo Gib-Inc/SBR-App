@@ -23,7 +23,7 @@
 import { storage } from "../storage";
 
 export interface PlatformSpend { spend: number; impressions?: number | null; clicks?: number | null; }
-export interface MergedPlatform { platform: string; spend: number; impressions: number | null; clicks: number | null; source: "windsor" | "live" | "uploaded"; }
+export interface MergedPlatform { platform: string; spend: number; impressions: number | null; clicks: number | null; source: "windsor" | "live" | "uploaded" | "canonical"; }
 export interface SkuInput {
   sku: string;
   name?: string | null;

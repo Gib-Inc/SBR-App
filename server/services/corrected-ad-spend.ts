@@ -9,21 +9,21 @@
  * Google at different granularities that don't even agree with each other or with
  * Windsor. So `ad_metrics_daily` is NOT a trustworthy totals source.
  *
- * THE FIX: every ad-spend surface derives from the SAME merge the Finances page
- * uses — the source hierarchy (Windsor authoritative > manual upload > deduped
- * live), assembled from `marketing_spend_snapshots` (clean, superseded-aware) with
- * `ad_metrics_daily` only as a last-resort fallback for platforms no snapshot
- * covers. This module is that single primitive; Ad Analytics and Finances both
- * call it, so their numbers can never disagree again.
+ * THE FIX: every ad-spend surface derives from ONE source of truth — the canonical
+ * monthly per-channel engine (canonical-spend-service: Google=QB, Meta=QB daily-card
+ * →compliant tracker, Amazon/Pinterest=ad_metrics). `getCorrectedMonthlyAdSpend`
+ * returns it monthly; `getCorrectedAdSpendRange` day-prorates those months onto any
+ * window. Because the range view is a literal slice of the monthly truth, the
+ * breakdown tabs / Ad Analytics headline / runway can never disagree with the
+ * Finances + monthly Summary again (the old second engine — a Windsor>upload>live
+ * snapshot merge — silently dropped Meta to ~$0 for the daily-card era).
  *
- * Pure helpers (`allocateBreakdownToTotal`) are unit-tested without a DB.
+ * Pure helpers (`allocateBreakdownToTotal`, `prorateMonthsToRange`,
+ * `monthRangeOverlapFraction`) are unit-tested without a DB.
  */
 import { storage } from "../storage";
 import {
   normalizeAdPlatform,
-  mergeAdSpendByPlatform,
-  collapseOverlappingSnapshots,
-  overlapFraction,
   type PlatformSpend,
   type MergedPlatform,
 } from "./unified-performance-service";
@@ -41,19 +41,82 @@ export interface CorrectedAdSpend {
   spendByPlatform: Record<string, number>; // UPPER platform -> corrected spend (convenience)
 }
 
+// ---- pure range/proration helpers (unit-tested, no DB) -------------------
+
+/** Number of days in the calendar month of a `YYYY-MM` string. */
+export function daysInMonth(month: string): number {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate(); // day 0 of next month = last day of this one
+}
+
+/**
+ * Fraction (0..1) of calendar `month` (YYYY-MM) that lies within the inclusive
+ * window [start, end] (YYYY-MM-DD). A month fully inside → 1; fully outside → 0;
+ * a partial month → its in-window day count ÷ days-in-month.
+ */
+export function monthRangeOverlapFraction(month: string, start: string, end: string): number {
+  const dim = daysInMonth(month);
+  const mStart = `${month}-01`;
+  const mEnd = `${month}-${String(dim).padStart(2, "0")}`;
+  const lo = start > mStart ? start : mStart;
+  const hi = end < mEnd ? end : mEnd;
+  if (hi < lo) return 0;
+  const days = Math.round((Date.parse(hi + "T00:00:00Z") - Date.parse(lo + "T00:00:00Z")) / 86400000) + 1;
+  return Math.max(0, Math.min(1, days / dim));
+}
+
+/**
+ * Pure: day-prorate canonical MONTHLY per-channel spend onto an arbitrary window
+ * [start, end]. Each month contributes its per-channel spend × the fraction of the
+ * month that falls inside the window. null channel-months contribute nothing
+ * (FLAG-DON'T-FABRICATE — a gap stays a gap, never a fabricated 0). Returns UPPER
+ * channel keys. This is what makes the range view a faithful slice of the same
+ * canonical truth the monthly Summary shows — never a second, disagreeing engine.
+ */
+export function prorateMonthsToRange(
+  months: Array<{ month: string; byChannel: Record<string, { spend: number | null } | undefined> }>,
+  start: string,
+  end: string,
+): Record<string, number> {
+  const acc: Record<string, number> = {};
+  for (const m of months) {
+    const frac = monthRangeOverlapFraction(m.month, start, end);
+    if (frac <= 0) continue;
+    for (const ch of Object.keys(m.byChannel)) {
+      const sp = m.byChannel[ch]?.spend;
+      if (sp == null) continue;
+      acc[ch] = r2((acc[ch] ?? 0) + sp * frac);
+    }
+  }
+  return acc;
+}
+
+/** Whole calendar months spanned from `start` (YYYY-MM-DD) up to now, inclusive (≥1). */
+function monthsSinceStart(start: string, nowMs: number = Date.now()): number {
+  const [sy, sm] = start.split("-").map(Number);
+  const d = new Date(nowMs);
+  return Math.max(1, (d.getUTCFullYear() - sy) * 12 + (d.getUTCMonth() + 1 - sm) + 1);
+}
+
 /**
  * Per-platform corrected ad spend over [start, end] (YYYY-MM-DD, inclusive).
- * Mirrors the Finances `/api/finances/overview` ad-channels block and the unified
- * hub byte-for-byte (same storage calls, same bucketing, same merge), so the
- * Ad Analytics page and the Finances page always show identical totals.
+ *
+ * SPEND comes from the canonical monthly engine (canonical-spend-service:
+ * Google=QB, Meta=QB daily-card→compliant tracker, Amazon/Pinterest=ad_metrics),
+ * day-prorated onto the window. This is the SAME source the monthly Summary uses,
+ * so range-based surfaces (breakdown tabs, Ad Analytics headline, runway) can no
+ * longer disagree with it — the old second engine (Windsor>upload>live snapshot
+ * merge) silently dropped Meta to ~$0 for the daily-card era (no snapshot covered
+ * it), inflating ROAS on the very channel that drives demand. IMPRESSIONS/CLICKS
+ * (and a spend fallback for any platform/window canonical can't cover) still come
+ * from live ad_metrics, so breakdown tabs keep their secondary metrics.
  */
 export async function getCorrectedAdSpendRange(
   start: string,
   end: string,
 ): Promise<CorrectedAdSpend> {
-  // LIVE: naive ad_metrics_daily by normalized platform. The merge below only
-  // ever uses this for a platform that has NO windsor/upload snapshot, so its
-  // known double-count can't pollute Google/Amazon/Meta (all snapshot-backed).
+  // LIVE ad_metrics in range: source of impressions/clicks, and a spend fallback
+  // only for a platform/window the canonical engine returns nothing for.
   const live: Record<string, PlatformSpend> = {};
   try {
     const rows = await storage.getAdMetricsInRange(start, end);
@@ -70,47 +133,50 @@ export async function getCorrectedAdSpendRange(
     /* no live ad data */
   }
 
-  // SNAPSHOTS: split by source — Windsor (authoritative) vs manual upload (Meta
-  // CSV, etc.). getMarketingSpendSnapshotsInRange excludes superseded rows, but
-  // Windsor writes a fresh rolling-30d window DAILY, so many OVERLAPPING active
-  // rows pile up per (source, platform). Collapse each group to one window BEFORE
-  // summing — a blind SUM here is the ~6.5x ad-spend over-count bug. Mirrors the
-  // safe path in getUnifiedPerformance. See ADSPEND-DEDUP-SPEC.md (Layer A).
-  const uploaded: Record<string, PlatformSpend> = {};
-  const windsor: Record<string, PlatformSpend> = {};
+  // CANONICAL per-channel spend, day-prorated onto [start, end].
+  let canonical: Record<string, number> = {};
   try {
-    const snaps = await storage.getMarketingSpendSnapshotsInRange(start, end);
-    const groups = new Map<string, any[]>(); // key: `${bucket}|${platform}`
-    for (const s of snaps as any[]) {
-      const p = String(s.platform || "OTHER").toUpperCase();
-      const bucketName = String(s.source || "").toLowerCase().startsWith("windsor") ? "windsor" : "uploaded";
-      const key = `${bucketName}|${p}`;
-      const g = groups.get(key);
-      if (g) g.push(s); else groups.set(key, [s]);
-    }
-    for (const [key, group] of Array.from(groups.entries())) {
-      const [bucketName, p] = key.split("|");
-      const bucket = bucketName === "windsor" ? windsor : uploaded;
-      const cur = bucket[p] || { spend: 0, impressions: 0, clicks: 0 };
-      for (const s of collapseOverlappingSnapshots(group)) {
-        // PRORATE to the query range: a window only partially inside [start,end]
-        // contributes its in-range slice, not its full value (so a stale 3-week
-        // upload doesn't inflate a "last 30 days" total). Rolling windows fully in
-        // range → factor 1 (unchanged).
-        const f = overlapFraction(s.periodStart, s.periodEnd, start, end);
-        cur.spend += (Number(s.spend) || 0) * f;
-        if (s.impressions != null) cur.impressions = (cur.impressions || 0) + Number(s.impressions) * f;
-        if (s.clicks != null) cur.clicks = (cur.clicks || 0) + Number(s.clicks) * f;
-      }
-      bucket[p] = cur;
-    }
+    const { getCanonicalMonthlySpendByChannel } = await import("./canonical-spend-service");
+    const { db } = await import("../db");
+    // Round monthsBack up to a stable bucket (≥14) so per-month loop callers
+    // (e.g. ROAS-by-channel reconciliation) all share one cache key — the canonical
+    // engine memoizes by monthsBack, so this collapses an N-month loop's N fetches
+    // to 1. Over-fetching months is harmless: proration only counts overlap.
+    const monthsBack = Math.min(24, Math.max(14, monthsSinceStart(start) + 1));
+    const months = await getCanonicalMonthlySpendByChannel(db, monthsBack);
+    canonical = prorateMonthsToRange(months, start, end);
   } catch {
-    /* no snapshot ad data */
+    /* canonical unavailable → fall back to live ad_metrics below (never empty) */
   }
 
-  const { platforms, totalAdSpend } = mergeAdSpendByPlatform(live, uploaded, windsor);
+  // MERGE: spend = canonical (authoritative) where present, else the live
+  // ad_metrics fallback; impressions/clicks always live.
+  const names = new Set<string>([...Object.keys(canonical), ...Object.keys(live)]);
+  const platforms: MergedPlatform[] = [];
+  for (const p of Array.from(names)) {
+    const canon = canonical[p];
+    // Use canonical whenever it HAS data for this platform (key present) — including
+    // a real 0. Only a platform canonical can't cover at all (key absent) falls back
+    // to live ad_metrics. A `> 0` guard here would resurrect inflated ad_metrics for
+    // a legitimately-zero canonical month.
+    const useCanon = canon != null;
+    platforms.push({
+      platform: p,
+      spend: r2(useCanon ? (canon as number) : (live[p]?.spend ?? 0)),
+      impressions: live[p]?.impressions ?? null,
+      clicks: live[p]?.clicks ?? null,
+      source: useCanon ? "canonical" : "live",
+    });
+  }
+  platforms.sort((a, b) => b.spend - a.spend);
+
   const spendByPlatform: Record<string, number> = {};
-  for (const p of platforms) spendByPlatform[p.platform] = p.spend;
+  let total = 0;
+  for (const p of platforms) {
+    spendByPlatform[p.platform] = p.spend;
+    total += p.spend;
+  }
+  const totalAdSpend = platforms.length ? r2(total) : null;
 
   const day = 86400000;
   const windowDays = Math.max(

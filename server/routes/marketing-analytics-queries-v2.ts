@@ -574,19 +574,31 @@ export async function queryMonthlyAdSpend(db: DB, months: number = 12) {
 }
 
 export async function queryMonthlyBlended(db: DB, months: number = 12) {
+  // Revenue + new customers from sales_orders (live/operational), DE-DUPED by
+  // physical order identity (external_order_id, else channel+order_name) so twin
+  // orders from historical backfills don't inflate a month (Feb/Mar read ~1.7x of
+  // QB before this). Used for the CURRENT month (QB lags) and as a fallback.
   const sales = await db.execute(sql`
+    WITH deduped AS (
+      SELECT DISTINCT ON (COALESCE(NULLIF(external_order_id, ''), upper(coalesce(channel,'')) || '|' || COALESCE(order_name, id::text)))
+        id, order_date, total_amount, customer_email, external_customer_id
+      FROM sales_orders
+      WHERE order_date >= current_date - make_interval(months => ${months})
+        AND status NOT IN ('CANCELLED', 'REFUNDED')
+      ORDER BY COALESCE(NULLIF(external_order_id, ''), upper(coalesce(channel,'')) || '|' || COALESCE(order_name, id::text)), order_date
+    )
     SELECT date_trunc('month', order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date::text as month,
            COALESCE(SUM(total_amount), 0)::real as total_revenue,
            COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as new_customers
-    FROM sales_orders
-    WHERE order_date >= current_date - make_interval(months => ${months})
-      AND status NOT IN ('CANCELLED', 'REFUNDED')
-    GROUP BY date_trunc('month', order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')
-    ORDER BY month
+    FROM deduped
+    GROUP BY 1
+    ORDER BY 1
   `);
-  // Attributed ad revenue / conversions by month for shape (NOT spend).
+  // ad_metrics_daily — attributed ad revenue + conversions AND live spend by month.
+  // The live spend is what the CURRENT month (and any month QB hasn't closed) uses.
   const adsRaw = await db.execute(sql`
     SELECT date_trunc('month', date)::date::text as month,
+           SUM(spend)::real as ad_spend_live,
            SUM(revenue)::real as ad_revenue,
            SUM(conversions)::int as total_conversions
     FROM ad_metrics_daily
@@ -594,44 +606,69 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
     GROUP BY date_trunc('month', date)
     ORDER BY month
   `);
-  // Historical ad spend (QuickBooks) keyed to month-start, used as a fallback
-  // for months with no corrected snapshot yet — keeps the blended ROAS / CAC
-  // series continuous back through the QuickBooks history.
+  // QuickBooks authoritative monthly revenue + TOTAL ad spend (ALL channels) — the
+  // spine for every CLOSED month. ad_spend here is the complete figure; the old code
+  // wrongly let a partial Windsor/Google-only snapshot OVERRIDE it, understating
+  // spend (e.g. Feb $7K vs the real $87.7K) and inflating ROAS to 134x.
   const hist = await db.execute(sql`
-    SELECT make_date(year, month, 1)::text as month, COALESCE(ad_spend, 0)::real as ad_spend
+    SELECT make_date(year, month, 1)::text as month,
+           COALESCE(revenue, 0)::real as qb_revenue,
+           COALESCE(ad_spend, 0)::real as qb_spend
     FROM historical_monthly_sales
   `);
 
-  // Corrected monthly ad spend (Windsor snapshots) — the authoritative series.
-  const monthly = await getCorrectedMonthlyAdSpend();
-  const correctedSpendMap = new Map<string, number>();
-  for (const [m, mp] of Array.from(monthly.entries())) correctedSpendMap.set(`${m}-01`, mp.total);
-
   const salesMap = new Map((rows(sales) as any[]).map(r => [r.month, r]));
-  const adsRevMap = new Map((rows(adsRaw) as any[]).map(r => [r.month, r]));
-  const histMap = new Map((rows(hist) as any[]).map(r => [r.month, r.ad_spend]));
-  const allMonths = new Set([...salesMap.keys(), ...correctedSpendMap.keys(), ...adsRevMap.keys()]);
+  const adsMap = new Map((rows(adsRaw) as any[]).map(r => [r.month, r]));
+  const histMap = new Map((rows(hist) as any[]).map(r => [r.month, r]));
+
+  // The current calendar month is always LIVE (QB lags a month), so never let a
+  // partial QB row override it. Window the output to the requested months.
+  const dNow = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Denver" }));
+  const curMonth = `${dNow.getFullYear()}-${String(dNow.getMonth() + 1).padStart(2, "0")}-01`;
+  const cut = new Date(dNow.getFullYear(), dNow.getMonth() - months, 1);
+  const cutMonth = `${cut.getFullYear()}-${String(cut.getMonth() + 1).padStart(2, "0")}-01`;
+
+  const allMonths = new Set(
+    [...salesMap.keys(), ...adsMap.keys(), ...histMap.keys()].filter((m) => m >= cutMonth),
+  );
 
   return Array.from(allMonths).sort().map(month => {
     const s = salesMap.get(month) || { total_revenue: 0, new_customers: 0 };
-    const a = adsRevMap.get(month) || { ad_revenue: 0, total_conversions: 0 };
-    // Corrected snapshot spend if present, else fall back to the QuickBooks total.
-    const correctedSpend = correctedSpendMap.get(month) || 0;
-    const adSpend = correctedSpend > 0 ? correctedSpend : (histMap.get(month) || 0);
-    const spendSource = correctedSpend > 0 ? 'corrected' : (histMap.has(month) ? 'historical' : 'none');
+    const a = adsMap.get(month) || { ad_spend_live: 0, ad_revenue: 0, total_conversions: 0 };
+    const h = histMap.get(month);
+    const isClosed = month < curMonth;
+
+    const qbRev = h ? Number(h.qb_revenue) : null;
+    const qbSpend = h ? Number(h.qb_spend) : null;
+    const soRev = Number(s.total_revenue) || 0;
+    const liveSpend = Number(a.ad_spend_live) || 0;
+
+    // Revenue: QuickBooks for CLOSED months (authoritative, all-channel, ties to the
+    // financials), live deduped sales_orders for the current/open month.
+    const useQbRev = isClosed && qbRev != null && qbRev > 0;
+    const totalRevenue = useQbRev ? qbRev : soRev;
+    const revenueSource = useQbRev ? 'quickbooks' : 'orders';
+
+    // Ad spend: the COMPLETE QuickBooks total for closed months, live ad_metrics for
+    // the current/open month. Never a partial single-channel snapshot.
+    const useQbSpend = isClosed && qbSpend != null && qbSpend > 0;
+    const adSpend = useQbSpend ? qbSpend : liveSpend;
+    const spendSource = useQbSpend ? 'quickbooks' : (liveSpend > 0 ? 'ad_metrics' : 'none');
+
     const adRevenue = Number(a.ad_revenue) || 0;
     return {
       month,
-      totalRevenue: s.total_revenue,
+      totalRevenue,
+      revenueSource,
       adSpend,
       adRevenue,
       spendSource,
-      blendedRoas: adSpend > 0 ? r2(s.total_revenue / adSpend) : null,
-      adRoas: correctedSpend > 0 && adRevenue > 0 ? r2(adRevenue / correctedSpend) : null,
+      blendedRoas: adSpend > 0 ? r2(totalRevenue / adSpend) : null,
+      adRoas: liveSpend > 0 && adRevenue > 0 ? r2(adRevenue / liveSpend) : null,
       cac: s.new_customers > 0 && adSpend > 0 ? r2(adSpend / s.new_customers) : null,
       newCustomers: s.new_customers,
       conversions: a.total_conversions,
-      spendToRevenueRatio: s.total_revenue > 0 ? r2(adSpend / s.total_revenue * 100) : null,
+      spendToRevenueRatio: totalRevenue > 0 ? r2(adSpend / totalRevenue * 100) : null,
     };
   });
 }

@@ -24087,7 +24087,7 @@ Generate only the email body text, no subject line.`;
       const uploadedBS: any = (bsSnapshot as any)?.raw?.balanceSheet ?? null;
       const useUploaded = uploadedBS && (uploadedBS.totalLiabilities != null || uploadedBS.cash != null);
       let balanceSheet = useUploaded ? uploadedBS : FINANCIAL_SEED.balanceSheet;
-      const balanceSheetSource = useUploaded ? (uploadedBS.source || "accountant_upload") : "accountant_seed";
+      let balanceSheetSource = useUploaded ? (uploadedBS.source || "accountant_upload") : "accountant_seed";
 
       // Live QuickBooks position (cash on hand, A/R + aging, A/P + aging, P&L) from
       // the most recent daily capture — the real-time operational layer on top of

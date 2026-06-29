@@ -335,6 +335,13 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/monthly-sales', requireAuth, handle(() => queryMonthlySales(getDb())));
   app.get('/api/marketing-analytics/cmo/monthly-ad-spend', requireAuth, handle(() => queryMonthlyAdSpend(getDb())));
   app.get('/api/marketing-analytics/cmo/monthly-blended', requireAuth, handle(() => queryMonthlyBlended(getDb())));
+  // Canonical per-channel monthly spend — single source of truth (Google=QB,
+  // Meta=QB-Facebook/compliant-tracker, Amazon/Pinterest=ad_metrics) + confidence
+  // flags + media-vs-MER split. Read-only diagnostic; consumers repoint to it next.
+  app.get('/api/marketing-analytics/cmo/canonical-spend', requireAuth, handle(async () => {
+    const { getCanonicalMonthlySpendByChannel } = await import('../services/canonical-spend-service');
+    return { months: await getCanonicalMonthlySpendByChannel(getDb(), 12) };
+  }));
   app.get('/api/marketing-analytics/cmo/sales-velocity', requireAuth, handle((req) => querySalesVelocity(getDb(), parseDays(req))));
   app.get('/api/marketing-analytics/cmo/multi-year', requireAuth, handle(() => queryMultiYearComparison(getDb())));
   app.get('/api/marketing-analytics/cmo/ltv-cac', requireAuth, handle((req) => queryLtvCac(getDb(), Math.min(Math.max(parseInt(req.query.months as string) || 18, 1), 60))));

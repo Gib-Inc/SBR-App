@@ -407,13 +407,12 @@ export async function compute13WeekForecast(db: any, asOf?: string): Promise<{
     const wsS = fmt(ws), weS = fmt(we);
     const outflows = r2(obls.filter((o: any) => o.due >= wsS && o.due <= weS).reduce((s: number, o: any) => s + num(o.amount), 0));
     const opening = cash;
-    // A/R already earned (e.g. Amazon payout) lands in the first week — a one-time
-    // inflow on top of the ongoing sales run-rate, not double-counted with it.
-    const oneTimeInflow = w === 0 ? r2(pos.receivablesInbound) : 0;
-    const inflows = r2(weeklyInflow + oneTimeInflow);
-    cash = r2(opening + inflows - outflows);
+    // Inflow = ongoing sales run-rate only. Inbound A/R is NOT added here yet — it's
+    // an unverified Amazon accrual (see getCashFlow note); shown for visibility, not
+    // forecasted as cash until reconciled.
+    cash = r2(opening + weeklyInflow - outflows);
     if (cash < lowestCash) { lowestCash = cash; lowestWeek = wsS; }
-    weeks.push({ weekStart: wsS, weekEnd: weS, openingCash: r2(opening), inflows, outflows, endingCash: cash });
+    weeks.push({ weekStart: wsS, weekEnd: weS, openingCash: r2(opening), inflows: weeklyInflow, outflows, endingCash: cash });
   }
   return {
     startingCash: r2(pos.cashOnHand), weeklyInflow, weeks, lowestCash, lowestWeek,
@@ -457,7 +456,11 @@ export async function getCashFlow(db: any, opts: { windowDays?: number; asOf?: s
   const tier1Due = r2(active.filter((o) => o.tier === "tier1").reduce((s, o) => s + o.amount, 0));
 
   return {
-    position: { ...position, totalDue, tier1Due, projectedLow: r2(position.cashOnHand + position.receivablesInbound + position.projectedIncome - totalDue) },
+    // projectedLow deliberately EXCLUDES receivablesInbound: the A/R is currently a
+    // single unverified Amazon accrual journal entry (not granular in-transit
+    // settlements), so it is shown for visibility but not counted in the runway
+    // until reconciled. Re-add it here once A/R is a verified payout feed.
+    position: { ...position, totalDue, tier1Due, projectedLow: r2(position.cashOnHand + position.projectedIncome - totalDue) },
     obligations: ranked,
     generatedAt: new Date().toISOString(),
   };

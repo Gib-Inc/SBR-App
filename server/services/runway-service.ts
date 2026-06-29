@@ -53,10 +53,10 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
   }
 
   const cashOnHand = snap.cashOnHand != null ? Number(snap.cashOnHand) : null;
-  // Money already earned + in transit (A/R from the aging report — e.g. the Amazon
-  // payout). Near-cash that extends the runway. Same source the Cash Flow Command's
-  // "Money on its way" reads, so all runway views agree on the incoming money.
-  const receivablesInbound = (snap as any).accountsReceivable != null ? Number((snap as any).accountsReceivable) : 0;
+  // NOTE: A/R (snap.accountsReceivable) is intentionally NOT fed into the runway
+  // yet — it's currently a single unverified Amazon accrual journal entry, not a
+  // granular payout feed. The engine supports an `inboundReceivables` input; wire
+  // it here once A/R is reconciled to real settlements.
   const dailyFixedOverhead = snap.operatingExpenses != null ? round2(Number(snap.operatingExpenses) / 30) : null;
 
   const grossProfit = snap.grossProfit != null ? Number(snap.grossProfit) : null;
@@ -89,7 +89,7 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     const avgDailyRevenue = (totalNetRevenue / windowDays) * biasFactor;
     const dailyMarginContribution = netMargin != null ? round2(avgDailyRevenue * netMargin) : null;
 
-    return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution, inboundReceivables: receivablesInbound };
+    return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution };
   };
 
   const scenarioInputs: Record<ScenarioKey, ScenarioInputs> = {

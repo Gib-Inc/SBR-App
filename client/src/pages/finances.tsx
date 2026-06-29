@@ -114,7 +114,7 @@ export default function Finances() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold flex items-center gap-2"><DollarSign className="h-5 w-5" /> Finances</h2>
-          <p className="text-xs text-muted-foreground">CIPH.R financial command center{bs ? ` · balance sheet as of ${bs.asOf}` : ""}{data?.balanceSheetSource === "accountant_seed" ? " · source: accountant export (QuickBooks live once connected)" : data?.balanceSheetSource === "accountant_upload" ? " · source: uploaded balance sheet" : ""}</p>
+          <p className="text-xs text-muted-foreground">CIPH.R financial command center{bs ? ` · balance sheet as of ${bs.asOf}` : ""}{data?.balanceSheetSource === "quickbooks_live" ? " · debt live from QuickBooks" : data?.balanceSheetSource === "accountant_seed" ? " · source: accountant export (QuickBooks live once connected)" : data?.balanceSheetSource === "accountant_upload" ? " · source: uploaded balance sheet" : ""}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <Link href="/financial-upload" className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 whitespace-nowrap" data-testid="link-upload-financials">
@@ -283,7 +283,7 @@ export default function Finances() {
           {/* Debt stack */}
           {bs && (
             <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Landmark className="h-4 w-4" /> Debt &amp; Position <span className="text-xs font-normal text-muted-foreground">· as of {bs.asOf}</span></CardTitle></CardHeader>
+              <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Landmark className="h-4 w-4" /> Debt &amp; Position <span className="text-xs font-normal text-muted-foreground">· {bs.source === "quickbooks_live" ? `live from QuickBooks · synced ${bs.asOf}` : `as of ${bs.asOf}`}</span></CardTitle></CardHeader>
               <CardContent>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                   <div><div className="text-xs text-muted-foreground">Accounts Payable</div><div className="font-semibold tabular-nums">{fmt(bs.accountsPayable)}</div></div>
@@ -295,6 +295,9 @@ export default function Finances() {
                   <div><div className="text-xs text-muted-foreground">Total Liabilities</div><div className="font-semibold tabular-nums text-red-600 dark:text-red-400">{fmt(bs.totalLiabilities)}</div></div>
                   <div><div className="text-xs text-muted-foreground">Total Equity</div><div className="font-semibold tabular-nums text-red-600 dark:text-red-400">{fmt(bs.totalEquity)}</div></div>
                 </div>
+                {bs.source === "quickbooks_live" && (
+                  <div className="text-[11px] text-muted-foreground mt-2">Debt, A/P, A/R, total liabilities &amp; equity are live from QuickBooks (synced {bs.asOf}). Sales tax &amp; inventory are from the last uploaded balance sheet.</div>
+                )}
                 {bs.loans && bs.loans.length > 0 && (() => {
                   const rated = bs.loans!.filter((l) => l.rate != null && (l.balance ?? 0) > 0);
                   const wairBase = rated.reduce((s, l) => s + (l.balance ?? 0), 0);

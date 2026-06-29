@@ -24142,6 +24142,44 @@ Generate only the email body text, no subject line.`;
         balanceSheet = { ...balanceSheet, cash: qbLiveOut.cashOnHand };
       }
 
+      // Live debt position — overlay the CURRENT debt stack from credit_lines (synced
+      // daily from QB liability accounts) + live QB balance-sheet totals + live A/P,
+      // so "Debt & Position" reflects today, not the last uploaded balance sheet (which
+      // was understating debt by ~$245K). credit_lines: type 'card' → credit cards;
+      // the rest (loan/loc/liability = SBA / MCA / HELOC / notes) → notes & loans.
+      // Sales tax + inventory have no live source here, so they stay from the upload
+      // (flagged on the card). Failure leaves the uploaded balance sheet untouched.
+      try {
+        const { computeCreditLines } = await import("./services/credit-lines-service");
+        const cl = await computeCreditLines();
+        if (cl.lines.length) {
+          const r2 = (x: number) => Math.round(x * 100) / 100;
+          const isCard = (t: string) => (t || "").toLowerCase() === "card";
+          const creditCards = r2(cl.lines.filter((l) => isCard(l.type)).reduce((s, l) => s + l.balance, 0));
+          const notesLoans = r2(cl.lines.filter((l) => !isCard(l.type)).reduce((s, l) => s + l.balance, 0));
+          const syncedAt = cl.lines.map((l) => l.balanceSyncedAt).filter(Boolean).sort().pop() as string | undefined;
+          const liveLoans = cl.lines
+            .filter((l) => l.balance > 0)
+            .map((l) => ({ name: l.name, balance: l.balance, rate: l.apr, term: null as string | null }));
+          const lbs = qbLiveOut?.balanceSheet;
+          balanceSheet = {
+            ...balanceSheet,
+            creditCards,
+            shortTermNotes: notesLoans,
+            accountsPayable: qbLiveOut?.accountsPayable ?? balanceSheet.accountsPayable,
+            accountsReceivable: qbLiveOut?.accountsReceivable ?? balanceSheet.accountsReceivable,
+            totalLiabilities: lbs?.totalLiabilities != null ? lbs.totalLiabilities : balanceSheet.totalLiabilities,
+            totalEquity: lbs?.totalEquity != null ? lbs.totalEquity : balanceSheet.totalEquity,
+            loans: liveLoans,
+            asOf: syncedAt ? syncedAt.slice(0, 10) : balanceSheet.asOf,
+            source: "quickbooks_live",
+          };
+          balanceSheetSource = "quickbooks_live";
+        }
+      } catch (e: any) {
+        console.warn("[CIPH.R] live debt overlay failed:", e?.message ?? e);
+      }
+
       res.json({
         success: true,
         monthly,

@@ -40,7 +40,8 @@ export function aggregateMonthlyFinancials(
     if (g === "income") b.income += r.amount;
     else if (g === "contra") b.contra += r.amount; // discounts/returns, already negative in QB
     else if (g === "cogs") b.cogs += r.amount;
-    else { b.expenses += r.amount; b.cats[r.account] = r2((b.cats[r.account] ?? 0) + r.amount); }
+    else if (g === "expense") { b.expenses += r.amount; b.cats[r.account] = r2((b.cats[r.account] ?? 0) + r.amount); }
+    // g === "duplicate" → skip (Match-Shopify reconciliation tree double-counts revenue)
     byMonth.set(r.month, b);
   }
   return Array.from(byMonth.entries()).map(([month, b]) => {

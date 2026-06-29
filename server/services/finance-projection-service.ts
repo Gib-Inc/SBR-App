@@ -199,7 +199,7 @@ export async function getProjection(db: DB, opts: {
   };
   for (const a of acctRows) {
     const g = classifyAccount(a.account);
-    if (g === "income" || g === "contra") continue;
+    if (g === "income" || g === "contra" || g === "duplicate") continue; // skip revenue + the Match-Shopify dup tree
     add(a.account, num(a.amount), g);
   }
   // pull reclassified vendor dollars out of their source account into Owner Compensation

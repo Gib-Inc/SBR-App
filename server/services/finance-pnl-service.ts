@@ -16,11 +16,18 @@ const num = (v: any) => (v == null ? 0 : Number(v) || 0);
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const pct = (part: number, whole: number) => (whole > 0 ? r2((part / whole) * 100) : null);
 
-export type AcctGroup = "income" | "contra" | "cogs" | "expense";
+export type AcctGroup = "income" | "contra" | "cogs" | "expense" | "duplicate";
 
 /** Pure: classify a QuickBooks P&L account into a P&L group. */
 export function classifyAccount(name: string): AcctGroup {
   const n = String(name || "").toLowerCase();
+  // QB carries a PARALLEL "Match Shopify Total Sales Breakdown" income tree
+  // (1 - Gross Sales / 2 - Discounts / 3 - Returns...) that MIRRORS the primary
+  // Gross Sales / Discounts / Returns accounts — a reconciliation memo. Summing
+  // BOTH double-counts revenue ~70% and manufactures phantom profit (the Finances
+  // page read +$1M YTD / "HEALTHY" while QB live showed a loss). Classify it as a
+  // duplicate so every roll-up EXCLUDES it. Must be the FIRST check.
+  if (/match shopify total sales breakdown/.test(n)) return "duplicate";
   if (/cost of goods|cogs/.test(n)) return "cogs";
   if (/discount|return|refund/.test(n)) return "contra";
   if (/gross sales|net sales|\bincome\b|\brevenue\b/.test(n)) return "income";
@@ -63,7 +70,8 @@ export function rollup(items: Array<{ account: string; amount: number }>) {
     if (g === "income") income += it.amount;
     else if (g === "contra") contra += it.amount;     // already negative in QB
     else if (g === "cogs") cogs += it.amount;
-    else expenses += it.amount;
+    else if (g === "expense") expenses += it.amount;
+    // g === "duplicate" → skip (the Match-Shopify reconciliation tree)
   }
   const netSales = r2(income + contra);
   const grossProfit = r2(netSales - cogs);

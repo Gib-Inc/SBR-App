@@ -1,14 +1,41 @@
 import { describe, it, expect } from "vitest";
-import { classifyAccount, getBudgetScorecard, getTopVendors } from "./finance-pnl-service";
+import { classifyAccount, rollup, getBudgetScorecard, getTopVendors } from "./finance-pnl-service";
 
 describe("classifyAccount", () => {
   it("classifies QB P&L accounts into groups", () => {
-    expect(classifyAccount("1 - Gross Sales (Match Shopify Total Sales Breakdown)")).toBe("income");
-    expect(classifyAccount("2 - Discounts (Match Shopify Total Sales Breakdown)")).toBe("contra");
+    // The parallel "Match Shopify Total Sales Breakdown" tree is a DUPLICATE of the
+    // primary revenue accounts — it must NOT roll into the P&L (it double-counted
+    // revenue ~70% and manufactured phantom profit). It classifies as 'duplicate'.
+    expect(classifyAccount("1 - Gross Sales (Match Shopify Total Sales Breakdown)")).toBe("duplicate");
+    expect(classifyAccount("2 - Discounts (Match Shopify Total Sales Breakdown)")).toBe("duplicate");
+    expect(classifyAccount("3 - Returns/Refunds (Match Shopify Total Sales Breakdown) + Amazon")).toBe("duplicate");
+    // The PRIMARY accounts (no "Match Shopify" suffix) classify normally.
+    expect(classifyAccount("Gross Sales")).toBe("income");
     expect(classifyAccount("3 - Returns/Refunds + Amazon")).toBe("contra");
     expect(classifyAccount("Cost of Goods Sold")).toBe("cogs");
     expect(classifyAccount("Advertising & Marketing")).toBe("expense");
     expect(classifyAccount("Shipping, Freight & Delivery")).toBe("expense");
+  });
+});
+
+describe("rollup excludes the Match-Shopify duplicate tree", () => {
+  it("does not double-count the parallel income tree (no phantom profit)", () => {
+    // Real June-ish shape: primary tree nets ~199,698; the duplicate tree would add
+    // ~138,230 of phantom income if summed. The roll-up must ignore it entirely.
+    const items = [
+      { account: "Gross Sales", amount: 228534 },
+      { account: "Discounts", amount: -11463 },
+      { account: "Returns and Refunds", amount: -17374 },
+      { account: "Cost of Goods Sold", amount: 60000 },
+      { account: "Advertising & Marketing", amount: 200000 },
+      // duplicate tree — must be skipped:
+      { account: "1 - Gross Sales (Match Shopify Total Sales Breakdown)", amount: 161431 },
+      { account: "2 - Discounts (Match Shopify Total Sales Breakdown)", amount: -11463 },
+      { account: "3 - Returns/Refunds (Match Shopify Total Sales Breakdown) + Amazon", amount: -11738 },
+    ];
+    const r = rollup(items);
+    expect(r.netSales).toBe(199697); // 228534 - 11463 - 17374, dup tree excluded
+    expect(r.netIncome).toBe(-60303); // 199697 - 60000 - 200000 → a LOSS, not phantom profit
   });
 });
 

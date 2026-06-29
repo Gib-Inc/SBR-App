@@ -14,6 +14,8 @@
  * never a clean number. The pure assembler (buildRollingCashOut) is unit-tested.
  */
 
+import type { ExpectedPayouts, ChannelPayout } from "./expected-payouts-service";
+
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
 /** Add `n` days to a YYYY-MM-DD string (UTC, calendar-safe). Pure. */
@@ -100,4 +102,89 @@ export function bucketObligationsByDay(
     (byDate[day] ??= []).push({ id: o.id, amount: o.amount, amountEstimated: o.amountEstimated });
   }
   return byDate;
+}
+
+/**
+ * Pure: spread each channel's net payout evenly across its settlement window, starting
+ * at startDate. The trailing-window sales already in transit arrive over the next
+ * `settlementDays` days (Shopify ~3, Amazon ~14), so day i gets netExpected/settlementDays
+ * for each channel still inside its window. Summed over a window this equals
+ * inboundWithinDays — same near-cash, just placed on the days it lands. Keyed YYYY-MM-DD.
+ */
+export function dailyInboundSchedule(p: ExpectedPayouts, startDate: string, days: number): Record<string, number> {
+  const sched: Record<string, number> = {};
+  const spread = (c: ChannelPayout) => {
+    const span = Math.max(1, c.settlementDays);
+    const perDay = c.netExpected / span;
+    for (let i = 0; i < Math.min(Math.max(0, days), span); i++) {
+      const d = addDaysYmd(startDate, i);
+      sched[d] = r2((sched[d] ?? 0) + perDay);
+    }
+  };
+  spread(p.amazon);
+  spread(p.shopify);
+  return sched;
+}
+
+export interface CashOut {
+  asOf: string;
+  days: number;
+  rolling: CashOutDay[];
+  cashOnHand: number;
+  availableCash: number | null;    // drawable LOC/line room (type 'loc')
+  availableCredit: number | null;  // card room (type 'card')
+  totalLiquidity: number | null;   // cashOnHand + availableCash + availableCredit
+  obligations: any[];              // the ranked pay-now list (from getCashFlow)
+  unfundedMustPayCount: number;    // high-priority obligations with unknown amounts
+  basis: "sales-estimate";
+  generatedAt: string;
+}
+
+/**
+ * DB (read-only): assemble the rolling Cash Out view from the existing engines. Reports
+ * and reconciles only — it NEVER disburses (Stacy authorizes each pay via
+ * setObligationStatus). Composes getCashFlow (position + ranked obligations),
+ * expected-payouts (per-day cash-in), and credit-lines (available cash/credit).
+ */
+export async function getCashOut(db: any, asOf: string, days = 3): Promise<CashOut> {
+  const [{ getCashFlow }, { computeExpectedPayouts }, { computeCreditLines }] = await Promise.all([
+    import("./cash-flow-service"),
+    import("./expected-payouts-service"),
+    import("./credit-lines-service"),
+  ]);
+  const cf = await getCashFlow(db, { windowDays: days, asOf });
+  const ep = await computeExpectedPayouts(db, asOf);
+
+  const payoutsByDate = dailyInboundSchedule(ep, asOf, days);
+  const oblsByDate = bucketObligationsByDay(
+    cf.obligations.map((o: any) => ({ id: o.id, amount: o.amount, amountEstimated: o.amountEstimated, dueDate: o.dueDate })),
+    asOf, days,
+  );
+  const rolling = buildRollingCashOut(asOf, days, cf.position.cashOnHand, payoutsByDate, oblsByDate);
+
+  // Available cash = drawable LOC/line room; available credit = card room. Failure
+  // leaves nulls (FLAG-DON'T-FABRICATE — never a fabricated 0 liquidity figure).
+  let availableCash: number | null = null;
+  let availableCredit: number | null = null;
+  try {
+    const { lines } = await computeCreditLines();
+    const sumAvail = (t: string) => {
+      const ls = lines.filter((l: any) => l.type === t && l.available != null);
+      return ls.length ? r2(ls.reduce((s: number, l: any) => s + (l.available || 0), 0)) : null;
+    };
+    availableCash = sumAvail("loc");
+    availableCredit = sumAvail("card");
+  } catch { /* leave nulls */ }
+
+  const cashOnHand = r2(cf.position.cashOnHand);
+  const totalLiquidity = r2(cashOnHand + (availableCash ?? 0) + (availableCredit ?? 0));
+
+  return {
+    asOf, days, rolling, cashOnHand,
+    availableCash, availableCredit, totalLiquidity,
+    obligations: cf.obligations,
+    unfundedMustPayCount: cf.position.unfundedMustPayCount,
+    basis: "sales-estimate",
+    generatedAt: new Date().toISOString(),
+  };
 }

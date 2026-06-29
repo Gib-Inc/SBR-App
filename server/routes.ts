@@ -26212,6 +26212,21 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── Cash Out: rolling multi-day disbursement view (Stacy's dashboard; recommends + tracks only) ──
+  app.get("/api/finances/cash-out", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getCashOut } = await import("./services/cash-out-service");
+      const rawDays = req.query.days != null ? Number(req.query.days) : NaN;
+      const days = Number.isFinite(rawDays) ? Math.min(14, Math.max(1, Math.trunc(rawDays))) : 3;
+      const asOf = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+      res.json({ success: true, ...(await getCashOut(db, asOf, days)) });
+    } catch (error: any) {
+      console.error("[CashOut] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build cash out" });
+    }
+  });
+
   app.put("/api/finances/cash-obligation/:id/status", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const status = String(req.body?.status || "");

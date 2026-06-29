@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { addDaysYmd, buildRollingCashOut, bucketObligationsByDay } from "./cash-out-service";
+import { addDaysYmd, buildRollingCashOut, bucketObligationsByDay, dailyInboundSchedule } from "./cash-out-service";
 
 describe("addDaysYmd", () => {
   it("adds days and rolls month/year boundaries (UTC)", () => {
@@ -50,6 +50,31 @@ describe("buildRollingCashOut", () => {
     expect(buildRollingCashOut("2026-06-30", 0, 100, {}, {})).toEqual([]);
     const d = buildRollingCashOut("2026-06-30", 2, 100, {}, {});
     expect(d[1].opening).toBe(100); // nothing happened day 0 → carries flat
+  });
+});
+
+describe("dailyInboundSchedule", () => {
+  const payouts = {
+    amazon: { channel: "amazon" as const, grossWindow: 0, feePct: 0.15, settlementDays: 14, netExpected: 1400 },
+    shopify: { channel: "shopify" as const, grossWindow: 0, feePct: 0.029, settlementDays: 3, netExpected: 300 },
+    totalNetExpected: 1700, asOf: "2026-06-30", basis: "sales-estimate" as const,
+  };
+  it("spreads each channel's net payout evenly across its settlement window", () => {
+    const s = dailyInboundSchedule(payouts, "2026-06-30", 3);
+    // day0: amazon 1400/14=100 + shopify 300/3=100 = 200
+    expect(s["2026-06-30"]).toBeCloseTo(200, 2);
+    expect(s["2026-07-01"]).toBeCloseTo(200, 2);
+    expect(s["2026-07-02"]).toBeCloseTo(200, 2);
+  });
+  it("only Amazon contributes past the Shopify window (day 3+)", () => {
+    const s = dailyInboundSchedule(payouts, "2026-06-30", 5);
+    expect(s["2026-07-03"]).toBeCloseTo(100, 2); // amazon only (shopify done after 3 days)
+    expect(s["2026-07-04"]).toBeCloseTo(100, 2);
+  });
+  it("summed over a wide window equals the total net payout (no cash invented or lost)", () => {
+    const s = dailyInboundSchedule(payouts, "2026-06-30", 14);
+    const total = Object.values(s).reduce((a, b) => a + b, 0);
+    expect(total).toBeCloseTo(1700, 1);
   });
 });
 

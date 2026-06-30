@@ -438,8 +438,16 @@ export class QuickBooksClient {
     let openBills: QBOpenDoc[] | null = null;
     try {
       const q = encodeURIComponent("SELECT * FROM Bill WHERE Balance > '0' MAXRESULTS 1000");
-      const r = await this.apiRequest<{ QueryResponse: { Bill?: QBOpenDoc[] } }>(`/query?query=${q}`);
-      openBills = r.QueryResponse?.Bill || [];
+      const r = await this.apiRequest<{ QueryResponse?: { Bill?: QBOpenDoc[] } }>(`/query?query=${q}`);
+      // Treat "no Bill" as a genuine ZERO-open-bills (empty array) ONLY when QueryResponse
+      // is actually present — that's what QBO returns for an empty result. A malformed /
+      // partial response with no QueryResponse stays NULL (a gap), so the downstream
+      // auto-close sweep can't misread it as "every bill is paid" and close obligations (audit #6).
+      if (r.QueryResponse) {
+        openBills = r.QueryResponse.Bill || [];
+      } else {
+        errors.push("DATA GAPPED: Accounts Payable (open bills) — QBO response had no QueryResponse");
+      }
     } catch (e: any) {
       errors.push(`DATA GAPPED: Accounts Payable (open bills) — ${e?.message ?? e}`);
     }

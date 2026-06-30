@@ -158,6 +158,23 @@ describe("buildScenarios (deterministic what-to-pay options)", () => {
   });
 });
 
+describe("rolling walk ⇄ scenarios reconcile (shared firm-cost)", () => {
+  it("sum of rolling payNow over the window == pay_all totalPaid for the same obligations", () => {
+    const obls = [
+      { id: "a", label: "A", amount: 2000, amountEstimated: false, tier: "mca" as const, dueDate: "2026-06-30" },
+      { id: "b", label: "B", amount: 3000, amountEstimated: false, tier: "tier2" as const, dueDate: "2026-07-01" },
+      { id: "c", label: "C (unknown)", amount: 0, amountEstimated: true, tier: "tier1" as const, dueDate: "2026-07-01" },
+      { id: "d", label: "D (credit)", amount: -500, amountEstimated: false, tier: "tier3" as const, dueDate: "2026-07-02" },
+    ];
+    const byDay = bucketObligationsByDay(obls, "2026-06-30", 3);
+    const rolling = buildRollingCashOut("2026-06-30", 3, 10000, {}, byDay);
+    const rollingPayNow = rolling.reduce((s, d) => s + d.payNow, 0);
+    const [payAll] = buildScenarios(obls.map((o) => ({ id: o.id, label: o.label, amount: o.amount, amountEstimated: o.amountEstimated, tier: o.tier })), 10000, 0, 50000);
+    expect(rollingPayNow).toBe(payAll.totalPaid); // both = 5000 (a+b); c unknown, d credit → neither counts
+    expect(payAll.totalPaid).toBe(5000);
+  });
+});
+
 describe("bucketObligationsByDay", () => {
   const obls = [
     { id: "overdue", amount: 100, amountEstimated: false, dueDate: "2026-06-25" }, // before start → day0

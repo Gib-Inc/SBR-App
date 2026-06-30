@@ -19,6 +19,14 @@ import type { Tier } from "./cash-flow-service";
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
+// THE single definition of a firm, payable cost — used by BOTH the rolling walk and the
+// scenarios so a day's ending and a scenario's ending-cash always reconcile. A cost
+// counts only when it's a known (not estimated), finite, POSITIVE dollar amount; an
+// estimated seed is flagged as unfunded (never summed), and a negative/zero known amount
+// (a credit/refund) contributes nothing rather than silently inflating cash.
+const firmCost = (o: { amount: number; amountEstimated: boolean }) =>
+  !o.amountEstimated && Number.isFinite(o.amount) && o.amount > 0 ? o.amount : 0;
+
 /** Add `n` days to a YYYY-MM-DD string (UTC, calendar-safe). Pure. */
 export function addDaysYmd(ymd: string, n: number): string {
   const [y, m, d] = ymd.split("-").map(Number);
@@ -68,8 +76,8 @@ export function buildRollingCashOut(
     const obligationIds: string[] = [];
     for (const o of obls) {
       obligationIds.push(o.id);
-      if (o.amountEstimated && o.amount <= 0) unfundedCount += 1;
-      else payNow += Number(o.amount) || 0;
+      if (o.amountEstimated) unfundedCount += 1; // unknown amount → flag, never sum
+      payNow += firmCost(o);                     // only firm, positive amounts draw down the day
     }
     payNow = r2(payNow);
     const ending = r2(opening + cashIn - payNow);
@@ -152,10 +160,7 @@ export interface Scenario {
 }
 
 const MUST_PAY: ReadonlySet<Tier> = new Set<Tier>(["mca", "tier1", "tier2"]);
-// "known" = a usable, non-negative dollar amount we can subtract. An estimated-$0 seed,
-// or any negative/NaN amount, is NOT a known cost (it gets flagged, never silently summed).
-const known = (o: ScenarioObl) => !o.amountEstimated && Number.isFinite(o.amount) && o.amount > 0;
-const cost = (o: ScenarioObl) => (known(o) ? o.amount : 0);
+const cost = firmCost; // same firm-cost rule the rolling walk uses (so the two reconcile)
 
 /**
  * Build one scenario from an ORDERED pay list against a cash+inbound budget. Pure.
@@ -169,7 +174,7 @@ function makeScenario(
   const totalPaid = r2(pay.reduce((s, o) => s + cost(o), 0));
   const endingCash = r2(cashPlusInbound - totalPaid);
   const creditDrawn = endingCash < 0 ? r2(-endingCash) : 0;
-  const unfundedInPay = pay.filter((o) => !known(o)).length;
+  const unfundedInPay = pay.filter((o) => o.amountEstimated).length; // truly-unknown amounts only
   return {
     key, label, pay, defer, totalPaid, endingCash, creditDrawn,
     feasible: fundingRoom == null ? null : creditDrawn <= r2(fundingRoom),

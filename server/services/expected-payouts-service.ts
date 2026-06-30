@@ -125,7 +125,10 @@ export async function computeExpectedPayouts(db: any, asOf: string): Promise<Exp
         join sales_order_lines sol on sol.sales_order_id = so.id
         where so.channel = ${channel}
           and upper(trim(coalesce(so.status, ''))) not in ('CANCELLED', 'CANCELED', 'REFUNDED')
-          and so.order_date >= (${asOf}::date - ${days}::int)
+          -- exactly N calendar dates ending on asOf (the in-transit settlement window);
+          -- a lower bound of asOf-days would span days+1 dates and pull one extra day of
+          -- gross, overstating the expected payout and the runway (audit #11).
+          and so.order_date >= (${asOf}::date - ${days}::int + 1)
           and so.order_date < (${asOf}::date + 1)`),
     )[0];
     return num(r?.gross);

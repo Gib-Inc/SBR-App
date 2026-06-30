@@ -636,7 +636,7 @@ export function sodBlocksPaid(targetStatus: OblStatus, currentStatus: OblStatus,
   return currentStatus !== "approved" || !approvedBy || approvedBy === actor;
 }
 
-export type StatusResult = { ok: boolean; reason?: "not_found" | "no_actor" | "sod_block" };
+export type StatusResult = { ok: boolean; reason?: "not_found" | "no_actor" | "sod_block"; auditWarning?: boolean };
 
 export async function setObligationStatus(db: any, id: string, status: OblStatus, by?: string, byName?: string): Promise<StatusResult> {
   const o = rows(await db.execute(sql`select amount::float8 as amount, amount_estimated, approved_by, status from cash_obligations where id = ${id}`))[0];
@@ -671,9 +671,15 @@ export async function setObligationStatus(db: any, id: string, status: OblStatus
       updated_at = now()
     where id = ${id}`);
   // Append-only audit trail (DB trigger blocks UPDATE/DELETE) — critical given the
-  // ACH fraud history. Best-effort insert; never block the recorded decision.
+  // ACH fraud history. Best-effort so a logging hiccup never blocks the recorded
+  // decision, but a FAILURE must be visible (audit #8): log it and flag the result,
+  // so a marked-paid-without-audit row isn't silently swallowed.
+  let auditWarning = false;
   await db.execute(sql`
     insert into payment_actions (obligation_id, action, acted_by, acted_by_name, amount)
-    values (${id}, ${action}, ${by}, ${byName ?? null}, ${num(o.amount)})`).catch(() => {});
-  return { ok: true };
+    values (${id}, ${action}, ${by}, ${byName ?? null}, ${num(o.amount)})`).catch((e: any) => {
+    auditWarning = true;
+    console.error(`[Cash Command] payment_actions audit insert FAILED for obligation ${id} (${action} by ${by}):`, e?.message ?? e);
+  });
+  return auditWarning ? { ok: true, auditWarning: true } : { ok: true };
 }

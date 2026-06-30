@@ -289,24 +289,16 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
 /** Write a cash_position snapshot row (so the standalone tool can read it too). */
 export async function writeCashPosition(db: any, asOf: string): Promise<void> {
   const p = await getCashPosition(db, 30, asOf);
-  // One snapshot per day. getCashFlow runs on every page read, so without this
-  // guard cash_position would accumulate a duplicate row per read. Refresh the
-  // day's row if it already exists, otherwise insert it.
-  const existing = rows(await db.execute(sql`
-    select id from cash_position where as_of = ${asOf}::date order by updated_at desc limit 1`))[0];
-  // expected_payouts_net = the nightly-posted "total on its way" (sales-derived,
-  // net of fees). Column added defensively in startup-checks (ADD COLUMN IF NOT
-  // EXISTS); write through coalesce so an older schema row can't error the write.
-  if (existing?.id) {
-    await db.execute(sql`
-      update cash_position set cash_on_hand = ${p.cashOnHand}, expected_inflows = ${p.projectedIncome},
-        expected_payouts_net = ${p.expectedPayouts.totalNet}, source = 'qbo', updated_at = now()
-      where id = ${existing.id}`);
-  } else {
-    await db.execute(sql`
-      insert into cash_position (as_of, cash_on_hand, expected_inflows, expected_payouts_net, source, updated_at)
-      values (${asOf}::date, ${p.cashOnHand}, ${p.projectedIncome}, ${p.expectedPayouts.totalNet}, 'qbo', now())`);
-  }
+  // One snapshot per day. getCashFlow runs on every page read, so a SELECT-then-INSERT
+  // raced into duplicate rows under concurrent loads. A single INSERT ... ON CONFLICT
+  // (as_of) upsert is race-safe (backed by the cash_position_as_of_uidx unique index in
+  // startup-checks). expected_payouts_net = the nightly "total on its way" (net of fees).
+  await db.execute(sql`
+    insert into cash_position (as_of, cash_on_hand, expected_inflows, expected_payouts_net, source, updated_at)
+    values (${asOf}::date, ${p.cashOnHand}, ${p.projectedIncome}, ${p.expectedPayouts.totalNet}, 'qbo', now())
+    on conflict (as_of) do update set
+      cash_on_hand = excluded.cash_on_hand, expected_inflows = excluded.expected_inflows,
+      expected_payouts_net = excluded.expected_payouts_net, source = 'qbo', updated_at = now()`);
 }
 
 // ── DB: keep generated (tax/debt) obligations fresh ─────────────────────────

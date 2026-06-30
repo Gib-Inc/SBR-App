@@ -292,6 +292,11 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `CREATE TABLE IF NOT EXISTS cash_position (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), as_of date NOT NULL DEFAULT current_date, cash_on_hand numeric(14,2) NOT NULL DEFAULT 0, expected_inflows numeric(14,2) NOT NULL DEFAULT 0, source text DEFAULT 'qbo', updated_at timestamptz NOT NULL DEFAULT now())`,
     // Nightly-posted "total on its way" — sales-derived Amazon + Shopify expected payouts, net of fees.
     `ALTER TABLE cash_position ADD COLUMN IF NOT EXISTS expected_payouts_net numeric(14,2) NOT NULL DEFAULT 0`,
+    // One cash_position row per day. getCashFlow writes on every page read, and the old
+    // SELECT-then-INSERT raced into duplicate same-day rows. Dedup any historical races
+    // (keep the most-recent) THEN enforce uniqueness so the ON CONFLICT upsert is race-safe.
+    `DELETE FROM cash_position a USING cash_position b WHERE a.as_of = b.as_of AND (a.updated_at < b.updated_at OR (a.updated_at = b.updated_at AND a.id < b.id))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS cash_position_as_of_uidx ON cash_position(as_of)`,
     `CREATE OR REPLACE VIEW v_pay_order AS select o.*, case coalesce(o.tier, case when o.category in ('tax','payroll') then 'tier1' when o.criticality = 'must' then 'tier2' when o.criticality = 'important' then 'tier3' else 'tier4' end) when 'mca' then 0 when 'tier1' then 1 when 'tier2' then 2 when 'tier3' then 3 when 'tier4' then 4 when 'hold' then 9 else 3 end as tier_rank from cash_obligations o where o.is_active and o.status <> 'paid' order by tier_rank, due_date nulls last, amount desc`,
     // Per-campaign monthly ad performance (month-over-month trend by campaign).
     `CREATE TABLE IF NOT EXISTS ad_campaign_performance (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), platform text NOT NULL, campaign_name text NOT NULL, month text NOT NULL, period_start date, period_end date, spend real NOT NULL DEFAULT 0, revenue real, purchases integer, impressions integer, source text, superseded boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now())`,

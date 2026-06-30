@@ -18,7 +18,8 @@ interface CashOutDay {
 }
 interface Scenario {
   key: string; label: string; pay: any[]; defer: any[]; totalPaid: number;
-  endingCash: number; creditDrawn: number; feasible: boolean; unfundedInPay: number; rationale: string;
+  endingCash: number; creditDrawn: number; feasible: boolean | null; unfundedInPay: number;
+  endingCashComplete: boolean; rationale: string;
 }
 interface CashOut {
   success: boolean; asOf: string; days: number; rolling: CashOutDay[];
@@ -79,6 +80,13 @@ export default function CashOut() {
         <Tile label="Total liquidity" value={money(data?.totalLiquidity)} accent="green" sub="cash + lines + cards" />
       </div>
 
+      {!!data?.unfundedMustPayCount && (
+        <div className="rounded-lg border border-amber-300 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-950/15 px-3 py-2 text-sm flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <span><b>{data.unfundedMustPayCount}</b> unavoidable obligation{data.unfundedMustPayCount > 1 ? "s have" : " has"} an unknown amount (MCA / tax / debt not yet entered). Pay-now totals and the day-by-day endings are a <b>best case</b> — the real outflow is larger. Enter the amounts to firm it up.</span>
+        </div>
+      )}
+
       <div className="flex items-center gap-2 text-sm">
         <span className="text-muted-foreground">Horizon:</span>
         {[3, 5, 7].map((w) => (
@@ -129,14 +137,18 @@ export default function CashOut() {
         <h2 className="text-base font-semibold mb-2 flex items-center gap-2"><ShieldCheck className="h-4 w-4" /> What-to-pay scenarios</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {scenarios.map((s) => (
-            <Card key={s.key} className={s.feasible ? "" : "border-red-300 dark:border-red-900/50"}>
+            <Card key={s.key} className={s.feasible === false ? "border-red-300 dark:border-red-900/50" : ""}>
               <CardContent className="p-4 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold">{s.label}</span>
-                  {!s.feasible && <Badge className="bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300 text-[10px]">over credit</Badge>}
+                  {s.feasible === false
+                    ? <Badge className="bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300 text-[10px]">over credit</Badge>
+                    : s.feasible === null
+                      ? <Badge className="bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300 text-[10px]">credit unknown</Badge>
+                      : null}
                 </div>
                 <div className="flex items-baseline gap-2">
-                  <span className={`text-2xl font-bold tabular-nums ${s.endingCash < 0 ? "text-red-600 dark:text-red-400" : "text-green-700 dark:text-green-300"}`}>{money(s.endingCash)}</span>
+                  <span className={`text-2xl font-bold tabular-nums ${s.endingCash < 0 ? "text-red-600 dark:text-red-400" : "text-green-700 dark:text-green-300"}`}>{money(s.endingCash)}{!s.endingCashComplete && <span className="text-amber-600 dark:text-amber-400" title="some pay items have an unknown amount — best case">*</span>}</span>
                   <span className="text-[11px] text-muted-foreground">cash after</span>
                 </div>
                 <div className="text-xs text-muted-foreground space-y-0.5">
@@ -171,7 +183,11 @@ export default function CashOut() {
                       </div>
                       {o.payee && o.payee !== o.label && <div className="text-[11px] text-muted-foreground truncate">{o.payee}</div>}
                     </div>
-                    <div className="text-right tabular-nums w-24 font-semibold">{money(o.amount)}{o.amountEstimated && <span className="text-[10px] text-muted-foreground ml-1">est</span>}</div>
+                    <div className="text-right tabular-nums w-28 font-semibold">
+                      {o.amountEstimated && o.amount <= 0
+                        ? <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium inline-flex items-center gap-1"><AlertTriangle className="h-3 w-3" />amount unknown</span>
+                        : <>{money(o.amount)}{o.amountEstimated && <span className="text-[10px] text-muted-foreground ml-1">est</span>}</>}
+                    </div>
                     <div className="flex items-center gap-1">
                       {o.status === "pending" && <>
                         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setStatus.mutate({ id: o.id, status: "approved" })}>Approve</Button>

@@ -142,29 +142,39 @@ export interface Scenario {
   label: string;
   pay: ScenarioObl[];      // recommended to pay now
   defer: ScenarioObl[];    // recommended to hold
-  totalPaid: number;       // sum of KNOWN amounts in `pay`
+  totalPaid: number;       // sum of KNOWN, non-negative amounts in `pay`
   endingCash: number;      // cash + inbound − totalPaid (negative ⇒ would need credit)
-  creditDrawn: number;     // amount that taps available credit (0 if cash covers it)
-  feasible: boolean;       // creditDrawn ≤ availableCredit
-  unfundedInPay: number;   // recommended-pay items whose amount is unknown (estimated $0)
+  creditDrawn: number;     // amount that taps the funding room (0 if cash covers it)
+  feasible: boolean | null; // creditDrawn ≤ funding room; null when funding room is unknown
+  unfundedInPay: number;   // recommended-pay items whose amount is unknown (estimated)
+  endingCashComplete: boolean; // false when unfundedInPay > 0 — endingCash is a best-case ceiling
   rationale: string;
 }
 
 const MUST_PAY: ReadonlySet<Tier> = new Set<Tier>(["mca", "tier1", "tier2"]);
-const known = (o: ScenarioObl) => !(o.amountEstimated && o.amount <= 0);
+// "known" = a usable, non-negative dollar amount we can subtract. An estimated-$0 seed,
+// or any negative/NaN amount, is NOT a known cost (it gets flagged, never silently summed).
+const known = (o: ScenarioObl) => !o.amountEstimated && Number.isFinite(o.amount) && o.amount > 0;
+const cost = (o: ScenarioObl) => (known(o) ? o.amount : 0);
 
-/** Build one scenario from an ORDERED pay list against a cash+inbound budget. Pure. */
+/**
+ * Build one scenario from an ORDERED pay list against a cash+inbound budget. Pure.
+ * `fundingRoom` = drawable LOC room + card room (null ⇒ unknown). feasible is null when
+ * the room is unknown, so the UI shows "credit unknown" rather than a false "over credit".
+ */
 function makeScenario(
   key: ScenarioKey, label: string, rationale: string,
-  pay: ScenarioObl[], defer: ScenarioObl[], cashPlusInbound: number, availableCredit: number,
+  pay: ScenarioObl[], defer: ScenarioObl[], cashPlusInbound: number, fundingRoom: number | null,
 ): Scenario {
-  const totalPaid = r2(pay.reduce((s, o) => s + (known(o) ? o.amount : 0), 0));
+  const totalPaid = r2(pay.reduce((s, o) => s + cost(o), 0));
   const endingCash = r2(cashPlusInbound - totalPaid);
   const creditDrawn = endingCash < 0 ? r2(-endingCash) : 0;
+  const unfundedInPay = pay.filter((o) => !known(o)).length;
   return {
     key, label, pay, defer, totalPaid, endingCash, creditDrawn,
-    feasible: creditDrawn <= r2(availableCredit),
-    unfundedInPay: pay.filter((o) => !known(o)).length,
+    feasible: fundingRoom == null ? null : creditDrawn <= r2(fundingRoom),
+    unfundedInPay,
+    endingCashComplete: unfundedInPay === 0,
     rationale,
   };
 }
@@ -181,17 +191,21 @@ export function buildScenarios(
   rankedObls: ScenarioObl[],
   cashOnHand: number,
   inbound: number,
-  availableCredit: number,
+  availableCredit: number | null,
+  availableCash: number | null = null,
 ): Scenario[] {
   const budget = r2(cashOnHand + inbound);
+  // Funding room a plan can draw on = drawable LOC room + card room. Unknown card room
+  // ⇒ room unknown (null). Unknown LOC room ⇒ counted as 0 (don't assume room we can't see).
+  const fundingRoom = availableCredit == null ? null : r2(availableCredit + (availableCash ?? 0));
   // Obligations are already tier-ranked by the caller (rankAndProject).
   const all = rankedObls;
 
   // 1. pay_all — clear the board; defer nothing.
   const payAll = makeScenario(
     "pay_all", "Clear everything",
-    "Pays every obligation in priority order. Ending cash below zero means this draws on available credit.",
-    all, [], budget, availableCredit,
+    "Pays every obligation in priority order. Ending cash below zero means this draws on available cash/credit.",
+    all, [], budget, fundingRoom,
   );
 
   // 2. conservative — only the unavoidable tiers; defer the rest.
@@ -199,22 +213,26 @@ export function buildScenarios(
   const conservative = makeScenario(
     "conservative", "Unavoidable only",
     "Pays only what cannot be deferred — MCAs/auto-debits, tax & payroll, and secured/critical vendors. Everything else holds.",
-    mustPay, all.filter((o) => !MUST_PAY.has(o.tier)), budget, availableCredit,
+    mustPay, all.filter((o) => !MUST_PAY.has(o.tier)), budget, fundingRoom,
   );
 
-  // 3. preserve_cash — pay top-down until cash+inbound is exhausted; never draw credit.
+  // 3. preserve_cash — pay top-down and STOP at the first item that doesn't fit, so the
+  // pay set is a true priority PREFIX (never skip a higher-rank bill to fund a cheaper
+  // lower-rank one). Never draws credit. Unknown-amount items (cost 0) pass through but
+  // are flagged via unfundedInPay/endingCashComplete.
   const pay: ScenarioObl[] = [];
   const defer: ScenarioObl[] = [];
   let remaining = budget;
+  let stopped = false;
   for (const o of all) {
-    const cost = known(o) ? o.amount : 0;
-    if (cost <= remaining) { pay.push(o); remaining = r2(remaining - cost); }
-    else defer.push(o);
+    const c = cost(o);
+    if (!stopped && c <= remaining) { pay.push(o); remaining = r2(remaining - c); }
+    else { stopped = true; defer.push(o); }
   }
   const preserveCash = makeScenario(
     "preserve_cash", "Cash only, no new credit",
-    "Pays top-priority items only as far as cash on hand plus expected payouts reach — stops before tapping any line of credit. Lower-priority items defer.",
-    pay, defer, budget, availableCredit,
+    "Pays top-priority items in order only as far as cash on hand plus expected payouts reach — stops at the first bill that doesn't fit and holds it and everything below it. Never taps a line of credit.",
+    pay, defer, budget, fundingRoom,
   );
 
   return [payAll, conservative, preserveCash];
@@ -250,9 +268,20 @@ export async function getCashOut(db: any, asOf: string, days = 3): Promise<CashO
   const cf = await getCashFlow(db, { windowDays: days, asOf });
   const ep = await computeExpectedPayouts(db, asOf);
 
+  // PAYABLE = the obligations the rolling window + scenarios should act on: the
+  // cash-flow engine's own `active` rule (drop status 'deferred' + tier 'hold' — bills
+  // Stacy parked) AND inside the rolling horizon (getCashFlow's SQL admits due ≤
+  // asOf+days, one day past the asOf..asOf+days-1 walk; clip it so the day-by-day view,
+  // the scenarios, and the pay list all reconcile to the SAME set). Overdue/undated
+  // stay (bucketObligationsByDay pulls them to day 0).
+  const lastDate = addDaysYmd(asOf, Math.max(0, days - 1));
+  const payable = (cf.obligations as any[]).filter(
+    (o) => o.status !== "deferred" && o.tier !== "hold" && (!o.dueDate || o.dueDate <= lastDate),
+  );
+
   const payoutsByDate = dailyInboundSchedule(ep, asOf, days);
   const oblsByDate = bucketObligationsByDay(
-    cf.obligations.map((o: any) => ({ id: o.id, amount: o.amount, amountEstimated: o.amountEstimated, dueDate: o.dueDate })),
+    payable.map((o: any) => ({ id: o.id, amount: o.amount, amountEstimated: o.amountEstimated, dueDate: o.dueDate })),
     asOf, days,
   );
   const rolling = buildRollingCashOut(asOf, days, cf.position.cashOnHand, payoutsByDate, oblsByDate);
@@ -272,19 +301,25 @@ export async function getCashOut(db: any, asOf: string, days = 3): Promise<CashO
   } catch { /* leave nulls */ }
 
   const cashOnHand = r2(cf.position.cashOnHand);
-  const totalLiquidity = r2(cashOnHand + (availableCash ?? 0) + (availableCredit ?? 0));
+  // FLAG-DON'T-FABRICATE: total liquidity is only known when every component is. If
+  // available cash or credit couldn't be computed, leave it null so the tile shows "—"
+  // rather than a confident figure that silently omits the unknown line.
+  const totalLiquidity =
+    availableCash == null || availableCredit == null ? null : r2(cashOnHand + availableCash + availableCredit);
 
-  // Deterministic what-to-pay scenarios over the window's ranked obligations. Inbound =
-  // the payouts that land inside the window (already prorated by getCashFlow).
+  // Deterministic what-to-pay scenarios over the PAYABLE, in-window obligations (same
+  // set the rolling walk uses, so the day-by-day endings and the scenarios reconcile).
+  // Inbound = payouts landing inside the window. Feasibility counts BOTH drawable LOC
+  // room and card room; null credit ⇒ feasibility unknown (not "infeasible").
   const scenarios = buildScenarios(
-    cf.obligations.map((o: any) => ({ id: o.id, label: o.label, amount: o.amount, amountEstimated: o.amountEstimated, tier: o.tier })),
-    cashOnHand, r2(cf.position.inboundWindow), availableCredit ?? 0,
+    payable.map((o: any) => ({ id: o.id, label: o.label, amount: o.amount, amountEstimated: o.amountEstimated, tier: o.tier })),
+    cashOnHand, r2(cf.position.inboundWindow), availableCredit, availableCash,
   );
 
   return {
     asOf, days, rolling, cashOnHand,
     availableCash, availableCredit, totalLiquidity,
-    obligations: cf.obligations, scenarios,
+    obligations: payable, scenarios,
     unfundedMustPayCount: cf.position.unfundedMustPayCount,
     basis: "sales-estimate",
     generatedAt: new Date().toISOString(),

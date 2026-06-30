@@ -110,10 +110,51 @@ describe("buildScenarios (deterministic what-to-pay options)", () => {
     expect(preserveCash.endingCash).toBe(2000);
   });
 
-  it("infeasible when the credit draw exceeds available credit", () => {
-    const [pa] = buildScenarios(obls, 0, 0, 1000); // budget 0, only 1000 credit, 14000 owed
+  it("infeasible when the credit draw exceeds the funding room (cards + LOC)", () => {
+    const [pa] = buildScenarios(obls, 0, 0, 1000); // budget 0, 1000 card room, 14000 owed
     expect(pa.creditDrawn).toBe(14000);
     expect(pa.feasible).toBe(false);
+  });
+
+  it("counts drawable LOC room in feasibility, not just cards", () => {
+    // 14000 owed, 0 budget, 1000 cards + 20000 LOC room → feasible
+    const [pa] = buildScenarios(obls, 0, 0, 1000, 20000);
+    expect(pa.creditDrawn).toBe(14000);
+    expect(pa.feasible).toBe(true);
+  });
+
+  it("feasible is null (unknown), not false, when credit room can't be computed", () => {
+    const [pa] = buildScenarios(obls, 0, 0, null);
+    expect(pa.creditDrawn).toBe(14000);
+    expect(pa.feasible).toBeNull();
+  });
+
+  it("preserve_cash respects rank order — never skips an unaffordable high-rank bill to fund a cheaper low-rank one", () => {
+    const ranked: ScenarioObl[] = [
+      { id: "big", label: "Big MCA", amount: 9000, amountEstimated: false, tier: "mca" },     // doesn't fit
+      { id: "cheap", label: "Cheap flex", amount: 500, amountEstimated: false, tier: "tier4" }, // would fit, but is lower rank
+    ];
+    const [, , preserve] = buildScenarios(ranked, 5000, 0, 0); // budget 5000
+    expect(preserve.pay.map((o) => o.id)).toEqual([]);          // big doesn't fit → stop; cheap NOT cherry-picked
+    expect(preserve.defer.map((o) => o.id)).toEqual(["big", "cheap"]);
+  });
+
+  it("a negative known amount never inflates ending cash (clamped to 0 cost)", () => {
+    const ranked: ScenarioObl[] = [{ id: "credit", label: "Vendor credit", amount: -1000, amountEstimated: false, tier: "tier3" }];
+    const [pa] = buildScenarios(ranked, 5000, 0, 0);
+    expect(pa.totalPaid).toBe(0);     // not -1000
+    expect(pa.endingCash).toBe(5000); // unchanged, not 6000
+  });
+
+  it("flags endingCash as a best-case ceiling when a pay item has an unknown amount", () => {
+    const ranked: ScenarioObl[] = [
+      { id: "mca", label: "MCA (amount unknown)", amount: 0, amountEstimated: true, tier: "mca" },
+      { id: "bill", label: "Known bill", amount: 1000, amountEstimated: false, tier: "tier2" },
+    ];
+    const [pa] = buildScenarios(ranked, 5000, 0, 10000);
+    expect(pa.unfundedInPay).toBe(1);
+    expect(pa.endingCashComplete).toBe(false);
+    expect(pa.totalPaid).toBe(1000); // MCA's unknown amount not summed
   });
 });
 

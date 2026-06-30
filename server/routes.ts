@@ -24116,6 +24116,26 @@ Generate only the email body text, no subject line.`;
         billsDue: ((qbLive as any).raw)?.billsDue ?? [],             // ranked "what to pay"
       } : null;
 
+      // Prefer the operator-entered BANK-CONFIRMED balance over the lagging QB ledger — the
+      // same source of truth the Cash Out view, runway, governor, green-line, and exec-summary
+      // use. Without this the main Finances page showed QB's ~$38K while Cash Out showed $53K.
+      // Falls back to the QB value when no fresh bank entry exists (zero regression).
+      let resolvedCash: number | null = qbLiveOut?.cashOnHand ?? null;
+      let cashSource: "bank_confirmed" | "qbo_ledger" = "qbo_ledger";
+      try {
+        const { getBankConfirmedOverride } = await import("./services/cash-flow-service");
+        const bankOv = await getBankConfirmedOverride(db);
+        if (bankOv) { resolvedCash = bankOv.cashOnHand; cashSource = "bank_confirmed"; }
+      } catch (e: any) { console.warn("[CIPH.R] overview bank override failed:", e?.message ?? e); }
+      // Overlay the resolved cash onto the QuickBooks Live card's cashOnHand too, so the WHOLE
+      // page shows ONE cash number. Preserve the raw QB ledger value as qbLedgerCash for
+      // transparency and expose cashSource so the card can badge bank-confirmed vs QB-ledger.
+      if (qbLiveOut && resolvedCash != null) {
+        (qbLiveOut as any).qbLedgerCash = qbLiveOut.cashOnHand;
+        qbLiveOut.cashOnHand = resolvedCash;
+        (qbLiveOut as any).cashSource = cashSource;
+      }
+
       // Expected channel payouts — the DEFENSIBLE "money on its way" (Amazon trailing
       // 14d + Shopify trailing 3d, sales-derived, net of fees). This REPLACES the QB
       // A/R accrual in the net-cash math: marketplace A/R books as one unverified
@@ -24136,14 +24156,14 @@ Generate only the email body text, no subject line.`;
       // the sales-derived pipeline, NOT the inflated QB A/R accrual; falls back to 0
       // inbound if the payout calc is unavailable (never banks on the accrual).
       const netCashInbound = expectedPayouts ? expectedPayouts.totalNet : 0;
-      const netCashPosition = (qbLiveOut && qbLiveOut.cashOnHand != null)
-        ? Math.round(((qbLiveOut.cashOnHand) + netCashInbound - (qbLiveOut.accountsPayable || 0)) * 100) / 100
+      const netCashPosition = (resolvedCash != null)
+        ? Math.round((resolvedCash + netCashInbound - (qbLiveOut?.accountsPayable || 0)) * 100) / 100
         : null;
 
-      // Live QB cash is the freshest cash-on-hand — overlay it onto the balance
-      // sheet's cash so the headline reflects reality, not a stale upload.
-      if (qbLiveOut?.cashOnHand != null) {
-        balanceSheet = { ...balanceSheet, cash: qbLiveOut.cashOnHand };
+      // Overlay the bank-confirmed cash onto the balance sheet's cash so the headline KPI
+      // reflects the real bank balance, matching the Cash Out view (not the lagging QB ledger).
+      if (resolvedCash != null) {
+        balanceSheet = { ...balanceSheet, cash: resolvedCash };
       }
 
       // Live debt position — overlay the CURRENT debt stack from credit_lines (synced
@@ -25762,39 +25782,50 @@ Generate only the email body text, no subject line.`;
     try {
       const { db } = await import("./db");
       const { sql } = await import("drizzle-orm");
-      const months = ((await db.execute(sql`
-        with c as (
-          select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym,
-            case when account_name ~ '^[123] -' or account_name ilike '%gross sales%' or account_name ilike '%discount%' or account_name ilike '%returns%' then 'income'
-                 when account_name ilike '%cost of goods%' or account_name ilike '%cogs%' then 'cogs' else 'opex' end as k,
-            amount
-          from qb_pl_detail
-          where txn_date >= (date_trunc('month', current_date) - interval '3 months') and txn_date < date_trunc('month', current_date))
-        select ym,
-          round(sum(amount) filter (where k='income')::numeric,2) as net_sales,
-          round(sum(amount) filter (where k='cogs')::numeric,2) as cogs,
-          round(sum(amount) filter (where k='opex')::numeric,2) as opex
-        from c group by ym order by ym desc limit 2`)).rows ?? []) as any[];
+      // Use the CANONICAL classifier so this matches monthly_financials. The old inline rule
+      // classified BOTH the real Gross Sales AND the "1 - Gross Sales (Match Shopify...)"
+      // duplicate as income → net sales double-counted ~70-100% (phantom profit). It also
+      // wrongly treated discounts/returns as positive income; classifyAccount makes them contra.
+      const { classifyAccount, rollup } = await import("./services/finance-pnl-service");
       const r0 = (n: number) => Math.round(n * 100) / 100;
-      const mk = (r: any) => r ? (() => {
-        const ns = Number(r.net_sales) || 0, cogs = Number(r.cogs) || 0, opex = Number(r.opex) || 0;
-        return { month: r.ym, netSales: ns, cogs, grossProfit: r0(ns - cogs), opex, operatingIncome: r0(ns - cogs - opex) };
-      })() : null;
-      const cur = mk(months[0]); const prior = mk(months[1]);
+      const rawMonths = ((await db.execute(sql`
+        select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, account_name, sum(amount) as amt
+        from qb_pl_detail
+        where txn_date >= (date_trunc('month', current_date) - interval '3 months') and txn_date < date_trunc('month', current_date)
+        group by 1, 2`)).rows ?? []) as any[];
+      const monthItems = new Map<string, Array<{ account: string; amount: number }>>();
+      for (const r of rawMonths) {
+        const ym = String(r.ym);
+        if (!monthItems.has(ym)) monthItems.set(ym, []);
+        monthItems.get(ym)!.push({ account: String(r.account_name), amount: Number(r.amt) || 0 });
+      }
+      const monthsAgg = Array.from(monthItems.entries())
+        .sort((a, b) => (a[0] < b[0] ? 1 : -1)) // most-recent first
+        .map(([ym, items]) => {
+          const roll = rollup(items);
+          return { month: ym, netSales: roll.netSales, cogs: roll.cogs, grossProfit: roll.grossProfit, opex: roll.totalExpenses, operatingIncome: roll.netIncome };
+        });
+      const cur = monthsAgg[0] ?? null; const prior = monthsAgg[1] ?? null;
       let movers: any[] = [];
       if (cur && prior) {
-        movers = (((await db.execute(sql`
-          with v as (
-            select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, coalesce(nullif(trim(vendor_or_payee),''),'(unspecified)') as vendor, amount
-            from qb_pl_detail
-            where txn_date >= ${prior.month + '-01'}::date and txn_date < date_trunc('month', current_date)
-              and not (account_name ~ '^[123] -' or account_name ilike '%gross sales%' or account_name ilike '%discount%' or account_name ilike '%returns%' or account_name ilike '%cost of goods%'))
-          select vendor,
-            round(coalesce(sum(amount) filter (where ym=${cur.month}),0)::numeric,0) as curr,
-            round(coalesce(sum(amount) filter (where ym=${prior.month}),0)::numeric,0) as prior
-          from v group by vendor
-          order by abs(coalesce(sum(amount) filter (where ym=${cur.month}),0) - coalesce(sum(amount) filter (where ym=${prior.month}),0)) desc
-          limit 6`)).rows ?? []) as any[]).map((r: any) => ({ vendor: r.vendor, curr: Number(r.curr) || 0, prior: Number(r.prior) || 0, delta: r0((Number(r.curr) || 0) - (Number(r.prior) || 0)) }));
+        const rawMovers = ((await db.execute(sql`
+          select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym,
+            coalesce(nullif(trim(vendor_or_payee),''),'(unspecified)') as vendor, account_name, sum(amount) as amt
+          from qb_pl_detail
+          where txn_date >= ${prior.month + '-01'}::date and txn_date < date_trunc('month', current_date)
+          group by 1, 2, 3`)).rows ?? []) as any[];
+        const moverMap = new Map<string, { curr: number; prior: number }>();
+        for (const r of rawMovers) {
+          if (classifyAccount(String(r.account_name)) !== "expense") continue; // opex movers only
+          const vendor = String(r.vendor); const ym = String(r.ym); const amt = Number(r.amt) || 0;
+          const m = moverMap.get(vendor) ?? { curr: 0, prior: 0 };
+          if (ym === cur.month) m.curr += amt; else if (ym === prior.month) m.prior += amt;
+          moverMap.set(vendor, m);
+        }
+        movers = Array.from(moverMap.entries())
+          .map(([vendor, m]) => ({ vendor, curr: Math.round(m.curr), prior: Math.round(m.prior), delta: Math.round(m.curr - m.prior) }))
+          .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+          .slice(0, 6);
       }
       const variance = (cur && prior) ? {
         netSales: r0(cur.netSales - prior.netSales), grossProfit: r0(cur.grossProfit - prior.grossProfit),
@@ -26291,6 +26322,14 @@ Generate only the email body text, no subject line.`;
       const { writeCashPosition } = await import("./services/cash-flow-service");
       const asOfDay = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
       await writeCashPosition(db, asOfDay).catch((e: any) => console.warn("[BankBalance] cash_position refresh failed:", e?.message));
+
+      // Re-run + persist the runway forecast on the new cash. The Green Line reads the latest
+      // persisted financial_runway_forecasts row; the daily forecast is written right after the
+      // QB snapshot capture, so without this a bank entry made afterward would leave Green Line
+      // showing a runway computed on the stale (lower) QB cash. computeAndStoreRunway picks up
+      // the bank override via getBankConfirmedOverride.
+      const { computeAndStoreRunway } = await import("./services/runway-service");
+      await computeAndStoreRunway().catch((e: any) => console.warn("[BankBalance] runway refresh failed:", e?.message));
 
       res.json({ success: true });
     } catch (error: any) {

@@ -4,11 +4,16 @@
  *   - spend-leak detector: vendors by share of opex + rising-faster-than-revenue
  *   - debt-avalanche planner: facilities ranked by true cost (tier), payoff order
  *
- * Account classification mirrors the P&L: names starting "1 -/2 -/3 -" are sales,
- * "Cost of Goods Sold" is COGS, everything else is operating expense.
+ * Account classification uses the CANONICAL classifyAccount() from finance-pnl-service
+ * (the same one monthly_financials / the budget scorecard use) so Green Line's net income,
+ * opex %, and spend leaks reconcile to the P&L surfaces exactly. The old inline
+ * `account_name ~ '^[123] -'` rule matched ONLY the duplicate "Match Shopify" accounts and
+ * swept real Gross Sales into opex — producing fictional -$200K to -$445K/mo losses, opex %
+ * of 171-267%, and a permanently-pinned CRITICAL banner.
  */
 import { sql } from "drizzle-orm";
 import { debtTier, type Tier } from "./cash-flow-service";
+import { classifyAccount, rollup } from "./finance-pnl-service";
 
 type DB = any;
 const rows = (r: any): any[] => r?.rows ?? r ?? [];
@@ -32,22 +37,29 @@ export interface OpexMonth { month: string; netSales: number; opex: number; opex
 export async function computeOpexCreep(db: DB, sinceYmd = "2026-01-01"): Promise<{
   months: OpexMonth[]; latest: OpexMonth | null; monthsOver90: number;
 }> {
+  // Pull per-month, per-account totals and classify with the CANONICAL classifyAccount in JS
+  // (net sales = income + contra; opex = expense; cogs/duplicate excluded) so opex % matches
+  // the P&L surfaces exactly. Row count is tiny (months × accounts).
   const rs = rows(await db.execute(sql`
-    with c as (
-      select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, amount,
-        case when account_name ~ '^[123] -' then 'sales'
-             when account_name = 'Cost of Goods Sold' then 'cogs' else 'opex' end as cls
-      from qb_pl_detail where txn_date >= ${sinceYmd}::date)
-    select ym,
-      sum(amount) filter (where cls='sales') as net_sales,
-      sum(amount) filter (where cls='opex')  as opex
-    from c group by ym order by ym`));
-  const months: OpexMonth[] = rs.map((rr: any) => {
-    const netSales = num(rr.net_sales);
-    const opex = num(rr.opex);
-    const pct = netSales > 0 ? r1((opex / netSales) * 100) : 0;
-    return { month: rr.ym, netSales: r0(netSales), opex: r0(opex), opexPct: pct, status: opexStatus(pct) };
-  });
+    select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, account_name, sum(amount) as amt
+    from qb_pl_detail where txn_date >= ${sinceYmd}::date
+    group by 1, 2 order by 1`));
+  const byMonth = new Map<string, { netSales: number; opex: number }>();
+  for (const rr of rs) {
+    const ym = String(rr.ym);
+    const amt = num(rr.amt);
+    const g = classifyAccount(String(rr.account_name));
+    const m = byMonth.get(ym) ?? { netSales: 0, opex: 0 };
+    if (g === "income" || g === "contra") m.netSales += amt; // contra is negative in QB → nets down
+    else if (g === "expense") m.opex += amt;
+    byMonth.set(ym, m);
+  }
+  const months: OpexMonth[] = Array.from(byMonth.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([ym, m]) => {
+      const pct = m.netSales > 0 ? r1((m.opex / m.netSales) * 100) : 0;
+      return { month: ym, netSales: r0(m.netSales), opex: r0(m.opex), opexPct: pct, status: opexStatus(pct) };
+    });
   // Severity keys off the last COMPLETE month, not the in-progress one: a partial
   // month's opex/sales ratio is unstable and would swing the headline by day.
   const currentYm = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" }).slice(0, 7);
@@ -67,36 +79,45 @@ export interface VendorSpend {
 }
 
 export async function computeSpendLeaks(db: DB): Promise<{ vendors: VendorSpend[]; totalOpex90: number }> {
-  const totalRow = rows(await db.execute(sql`
-    select coalesce(sum(amount),0) as total from qb_pl_detail
-    where txn_date >= (current_date - 90) and amount > 0
-      and account_name !~ '^[123] -' and account_name <> 'Cost of Goods Sold'`))[0];
-  const totalOpex90 = num(totalRow?.total);
-
-  const rs = rows(await db.execute(sql`
-    with opex as (
-      select coalesce(nullif(vendor_or_payee,''),'(unattributed)') as vendor, txn_date, amount
-      from qb_pl_detail
-      where amount > 0 and account_name !~ '^[123] -' and account_name <> 'Cost of Goods Sold')
-    select vendor,
+  // Pull per-vendor, per-ACCOUNT positive amounts so we can classify each account with the
+  // canonical classifyAccount and keep ONLY true operating expense ('expense'). The old SQL
+  // filter (`!~ '^[123] -'` + exclude COGS) let the real 'Gross Sales' income account through,
+  // inflating the opex base ~2.3x (~$773K of revenue counted as spend) and defeating the
+  // 15%-concentration flag.
+  const raw = rows(await db.execute(sql`
+    select coalesce(nullif(vendor_or_payee,''),'(unattributed)') as vendor, account_name,
       coalesce(sum(amount) filter (where txn_date >= current_date-90),0) as spend90,
       coalesce(sum(amount) filter (where txn_date >= current_date-30),0) as spend30,
       coalesce(sum(amount) filter (where txn_date >= current_date-60 and txn_date < current_date-30),0) as prior30
-    from opex group by 1
-    having coalesce(sum(amount) filter (where txn_date >= current_date-90),0) > 0
-    order by spend90 desc limit 12`));
+    from qb_pl_detail
+    where amount > 0 and txn_date >= (current_date - 90)
+    group by 1, 2`));
 
-  const vendors: VendorSpend[] = rs.map((rr: any) => {
-    const spend90 = num(rr.spend90), spend30 = num(rr.spend30), prior30 = num(rr.prior30);
-    const pctOfOpex = totalOpex90 > 0 ? r1((spend90 / totalOpex90) * 100) : 0;
-    const growthPct = prior30 > 0 ? r1(((spend30 - prior30) / prior30) * 100) : null;
-    return {
-      vendor: String(rr.vendor), spend90: r0(spend90), pctOfOpex,
-      spend30: r0(spend30), prior30: r0(prior30), growthPct,
-      concentrationFlag: pctOfOpex > 15,
-      risingFlag: growthPct != null && growthPct > 10,
-    };
-  });
+  const byVendor = new Map<string, { spend90: number; spend30: number; prior30: number }>();
+  let totalOpex90 = 0;
+  for (const rr of raw) {
+    if (classifyAccount(String(rr.account_name)) !== "expense") continue; // opex only
+    const vendor = String(rr.vendor);
+    const v = byVendor.get(vendor) ?? { spend90: 0, spend30: 0, prior30: 0 };
+    v.spend90 += num(rr.spend90); v.spend30 += num(rr.spend30); v.prior30 += num(rr.prior30);
+    byVendor.set(vendor, v);
+    totalOpex90 += num(rr.spend90);
+  }
+
+  const vendors: VendorSpend[] = Array.from(byVendor.entries())
+    .filter(([, v]) => v.spend90 > 0)
+    .sort((a, b) => b[1].spend90 - a[1].spend90)
+    .slice(0, 12)
+    .map(([vendor, v]) => {
+      const pctOfOpex = totalOpex90 > 0 ? r1((v.spend90 / totalOpex90) * 100) : 0;
+      const growthPct = v.prior30 > 0 ? r1(((v.spend30 - v.prior30) / v.prior30) * 100) : null;
+      return {
+        vendor, spend90: r0(v.spend90), pctOfOpex,
+        spend30: r0(v.spend30), prior30: r0(v.prior30), growthPct,
+        concentrationFlag: pctOfOpex > 15,
+        risingFlag: growthPct != null && growthPct > 10,
+      };
+    });
   return { vendors, totalOpex90: r0(totalOpex90) };
 }
 
@@ -199,19 +220,27 @@ export async function computeGreenLine(db: DB): Promise<GreenLineSummary> {
     db.execute(sql`select realistic_days, calculated_burn_rate, runway_status from financial_runway_forecasts
       order by created_at desc limit 1`).then((r: any) => rows(r)[0]),
     db.execute(sql`
-      with c as (
-        select to_char(date_trunc('month',txn_date),'YYYY-MM') as ym, amount,
-          case when account_name ~ '^[123] -' then 'sales'
-               when account_name = 'Cost of Goods Sold' then 'cogs' else 'opex' end as cls
-        from qb_pl_detail where txn_date >= (current_date - interval '6 months'))
-      select ym, (sum(amount) filter (where cls='sales') - sum(amount) filter (where cls='cogs')
-                  - sum(amount) filter (where cls='opex')) as net_income
-      from c group by ym order by ym`).then((r: any) => rows(r)),
+      select to_char(date_trunc('month',txn_date),'YYYY-MM') as ym, account_name, sum(amount) as amt
+      from qb_pl_detail where txn_date >= (current_date - interval '6 months')
+      group by 1, 2 order by 1`).then((r: any) => rows(r)),
     computeDebtAvalanche(db),
     computeDscr(db),
     computeOpexCreep(db),
     computeGovernor(db),
   ]);
+
+  // Net income per month via the canonical rollup() (classifies each account with the same
+  // classifyAccount the P&L surfaces use, excluding the Match-Shopify duplicate tree), so the
+  // trend reconciles to monthly_financials instead of the old ~5-11x-too-negative inline rule.
+  const niByMonth = new Map<string, Array<{ account: string; amount: number }>>();
+  for (const rr of niRows as any[]) {
+    const ym = String(rr.ym);
+    if (!niByMonth.has(ym)) niByMonth.set(ym, []);
+    niByMonth.get(ym)!.push({ account: String(rr.account_name), amount: num(rr.amt) });
+  }
+  const netIncomeTrend = Array.from(niByMonth.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([ym, items]) => ({ month: ym, netIncome: r0(rollup(items).netIncome) }));
 
   // Prefer the operator-entered bank-confirmed balance over the lagging QB ledger so the
   // Green Line shows the same cash as the Cash Out view (one number, app-wide).
@@ -249,7 +278,7 @@ export async function computeGreenLine(db: DB): Promise<GreenLineSummary> {
     blendedMer: gov.blendedMer,
     totalDebt: debt.totalDebt,
     mcaBucket,
-    netIncomeTrend: niRows.map((rr: any) => ({ month: String(rr.ym), netIncome: r0(num(rr.net_income)) })),
+    netIncomeTrend,
     gaps,
     asOf: cashRow?.as_of ?? null,
   };

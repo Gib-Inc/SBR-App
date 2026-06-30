@@ -319,7 +319,7 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
       on conflict (external_key) where external_key is not null do update set
         due_date = excluded.due_date, label = excluded.label, rationale = excluded.rationale,
         tier = excluded.tier, updated_at = now()
-      where cash_obligations.status = 'pending'`);
+      where cash_obligations.status = 'pending' and not coalesce(cash_obligations.manually_edited, false)`);
     tax++;
   }
 
@@ -347,7 +347,7 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
       insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
       values (${ln.name + " payment"}, ${ln.name}, 'debt', ${tier}, 0, true, ${due}::date, 'monthly', ${tier === "tier2" ? "must" : "important"}, 'pending', 'debt', ${key}, ${rationale})
       on conflict (external_key) where external_key is not null do update set due_date = excluded.due_date, tier = excluded.tier, rationale = excluded.rationale, updated_at = now()
-      where cash_obligations.status = 'pending'`);
+      where cash_obligations.status = 'pending' and not coalesce(cash_obligations.manually_edited, false)`);
     debt++;
   }
   // CLOSE-OUT (audit #16): the debt external_key is month-bucketed (debt:NAME:YYYY-MM),
@@ -604,7 +604,7 @@ export async function upsertObligation(db: any, p: {
         amount = ${p.amount ?? 0}, amount_estimated = ${p.amountEstimated ?? false},
         due_date = ${p.dueDate ?? null}::date, cadence = ${p.cadence ?? "one_time"},
         criticality = ${criticality}, pay_from = ${p.payFrom ?? null}, method = ${p.method ?? "ach"},
-        rationale = ${p.rationale ?? null}, updated_at = now()
+        rationale = ${p.rationale ?? null}, manually_edited = true, updated_at = now()
       where id = ${p.id}`);
   } else {
     await db.execute(sql`

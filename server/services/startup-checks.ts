@@ -275,6 +275,8 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE cash_obligations ADD COLUMN IF NOT EXISTS anomaly_flag boolean NOT NULL DEFAULT false`,
     `ALTER TABLE cash_obligations ADD COLUMN IF NOT EXISTS anomaly_reason text`,
     `ALTER TABLE cash_obligations ADD COLUMN IF NOT EXISTS vendor_id varchar`,
+    // Operator-edited generated rows must survive the nightly seed re-sync (audit #14/#18).
+    `ALTER TABLE cash_obligations ADD COLUMN IF NOT EXISTS manually_edited boolean NOT NULL DEFAULT false`,
     `CREATE UNIQUE INDEX IF NOT EXISTS cash_obligations_external_key_idx ON cash_obligations(external_key) WHERE external_key IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS cash_obligations_due_idx ON cash_obligations(due_date) WHERE is_active`,
     `CREATE TABLE IF NOT EXISTS cash_vendors (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), name text UNIQUE NOT NULL, default_tier text, default_method text, is_1099 boolean, notes text, created_at timestamptz NOT NULL DEFAULT now())`,

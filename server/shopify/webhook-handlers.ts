@@ -524,13 +524,16 @@ export async function handleOrderCancelled(
       const alreadyTerminal = existingOrder.status === 'CANCELLED' || existingOrder.status === 'REFUNDED';
 
       if (!alreadyTerminal) {
-        // Release the stock that order-create allocated. Only qtyAllocated was
-        // ever decremented from availableForSaleQty (backordered units never were).
+        // Release the stock that order-create drew from availableForSaleQty. Only the
+        // afs-sourced portion was ever decremented from afs: backorder auto-fulfill added
+        // units to qtyAllocated from the Hildale buffer (backorderFulfilledQty), which were
+        // NOT taken from afs — restoring those would over-inflate sellable stock → oversell
+        // (audit #14). afsAllocated = qtyAllocated - backorderFulfilledQty.
         const inventoryMovement = new InventoryMovement(storage);
         const lines = await storage.getSalesOrderLines(existingOrder.id);
         for (const line of lines) {
-          const allocated = line.qtyAllocated ?? 0;
-          await storage.updateSalesOrderLine(line.id, { qtyAllocated: 0, backorderQty: 0 });
+          const allocated = (line.qtyAllocated ?? 0) - (line.backorderFulfilledQty ?? 0);
+          await storage.updateSalesOrderLine(line.id, { qtyAllocated: 0, backorderQty: 0, backorderFulfilledQty: 0 });
           if (!line.productId || allocated <= 0) continue;
           await inventoryMovement.apply({
             eventType: 'SALES_ORDER_CANCELLED',

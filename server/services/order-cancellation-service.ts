@@ -266,10 +266,15 @@ export class OrderCancellationService {
       // Only the allocated quantity was ever deducted from availableForSaleQty
       // at order-create time (backordered units never touched stock). Capture it
       // before we zero the line so the restore mirrors the original decrement.
-      const allocated = line.qtyAllocated ?? 0;
+      // Restore afs by ONLY the portion that was drawn from afs at order-create. Backorder
+      // auto-fulfill added units to qtyAllocated that came from the Hildale buffer
+      // (backorderFulfilledQty), NOT afs — restoring those would inflate sellable stock those
+      // units never came from → oversell (audit #14).
+      const allocated = (line.qtyAllocated ?? 0) - (line.backorderFulfilledQty ?? 0);
       await storage.updateSalesOrderLine(line.id, {
         qtyAllocated: 0,
         backorderQty: 0,
+        backorderFulfilledQty: 0,
       });
       if (!line.productId) continue;
       affectedProductIds.add(line.productId);

@@ -69,8 +69,10 @@ export class BackorderService {
         };
       }
 
-      // Get current available stock (for finished products: hildaleQty + pivotQty)
-      const availableStock = (item.hildaleQty ?? 0) + (item.pivotQty ?? 0);
+      // Allocate from the HILDALE buffer only — NOT pivotQty (audit #13). pivotQty is the
+      // Extensiv physical Pivot count that already underlies availableForSaleQty (the real
+      // sellable number, decremented at order time); adding it here double-counts.
+      const availableStock = item.hildaleQty ?? 0;
 
       // Get open backorder lines for this product (sorted by order date, FIFO)
       const backorderLines = await this.storage.getOpenBackorderLinesByProduct(itemId);
@@ -103,10 +105,17 @@ export class BackorderService {
         const newAllocated = (line.qtyAllocated ?? 0) + qtyToAllocate;
         const newBackorderQty = backorderQty - qtyToAllocate;
 
-        // Update the sales order line
+        // Update the sales order line. These units came from the HILDALE buffer, NOT from
+        // availableForSaleQty (which was only drawn down for the in-stock portion at order
+        // create). Track them in backorderFulfilledQty so a later cancel restores afs by
+        // ONLY the afs-sourced portion (qtyAllocated - backorderFulfilledQty) — otherwise
+        // cancel over-restores sellable stock these units never came from → oversell (#14).
+        // No inventory is decremented here: the units remain in Hildale and leave only when
+        // the order ships (SALES_ORDER_SHIPPED from Hildale).
         await this.storage.updateSalesOrderLine(line.id, {
           qtyAllocated: newAllocated,
           backorderQty: newBackorderQty,
+          backorderFulfilledQty: (line.backorderFulfilledQty ?? 0) + qtyToAllocate,
         });
 
         fulfillments.push({

@@ -22039,6 +22039,7 @@ Generate only the email body text, no subject line.`;
           qtyFulfilled: newQtyFulfilled,
           qtyAllocated: 0,
           backorderQty: newBackorderQty,
+          backorderFulfilledQty: 0, // allocated units shipped — clear the source tracker
         });
 
         affectedProductIds.add(line.productId);

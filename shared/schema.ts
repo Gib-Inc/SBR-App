@@ -1972,6 +1972,11 @@ export const salesOrderLines = pgTable("sales_order_lines", {
   qtyFulfilled: integer("qty_fulfilled").notNull().default(0), // Fulfilled (shipped OR marked fulfilled)
   returnedQty: integer("returned_qty").notNull().default(0), // Total quantity returned
   backorderQty: integer("backorder_qty").notNull().default(0), // qtyOrdered - qtyAllocated
+  // Of qtyAllocated, how many units were allocated LATER by backorder auto-fulfill (sourced
+  // from the Hildale buffer, NOT decremented from availableForSaleQty at order-create). Cancel
+  // restores afs by (qtyAllocated - backorderFulfilledQty) so it doesn't over-restore stock
+  // those units never came from → oversell (audit #14).
+  backorderFulfilledQty: integer("backorder_fulfilled_qty").notNull().default(0),
   unitPrice: real("unit_price"), // Optional: price per unit
   notes: text("notes"),
 }, (table) => ({

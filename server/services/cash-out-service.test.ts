@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { addDaysYmd, buildRollingCashOut, bucketObligationsByDay, dailyInboundSchedule } from "./cash-out-service";
+import { addDaysYmd, buildRollingCashOut, bucketObligationsByDay, dailyInboundSchedule, buildScenarios, type ScenarioObl } from "./cash-out-service";
 
 describe("addDaysYmd", () => {
   it("adds days and rolls month/year boundaries (UTC)", () => {
@@ -75,6 +75,45 @@ describe("dailyInboundSchedule", () => {
     const s = dailyInboundSchedule(payouts, "2026-06-30", 14);
     const total = Object.values(s).reduce((a, b) => a + b, 0);
     expect(total).toBeCloseTo(1700, 1);
+  });
+});
+
+describe("buildScenarios (deterministic what-to-pay options)", () => {
+  const obls: ScenarioObl[] = [
+    { id: "mca", label: "Fresh MCA", amount: 2000, amountEstimated: false, tier: "mca" },
+    { id: "tax", label: "941 deposit", amount: 3000, amountEstimated: false, tier: "tier1" },
+    { id: "vendor", label: "Critical vendor", amount: 4000, amountEstimated: false, tier: "tier2" },
+    { id: "flex", label: "Flexible bill", amount: 5000, amountEstimated: false, tier: "tier4" },
+  ];
+  // cash 6000 + inbound 1000 = budget 7000; available credit 10000
+  const [payAll, conservative, preserveCash] = buildScenarios(obls, 6000, 1000, 10000);
+
+  it("pay_all clears everything and reports the credit draw when budget falls short", () => {
+    expect(payAll.totalPaid).toBe(14000);
+    expect(payAll.endingCash).toBe(-7000);   // 7000 budget - 14000
+    expect(payAll.creditDrawn).toBe(7000);
+    expect(payAll.feasible).toBe(true);       // 7000 <= 10000 credit
+    expect(payAll.defer).toEqual([]);
+  });
+
+  it("conservative pays only the unavoidable tiers (mca/tier1/tier2), defers the rest", () => {
+    expect(conservative.pay.map((o) => o.id)).toEqual(["mca", "tax", "vendor"]);
+    expect(conservative.defer.map((o) => o.id)).toEqual(["flex"]);
+    expect(conservative.totalPaid).toBe(9000);
+  });
+
+  it("preserve_cash pays top-down only as far as cash+inbound reach, never drawing credit", () => {
+    // budget 7000: mca 2000 -> 5000, tax 3000 -> 2000, vendor 4000 won't fit (>2000) -> defer, flex defer
+    expect(preserveCash.pay.map((o) => o.id)).toEqual(["mca", "tax"]);
+    expect(preserveCash.defer.map((o) => o.id)).toEqual(["vendor", "flex"]);
+    expect(preserveCash.creditDrawn).toBe(0);
+    expect(preserveCash.endingCash).toBe(2000);
+  });
+
+  it("infeasible when the credit draw exceeds available credit", () => {
+    const [pa] = buildScenarios(obls, 0, 0, 1000); // budget 0, only 1000 credit, 14000 owed
+    expect(pa.creditDrawn).toBe(14000);
+    expect(pa.feasible).toBe(false);
   });
 });
 

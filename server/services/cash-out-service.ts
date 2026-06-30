@@ -15,6 +15,7 @@
  */
 
 import type { ExpectedPayouts, ChannelPayout } from "./expected-payouts-service";
+import type { Tier } from "./cash-flow-service";
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -126,6 +127,99 @@ export function dailyInboundSchedule(p: ExpectedPayouts, startDate: string, days
   return sched;
 }
 
+export type ScenarioKey = "pay_all" | "conservative" | "preserve_cash";
+
+export interface ScenarioObl {
+  id: string;
+  label: string;
+  amount: number;
+  amountEstimated: boolean;
+  tier: Tier;
+}
+
+export interface Scenario {
+  key: ScenarioKey;
+  label: string;
+  pay: ScenarioObl[];      // recommended to pay now
+  defer: ScenarioObl[];    // recommended to hold
+  totalPaid: number;       // sum of KNOWN amounts in `pay`
+  endingCash: number;      // cash + inbound − totalPaid (negative ⇒ would need credit)
+  creditDrawn: number;     // amount that taps available credit (0 if cash covers it)
+  feasible: boolean;       // creditDrawn ≤ availableCredit
+  unfundedInPay: number;   // recommended-pay items whose amount is unknown (estimated $0)
+  rationale: string;
+}
+
+const MUST_PAY: ReadonlySet<Tier> = new Set<Tier>(["mca", "tier1", "tier2"]);
+const known = (o: ScenarioObl) => !(o.amountEstimated && o.amount <= 0);
+
+/** Build one scenario from an ORDERED pay list against a cash+inbound budget. Pure. */
+function makeScenario(
+  key: ScenarioKey, label: string, rationale: string,
+  pay: ScenarioObl[], defer: ScenarioObl[], cashPlusInbound: number, availableCredit: number,
+): Scenario {
+  const totalPaid = r2(pay.reduce((s, o) => s + (known(o) ? o.amount : 0), 0));
+  const endingCash = r2(cashPlusInbound - totalPaid);
+  const creditDrawn = endingCash < 0 ? r2(-endingCash) : 0;
+  return {
+    key, label, pay, defer, totalPaid, endingCash, creditDrawn,
+    feasible: creditDrawn <= r2(availableCredit),
+    unfundedInPay: pay.filter((o) => !known(o)).length,
+    rationale,
+  };
+}
+
+/**
+ * Pure: three ranked disbursement scenarios over the already-tier-ranked obligations.
+ * DETERMINISTIC (no LLM) so every number is auditable and nothing is hallucinated —
+ * the controller mandate. Recommendations only; Stacy authorizes each pay.
+ *   - pay_all       — clear everything in rank order (may tap credit)
+ *   - conservative  — only the unavoidable (mca + tax/payroll + must-pay/secured)
+ *   - preserve_cash — pay top-down but STOP before drawing any credit
+ */
+export function buildScenarios(
+  rankedObls: ScenarioObl[],
+  cashOnHand: number,
+  inbound: number,
+  availableCredit: number,
+): Scenario[] {
+  const budget = r2(cashOnHand + inbound);
+  // Obligations are already tier-ranked by the caller (rankAndProject).
+  const all = rankedObls;
+
+  // 1. pay_all — clear the board; defer nothing.
+  const payAll = makeScenario(
+    "pay_all", "Clear everything",
+    "Pays every obligation in priority order. Ending cash below zero means this draws on available credit.",
+    all, [], budget, availableCredit,
+  );
+
+  // 2. conservative — only the unavoidable tiers; defer the rest.
+  const mustPay = all.filter((o) => MUST_PAY.has(o.tier));
+  const conservative = makeScenario(
+    "conservative", "Unavoidable only",
+    "Pays only what cannot be deferred — MCAs/auto-debits, tax & payroll, and secured/critical vendors. Everything else holds.",
+    mustPay, all.filter((o) => !MUST_PAY.has(o.tier)), budget, availableCredit,
+  );
+
+  // 3. preserve_cash — pay top-down until cash+inbound is exhausted; never draw credit.
+  const pay: ScenarioObl[] = [];
+  const defer: ScenarioObl[] = [];
+  let remaining = budget;
+  for (const o of all) {
+    const cost = known(o) ? o.amount : 0;
+    if (cost <= remaining) { pay.push(o); remaining = r2(remaining - cost); }
+    else defer.push(o);
+  }
+  const preserveCash = makeScenario(
+    "preserve_cash", "Cash only, no new credit",
+    "Pays top-priority items only as far as cash on hand plus expected payouts reach — stops before tapping any line of credit. Lower-priority items defer.",
+    pay, defer, budget, availableCredit,
+  );
+
+  return [payAll, conservative, preserveCash];
+}
+
 export interface CashOut {
   asOf: string;
   days: number;
@@ -135,6 +229,7 @@ export interface CashOut {
   availableCredit: number | null;  // card room (type 'card')
   totalLiquidity: number | null;   // cashOnHand + availableCash + availableCredit
   obligations: any[];              // the ranked pay-now list (from getCashFlow)
+  scenarios: Scenario[];           // deterministic what-to-pay options (recommendations)
   unfundedMustPayCount: number;    // high-priority obligations with unknown amounts
   basis: "sales-estimate";
   generatedAt: string;
@@ -179,10 +274,17 @@ export async function getCashOut(db: any, asOf: string, days = 3): Promise<CashO
   const cashOnHand = r2(cf.position.cashOnHand);
   const totalLiquidity = r2(cashOnHand + (availableCash ?? 0) + (availableCredit ?? 0));
 
+  // Deterministic what-to-pay scenarios over the window's ranked obligations. Inbound =
+  // the payouts that land inside the window (already prorated by getCashFlow).
+  const scenarios = buildScenarios(
+    cf.obligations.map((o: any) => ({ id: o.id, label: o.label, amount: o.amount, amountEstimated: o.amountEstimated, tier: o.tier })),
+    cashOnHand, r2(cf.position.inboundWindow), availableCredit ?? 0,
+  );
+
   return {
     asOf, days, rolling, cashOnHand,
     availableCash, availableCredit, totalLiquidity,
-    obligations: cf.obligations,
+    obligations: cf.obligations, scenarios,
     unfundedMustPayCount: cf.position.unfundedMustPayCount,
     basis: "sales-estimate",
     generatedAt: new Date().toISOString(),

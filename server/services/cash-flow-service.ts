@@ -27,7 +27,10 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 export type Tier = "mca" | "tier1" | "tier2" | "tier3" | "tier4" | "hold";
 export type Criticality = "must" | "important" | "flexible";
 export type OblCategory = "vendor_bill" | "debt" | "tax" | "payroll" | "recurring";
-export type OblStatus = "pending" | "approved" | "deferred" | "paid";
+// 'covered_by_plan' = an open QB bill absorbed into a vendor payment plan: it stays a real,
+// queryable open A/P record (NOT paid) but is excluded from the pay-now surfaces (the plan
+// installment is the pay-now item). Set only by the sync, never by the operator status route.
+export type OblStatus = "pending" | "approved" | "deferred" | "paid" | "covered_by_plan";
 
 const TIER_RANK: Record<Tier, number> = { mca: 0, tier1: 1, tier2: 2, tier3: 3, tier4: 4, hold: 9 };
 
@@ -312,7 +315,7 @@ export function rankAndProject(obls: Obligation[], cashAvailable: number, asOf: 
   let running = cashAvailable;
   for (const o of ranked) {
     // hold = defer (per the tier model): parked bills do not draw down the runway.
-    if (o.status === "paid" || o.status === "deferred" || o.tier === "hold") { o.runningCashAfter = null; continue; }
+    if (o.status === "paid" || o.status === "deferred" || o.status === "covered_by_plan" || o.tier === "hold") { o.runningCashAfter = null; continue; }
     running = r2(running - o.amount);
     o.runningCashAfter = running;
   }
@@ -589,7 +592,24 @@ export async function syncQbBillsToObligations(
     if (plan) {
       const agg = planAgg.get(plan.id) ?? { plan, total: 0, count: 0, vendor: b.vendor };
       agg.total += num(b.amount); agg.count += 1; planAgg.set(plan.id, agg);
-      continue; // rolled into the plan obligation below, not listed individually
+      // Keep the underlying bill as an OPEN record (status 'covered_by_plan'), touching
+      // updated_at so the end-of-run sweep below can't mark it 'paid'. Excluded from the
+      // pay-now surfaces (the plan installment is the pay-now item) but stays queryable as
+      // real open A/P so its exposure isn't hidden. Before this, plan-matched bills were
+      // skipped, left untouched, and the sweep auto-closed them as 'paid' — e.g. $15,484 of
+      // overdue While-You're-In-Town bills showed PAID while open + 31-90 days overdue in QB.
+      // The caller only passes OPEN bills, so resurrecting a wrongly-'paid' row is correct
+      // (the ON CONFLICT updates status even from 'paid', but respects operator edits).
+      const planKey = `qbbill:${b.id ?? `${b.vendor}:${b.docNumber ?? b.dueDate ?? b.amount}`}`;
+      const planLabel = `${b.vendor}${b.docNumber ? ` #${b.docNumber}` : ""}`;
+      await db.execute(sql`
+        insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
+        values (${planLabel}, ${b.vendor}, 'vendor_bill', 'tier3', ${num(b.amount)}, false, ${b.dueDate}::date, 'one_time', 'important', 'covered_by_plan', 'qb_bill', ${planKey}, ${`Open bill covered by the ${plan.display_name || b.vendor} payment plan (paid via the plan installment).`})
+        on conflict (external_key) where external_key is not null do update set
+          amount = excluded.amount, due_date = excluded.due_date, payee = excluded.payee,
+          label = excluded.label, status = 'covered_by_plan', updated_at = now()
+        where not coalesce(cash_obligations.manually_edited, false)`);
+      continue; // the plan installment (below) is the single pay-now item for this vendor
     }
     const key = `qbbill:${b.id ?? `${b.vendor}:${b.docNumber ?? b.dueDate ?? b.amount}`}`;
     const tax = isTaxVendor(b.vendor);
@@ -667,7 +687,7 @@ export async function compute13WeekForecast(db: any, asOf?: string): Promise<{
   const endStr = fmt(new Date(start.getTime() + 91 * 86_400_000));
   const obls = rows(await db.execute(sql`
     select due_date::text as due, amount::float8 as amount from cash_obligations
-    where is_active and status not in ('paid','deferred') and due_date is not null
+    where is_active and status not in ('paid','deferred','covered_by_plan') and due_date is not null
       and due_date >= ${startStr}::date and due_date < ${endStr}::date`));
   let cash = pos.cashOnHand;
   let lowestCash = cash;
@@ -707,7 +727,7 @@ export async function getCashFlow(db: any, opts: { windowDays?: number; asOf?: s
            due_date::text as due_date, pay_from, method, status, source, rationale, source_ref,
            anomaly_flag, anomaly_reason
     from cash_obligations
-    where is_active and status <> 'paid'
+    where is_active and status not in ('paid', 'covered_by_plan')
       and (due_date is null or due_date <= (${asOf}::date + ${windowDays}::int))`));
 
   const obls: Obligation[] = raw.map((o: any) => {
@@ -778,7 +798,9 @@ export async function upsertObligation(db: any, p: {
   }
 }
 
-const ACTION_FOR: Record<OblStatus, string> = { approved: "approved", deferred: "deferred", paid: "marked_paid", pending: "reopened" };
+// covered_by_plan is set only by the bill sync, never via the operator status route, but the
+// Record must be total over OblStatus.
+const ACTION_FOR: Record<OblStatus, string> = { approved: "approved", deferred: "deferred", paid: "marked_paid", pending: "reopened", covered_by_plan: "covered_by_plan" };
 
 /** Dual-control threshold: marking a paid obligation at/above this requires a
  *  different person than the approver. Configurable via env (default $1,000). */

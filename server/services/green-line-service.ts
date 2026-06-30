@@ -213,6 +213,13 @@ export async function computeGreenLine(db: DB): Promise<GreenLineSummary> {
     computeGovernor(db),
   ]);
 
+  // Prefer the operator-entered bank-confirmed balance over the lagging QB ledger so the
+  // Green Line shows the same cash as the Cash Out view (one number, app-wide).
+  const qbCash = cashRow?.cash_on_hand != null ? num(cashRow.cash_on_hand) : null;
+  const { getBankConfirmedOverride } = await import("./cash-flow-service");
+  const bankOv = await getBankConfirmedOverride(db).catch(() => null);
+  const cashOnHand = bankOv ? bankOv.cashOnHand : qbCash;
+
   const runwayDays = runwayRow?.realistic_days != null ? num(runwayRow.realistic_days) : null;
   const rwSev = runwaySev(runwayDays, runwayRow?.runway_status ?? null);
   const dscrSev: Severity | null =
@@ -230,7 +237,7 @@ export async function computeGreenLine(db: DB): Promise<GreenLineSummary> {
 
   return {
     overall,
-    cashOnHand: cashRow?.cash_on_hand != null ? r0(num(cashRow.cash_on_hand)) : null,
+    cashOnHand: cashOnHand != null ? r0(cashOnHand) : null,
     runwayDays,
     runwaySeverity: rwSev ?? "UNKNOWN",
     burnRate: runwayRow?.calculated_burn_rate != null ? r0(num(runwayRow.calculated_burn_rate)) : null,

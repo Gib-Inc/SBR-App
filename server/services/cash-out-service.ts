@@ -254,6 +254,16 @@ export interface CashOut {
   obligations: any[];              // the ranked pay-now list (from getCashFlow)
   scenarios: Scenario[];           // deterministic what-to-pay options (recommendations)
   unfundedMustPayCount: number;    // high-priority obligations with unknown amounts
+  // Cash provenance for the "Available now" tile — so a lagging QB number is never shown
+  // as the live bank balance (mirrors Roger's bank-share view).
+  cashSource: "bank_confirmed" | "qbo_ledger";
+  cashConfirmedAt: string | null;  // ISO ts the bank balance was confirmed (bank_confirmed only)
+  cashStale: boolean;              // true when cashOnHand may not equal the live bank balance
+  cashStaleHours: number | null;   // age of the bank-confirmed entry in hours
+  cashDivergenceFlag: boolean;     // entered bank balance is wildly off the QB ledger (likely a typo)
+  inTransit: { label: string; amount: number; eta?: string | null }[]; // confirmed money on its way
+  inTransitTotal: number;
+  nearTermTotal: number;           // cashOnHand + inTransitTotal (the bank "Near-term total")
   basis: "sales-estimate";
   generatedAt: string;
 }
@@ -321,11 +331,20 @@ export async function getCashOut(db: any, asOf: string, days = 3): Promise<CashO
     cashOnHand, r2(cf.position.inboundWindow), availableCredit, availableCash,
   );
 
+  const inTransit = cf.position.inTransit ?? [];
+  const inTransitTotal = r2(cf.position.inTransitTotal ?? 0);
   return {
     asOf, days, rolling, cashOnHand,
     availableCash, availableCredit, totalLiquidity,
     obligations: payable, scenarios,
     unfundedMustPayCount: cf.position.unfundedMustPayCount,
+    cashSource: cf.position.cashSource,
+    cashConfirmedAt: cf.position.cashConfirmedAt,
+    cashStale: cf.position.cashStale,
+    cashStaleHours: cf.position.cashStaleHours,
+    cashDivergenceFlag: cf.position.cashDivergenceFlag,
+    inTransit, inTransitTotal,
+    nearTermTotal: r2(cashOnHand + inTransitTotal),
     basis: "sales-estimate",
     generatedAt: new Date().toISOString(),
   };

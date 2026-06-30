@@ -303,6 +303,13 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     // (keep the most-recent) THEN enforce uniqueness so the ON CONFLICT upsert is race-safe.
     `DELETE FROM cash_position a USING cash_position b WHERE a.as_of = b.as_of AND (a.updated_at < b.updated_at OR (a.updated_at = b.updated_at AND a.id < b.id))`,
     `CREATE UNIQUE INDEX IF NOT EXISTS cash_position_as_of_uidx ON cash_position(as_of)`,
+    // Operator-entered BANK-CONFIRMED available balance — the source of truth for cash on
+    // hand. QuickBooks' Account.CurrentBalance lags the live bank (feed delay + book-vs-bank),
+    // so cash read straight from QB silently under-reports. Roger/Stacy enter the bank-share
+    // number here; getCashPosition prefers the latest fresh entry and falls back to QB (flagged)
+    // only when none exists. Append-only history (one row per entry) for the audit trail.
+    `CREATE TABLE IF NOT EXISTS bank_balance_entries (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), available_balance numeric(14,2) NOT NULL, as_of timestamptz NOT NULL DEFAULT now(), in_transit jsonb NOT NULL DEFAULT '[]'::jsonb, source text NOT NULL DEFAULT 'manual', entered_by text, note text, created_at timestamptz NOT NULL DEFAULT now())`,
+    `CREATE INDEX IF NOT EXISTS bank_balance_entries_as_of_idx ON bank_balance_entries(as_of DESC)`,
     `CREATE OR REPLACE VIEW v_pay_order AS select o.*, case coalesce(o.tier, case when o.category in ('tax','payroll') then 'tier1' when o.criticality = 'must' then 'tier2' when o.criticality = 'important' then 'tier3' else 'tier4' end) when 'mca' then 0 when 'tier1' then 1 when 'tier2' then 2 when 'tier3' then 3 when 'tier4' then 4 when 'hold' then 9 else 3 end as tier_rank from cash_obligations o where o.is_active and o.status <> 'paid' order by tier_rank, due_date nulls last, amount desc`,
     // Per-campaign monthly ad performance (month-over-month trend by campaign).
     `CREATE TABLE IF NOT EXISTS ad_campaign_performance (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), platform text NOT NULL, campaign_name text NOT NULL, month text NOT NULL, period_start date, period_end date, spend real NOT NULL DEFAULT 0, revenue real, purchases integer, impressions integer, source text, superseded boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now())`,

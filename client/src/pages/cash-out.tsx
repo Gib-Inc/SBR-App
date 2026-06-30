@@ -5,7 +5,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Wallet, AlertTriangle, ShieldCheck, CreditCard, Banknote } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Wallet, AlertTriangle, ShieldCheck, CreditCard, Banknote, Landmark } from "lucide-react";
 
 interface Obligation {
   id: string; label: string; payee: string | null; tier: string;
@@ -21,10 +22,14 @@ interface Scenario {
   endingCash: number; creditDrawn: number; feasible: boolean | null; unfundedInPay: number;
   endingCashComplete: boolean; rationale: string;
 }
+interface InTransitItem { label: string; amount: number; eta?: string | null }
 interface CashOut {
   success: boolean; asOf: string; days: number; rolling: CashOutDay[];
   cashOnHand: number; availableCash: number | null; availableCredit: number | null; totalLiquidity: number | null;
   obligations: Obligation[]; scenarios: Scenario[]; unfundedMustPayCount: number; generatedAt: string;
+  cashSource: "bank_confirmed" | "qbo_ledger"; cashConfirmedAt: string | null;
+  cashStale: boolean; cashStaleHours: number | null; cashDivergenceFlag: boolean;
+  inTransit: InTransitItem[]; inTransitTotal: number; nearTermTotal: number;
 }
 
 const money = (n: number | null | undefined) =>
@@ -61,6 +66,36 @@ export default function CashOut() {
     onError: (e: any) => toast({ title: "Error", description: e?.message, variant: "destructive" }),
   });
 
+  // Bank-confirmed balance entry — records the live bank number so cash on hand stops lagging
+  // QuickBooks. Records only; never moves money.
+  const [editingBalance, setEditingBalance] = useState(false);
+  const [balInput, setBalInput] = useState("");
+  const [noteInput, setNoteInput] = useState("");
+  const [transit, setTransit] = useState<{ label: string; amount: string }[]>([]);
+  const saveBalance = useMutation({
+    mutationFn: async () => {
+      const availableBalance = Number(balInput.replace(/[^0-9.\-]/g, ""));
+      const inTransit = transit
+        .map((t) => ({ label: t.label.trim(), amount: Number(String(t.amount).replace(/[^0-9.\-]/g, "")) }))
+        .filter((t) => t.label && Number.isFinite(t.amount));
+      return apiRequest("POST", "/api/finances/bank-balance", { availableBalance, inTransit, note: noteInput.trim() || undefined, source: "manual" });
+    },
+    onSuccess: () => {
+      toast({ title: "Bank balance updated", description: "Cash on hand now reflects the bank-confirmed number." });
+      setEditingBalance(false); setBalInput(""); setNoteInput(""); setTransit([]);
+      queryClient.invalidateQueries({ queryKey: ["/api/finances/cash-out"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finances/cash-flow"] });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e?.message, variant: "destructive" }),
+  });
+
+  const sourceBadge =
+    data?.cashSource === "bank_confirmed"
+      ? (data.cashStale
+          ? { text: `Bank-confirmed · ${data.cashStaleHours ?? "?"}h old — refresh`, cls: "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300" }
+          : { text: "Bank-confirmed · live", cls: "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300" })
+      : { text: "QuickBooks ledger · lags bank", cls: "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300" };
+
   const rolling = data?.rolling ?? [];
   const scenarios = data?.scenarios ?? [];
   const obls = data?.obligations ?? [];
@@ -72,9 +107,72 @@ export default function CashOut() {
         <p className="text-sm text-muted-foreground">A rolling view of cash in, what to pay, and what's left — with what-if scenarios. This view <b>recommends and tracks</b>; it never moves money. You authorize each pay.</p>
       </div>
 
+      {/* Bank-confirmed available cash — the source of truth (mirrors Roger's bank share) */}
+      <Card className="border-2">
+        <CardContent className="p-4 md:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1"><Landmark className="h-3.5 w-3.5" /> Available now</div>
+              <div className="text-3xl md:text-4xl font-bold tabular-nums text-sky-600 dark:text-sky-400">{money(data?.cashOnHand)}</div>
+              {data && (
+                <div className="mt-1 flex items-center gap-2 flex-wrap">
+                  <Badge className={`${sourceBadge.cls} text-[10px] font-semibold`}>{sourceBadge.text}</Badge>
+                  {data.cashConfirmedAt && <span className="text-[11px] text-muted-foreground">as of {new Date(data.cashConfirmedAt).toLocaleString()}</span>}
+                </div>
+              )}
+            </div>
+            <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => { setEditingBalance((v) => !v); setBalInput(data?.cashOnHand != null ? String(data.cashOnHand) : ""); }}>Update</Button>
+          </div>
+
+          {(data?.inTransit?.length ?? 0) > 0 && (
+            <div className="mt-3 border-t pt-2 space-y-1">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">In transit</div>
+              {data!.inTransit.map((t, i) => (
+                <div key={i} className="flex justify-between text-sm"><span className="text-muted-foreground">{t.label}</span><span className="tabular-nums">{money(t.amount)}</span></div>
+              ))}
+              <div className="flex justify-between text-sm font-semibold border-t pt-1"><span>Near-term total</span><span className="tabular-nums text-sky-600 dark:text-sky-400">{money(data?.nearTermTotal)}</span></div>
+            </div>
+          )}
+
+          {data?.cashSource === "qbo_ledger" && (
+            <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400 flex items-center gap-1">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> Showing the QuickBooks ledger balance, which lags the live bank. Click Update to enter the bank-confirmed number.
+            </p>
+          )}
+          {data?.cashDivergenceFlag && (
+            <p className="mt-2 text-[11px] text-red-700 dark:text-red-400 flex items-center gap-1 font-medium">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> The entered balance is more than 5× off the QuickBooks ledger — double-check it for a typo (extra digit).
+            </p>
+          )}
+
+          {editingBalance && (
+            <div className="mt-3 border-t pt-3 space-y-2 max-w-md">
+              <div className="text-xs font-medium">Enter the bank-confirmed available balance</div>
+              <Input value={balInput} onChange={(e) => setBalInput(e.target.value)} placeholder="53185.82" inputMode="decimal" className="h-8" data-testid="bank-balance-input" />
+              <div className="space-y-1">
+                {transit.map((t, i) => (
+                  <div key={i} className="flex gap-2">
+                    <Input value={t.label} onChange={(e) => setTransit((ts) => ts.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} placeholder="Amazon disbursement" className="h-8 flex-1" />
+                    <Input value={t.amount} onChange={(e) => setTransit((ts) => ts.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))} placeholder="1519.50" inputMode="decimal" className="h-8 w-28" />
+                    <Button size="sm" variant="ghost" className="h-8 text-xs px-2" onClick={() => setTransit((ts) => ts.filter((_, j) => j !== i))}>×</Button>
+                  </div>
+                ))}
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setTransit((ts) => [...ts, { label: "", amount: "" }])}>+ in-transit item</Button>
+              </div>
+              <Input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} placeholder="note (e.g. from Roger's bank share)" className="h-8" />
+              <div className="flex gap-2">
+                <Button size="sm" className="h-8 text-xs" disabled={saveBalance.isPending || !balInput.trim()} onClick={() => saveBalance.mutate()}>{saveBalance.isPending ? "Saving…" : "Save bank balance"}</Button>
+                <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setEditingBalance(false)}>Cancel</Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">Records the bank number for the cash view. It never moves money.</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Liquidity */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Tile label="Cash on hand" value={money(data?.cashOnHand)} icon={<Banknote className="h-3.5 w-3.5" />} />
+        <Tile label="Cash on hand" value={money(data?.cashOnHand)} sub={data?.cashSource === "bank_confirmed" ? "bank-confirmed" : "QuickBooks (lags bank)"} icon={<Banknote className="h-3.5 w-3.5" />} />
         <Tile label="Available cash (lines)" value={money(data?.availableCash)} sub="drawable LOC room" />
         <Tile label="Available credit (cards)" value={money(data?.availableCredit)} icon={<CreditCard className="h-3.5 w-3.5" />} />
         <Tile label="Total liquidity" value={money(data?.totalLiquidity)} accent="green" sub="cash + lines + cards" />

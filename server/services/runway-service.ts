@@ -70,7 +70,13 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     return { ok: false, error: "No financial snapshot yet — connect QuickBooks and capture one first." };
   }
 
-  const cashOnHand = snap.cashOnHand != null ? Number(snap.cashOnHand) : null;
+  const qbCash = snap.cashOnHand != null ? Number(snap.cashOnHand) : null;
+  // Prefer the operator-entered bank-confirmed balance so runway days are computed from REAL
+  // bank cash, not the lagging QB ledger. Falls back to the snapshot when no fresh entry exists.
+  const { db } = await import("../db");
+  const { getBankConfirmedOverride } = await import("./cash-flow-service");
+  const bankOv = await getBankConfirmedOverride(db).catch(() => null);
+  const cashOnHand = bankOv ? bankOv.cashOnHand : qbCash;
   const dailyFixedOverhead = snap.operatingExpenses != null ? round2(Number(snap.operatingExpenses) / 30) : null;
 
   const asOf = todayMountain();

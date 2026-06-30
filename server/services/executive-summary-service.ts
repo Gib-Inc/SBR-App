@@ -221,7 +221,13 @@ export async function getExecutiveSummary(storage: any): Promise<any> {
     const uploadedBS: any = (bsSnapshot as any)?.raw?.balanceSheet ?? null;
     const useUploaded = uploadedBS && (uploadedBS.totalLiabilities != null || uploadedBS.cash != null);
     const balanceSheet = useUploaded ? uploadedBS : (FINANCIAL_SEED as any).balanceSheet;
-    const cashOnHand = (qbLive as any)?.cashOnHand != null ? Number((qbLive as any).cashOnHand) : null;
+    const qbCash = (qbLive as any)?.cashOnHand != null ? Number((qbLive as any).cashOnHand) : null;
+    // Prefer the operator-entered bank-confirmed balance over the lagging QB ledger so the exec
+    // summary shows the same cash as everywhere else. Falls back to QB when no fresh entry exists.
+    const { db } = await import("../db");
+    const { getBankConfirmedOverride } = await import("./cash-flow-service");
+    const bankOv = await getBankConfirmedOverride(db).catch(() => null);
+    const cashOnHand = bankOv ? bankOv.cashOnHand : qbCash;
     return buildExecutiveSummary({
       monthly: (monthly as any[]) || [],
       balanceSheet,

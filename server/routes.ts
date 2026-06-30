@@ -26231,6 +26231,74 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── Bank-confirmed available balance: an operator (Roger/Stacy) enters the live bank-share
+  // number so cash on hand reflects the BANK, not the lagging QuickBooks ledger. Records +
+  // tracks only — it NEVER moves money. The latest fresh entry becomes the source of truth in
+  // getCashPosition (QB stays a flagged fallback). Append-only history for the audit trail.
+  app.get("/api/finances/bank-balance", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getLatestAuthoritativeBankBalance } = await import("./services/cash-flow-service");
+      res.json({ success: true, latest: await getLatestAuthoritativeBankBalance(db) });
+    } catch (error: any) {
+      console.error("[BankBalance] get error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load bank balance" });
+    }
+  });
+
+  app.post("/api/finances/bank-balance", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const b = req.body || {};
+      const available = Number(b.availableBalance);
+      if (!Number.isFinite(available) || available < 0) {
+        return res.status(400).json({ success: false, error: "availableBalance must be a non-negative number" });
+      }
+      // Absolute sanity ceiling — catches a runaway typo (e.g. pasting an account number). A
+      // softer >5x-vs-QB divergence is flagged (not blocked) downstream in resolveCashSource.
+      if (available > 100_000_000) {
+        return res.status(400).json({ success: false, error: "availableBalance looks implausibly large — double-check the entry" });
+      }
+      // as_of: default now; reject future-dated or unparseable timestamps.
+      let asOf = new Date();
+      if (b.asOf != null) {
+        const parsed = new Date(b.asOf);
+        if (Number.isNaN(parsed.getTime())) return res.status(400).json({ success: false, error: "asOf is not a valid date" });
+        if (parsed.getTime() > Date.now() + 60_000) return res.status(400).json({ success: false, error: "asOf cannot be in the future" });
+        asOf = parsed;
+      }
+      // Sanitize in-transit items — drop anything without a label + finite amount.
+      const inTransit = Array.isArray(b.inTransit)
+        ? b.inTransit
+            .map((t: any) => ({ label: String(t?.label ?? "").slice(0, 120), amount: Number(t?.amount), eta: t?.eta != null ? String(t.eta).slice(0, 60) : null }))
+            .filter((t: any) => t.label && Number.isFinite(t.amount))
+        : [];
+      const source = typeof b.source === "string" && b.source.trim() ? b.source.trim().slice(0, 60) : "manual";
+      const note = typeof b.note === "string" ? b.note.slice(0, 500) : null;
+
+      // Actor for the audit trail — resolved server-side, never trusted from the client.
+      const { storage } = await import("./storage");
+      const by = (req.session as any)?.userId || null;
+      let byName: string | null = null;
+      if (by) { const u = await storage.getUser(by).catch(() => null); byName = u?.name || u?.email || null; }
+
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      await db.execute(sql`
+        insert into bank_balance_entries (available_balance, as_of, in_transit, source, entered_by, note)
+        values (${Number(available.toFixed(2))}, ${asOf.toISOString()}::timestamptz, ${JSON.stringify(inTransit)}::jsonb, ${source}, ${byName}, ${note})`);
+
+      // Refresh today's persisted cash_position so the new bank truth propagates immediately.
+      const { writeCashPosition } = await import("./services/cash-flow-service");
+      const asOfDay = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+      await writeCashPosition(db, asOfDay).catch((e: any) => console.warn("[BankBalance] cash_position refresh failed:", e?.message));
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[BankBalance] post error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to save bank balance" });
+    }
+  });
+
   app.put("/api/finances/cash-obligation/:id/status", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const status = String(req.body?.status || "");

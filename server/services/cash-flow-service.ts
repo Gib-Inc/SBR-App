@@ -85,6 +85,155 @@ export interface CashPosition {
   unfundedCount: number;          // active obligations with an unknown (estimated $0) amount
   unfundedMustPayCount: number;   // of those, the unavoidable ones (mca/tier1/tier2)
   projectedLowComplete: boolean;  // false when unfundedCount > 0 — projectedLow is a ceiling, not exact
+  // Where cashOnHand came from. 'bank_confirmed' = an operator entered the live bank-share
+  // balance (the truth); 'qbo_ledger' = QuickBooks Account.CurrentBalance, which LAGS the bank
+  // (feed delay + book-vs-bank), so it's flagged so no UI presents it as the live number.
+  cashSource: "bank_confirmed" | "qbo_ledger";
+  cashConfirmedAt: string | null; // ISO ts the bank balance was confirmed (bank_confirmed only)
+  cashStale: boolean;             // true when the cash figure may not equal the live bank balance
+  cashStaleHours: number | null;  // age of the bank-confirmed entry in hours (bank_confirmed only)
+  cashDivergenceFlag: boolean;    // bank entry diverges wildly (>5x or <1/5x) from the QB ledger — likely a fat-finger
+  inTransit: BankInTransitItem[]; // confirmed money on its way the operator logged (Amazon/Shopify payouts)
+  inTransitTotal: number;         // sum of inTransit (near-term = cashOnHand + inTransitTotal)
+}
+
+export interface BankInTransitItem {
+  label: string;
+  amount: number;
+  eta?: string | null;
+}
+
+export interface AuthoritativeBankBalance {
+  availableBalance: number;
+  asOf: string;             // ISO ts the bank showed this balance
+  inTransit: BankInTransitItem[];
+  source: string;
+  enteredBy: string | null;
+}
+
+// Shared cash-source policy constants — used by BOTH resolveCashSource (cash-out view) and
+// getBankConfirmedOverride (every other consumer) so the whole app shows ONE cash number.
+const CASH_FRESH_HOURS = 72;          // bank entry trusted-fresh for 3 days
+const CASH_STALE_MAX_HOURS = 14 * 24; // beyond 14 days a manual bank number is too old to override QB
+const CASH_QB_STALE_DAYS = 2;         // QB snapshot older than this is itself flagged stale
+const CASH_DIVERGENCE_RATIO = 5;      // bank entry >5x or <1/5x the QB ledger ⇒ likely a fat-finger
+
+export interface BankOverride {
+  cashOnHand: number;
+  confirmedAt: string;
+  stale: boolean;
+  staleHours: number;
+}
+
+/**
+ * Pure: given the latest bank entry and the current time, return the bank-confirmed balance to
+ * use as cash-on-hand, or null when there is none / it's malformed / future-dated / older than
+ * CASH_STALE_MAX_HOURS. This is THE single precedence gate — every cash consumer goes through it
+ * (directly or via resolveCashSource) so the app can never show two different cash numbers.
+ */
+export function bankOverrideFromEntry(a: AuthoritativeBankBalance | null, nowMs: number): BankOverride | null {
+  if (!a || !Number.isFinite(a.availableBalance)) return null;
+  const ageHours = (nowMs - Date.parse(a.asOf)) / 3_600_000;
+  if (!Number.isFinite(ageHours) || ageHours < 0 || ageHours > CASH_STALE_MAX_HOURS) return null;
+  return {
+    cashOnHand: r2(a.availableBalance),
+    confirmedAt: a.asOf,
+    stale: ageHours > CASH_FRESH_HOURS,
+    staleHours: Math.max(0, Math.round(ageHours)),
+  };
+}
+
+/** DB wrapper: the fresh bank-confirmed override to use as cash-on-hand, or null. Shared by the
+ *  marketing governor, runway, green-line, and exec-summary so they stop reading raw (lagging) QB. */
+export async function getBankConfirmedOverride(db: any): Promise<BankOverride | null> {
+  const a = await getLatestAuthoritativeBankBalance(db).catch(() => null);
+  return bankOverrideFromEntry(a, Date.now());
+}
+
+/**
+ * Decide which cash figure is authoritative for the cash-out view: an operator-entered
+ * bank-confirmed balance, or the QuickBooks ledger fallback. Pure + unit-tested.
+ *  - A bank-confirmed entry within CASH_STALE_MAX_HOURS wins (real bank truth), flagged stale
+ *    past CASH_FRESH_HOURS so the UI nudges a refresh, but still used — a slightly-old real bank
+ *    number beats the always-lagging QB ledger.
+ *  - Otherwise fall back to the QB ledger value (BEHAVIOR UNCHANGED from before this feature),
+ *    flagged stale when the QB snapshot itself is > CASH_QB_STALE_DAYS old.
+ *  - cashDivergenceFlag warns when a bank entry is >CASH_DIVERGENCE_RATIO× off the QB ledger
+ *    (a likely fat-finger — extra digit), so the UI can prompt a double-check.
+ */
+export function resolveCashSource(
+  authoritative: AuthoritativeBankBalance | null,
+  qbo: { cashOnHand: number; cashAsOf: string | null },
+  nowMs: number,
+): {
+  cashOnHand: number;
+  cashSource: "bank_confirmed" | "qbo_ledger";
+  cashConfirmedAt: string | null;
+  cashStale: boolean;
+  cashStaleHours: number | null;
+  cashDivergenceFlag: boolean;
+  inTransit: BankInTransitItem[];
+  inTransitTotal: number;
+} {
+  const ov = bankOverrideFromEntry(authoritative, nowMs);
+  if (ov && authoritative) {
+    const inTransit = (authoritative.inTransit ?? []).filter(
+      (t) => t && typeof t.label === "string" && Number.isFinite(t.amount),
+    );
+    const ratio = qbo.cashOnHand > 0 ? ov.cashOnHand / qbo.cashOnHand : 1;
+    const divergence = qbo.cashOnHand > 0 && (ratio > CASH_DIVERGENCE_RATIO || ratio < 1 / CASH_DIVERGENCE_RATIO);
+    return {
+      cashOnHand: ov.cashOnHand,
+      cashSource: "bank_confirmed",
+      cashConfirmedAt: ov.confirmedAt,
+      cashStale: ov.stale,
+      cashStaleHours: ov.staleHours,
+      cashDivergenceFlag: divergence,
+      inTransit,
+      inTransitTotal: r2(inTransit.reduce((s, t) => s + (t.amount || 0), 0)),
+    };
+  }
+
+  // Fallback: QuickBooks ledger — identical value to pre-feature behavior.
+  let qbStale = true;
+  if (qbo.cashAsOf) {
+    const ageDays = (nowMs - Date.parse(qbo.cashAsOf)) / 86_400_000;
+    qbStale = !Number.isFinite(ageDays) || ageDays > CASH_QB_STALE_DAYS;
+  }
+  return {
+    cashOnHand: r2(qbo.cashOnHand),
+    cashSource: "qbo_ledger",
+    cashConfirmedAt: null,
+    cashStale: qbStale,
+    cashStaleHours: null,
+    cashDivergenceFlag: false,
+    inTransit: [],
+    inTransitTotal: 0,
+  };
+}
+
+/** Latest operator-entered bank-confirmed balance (newest by as_of), or null if none. */
+export async function getLatestAuthoritativeBankBalance(db: any): Promise<AuthoritativeBankBalance | null> {
+  const row = rows(await db.execute(sql`
+    select available_balance, as_of, in_transit, source, entered_by
+    from bank_balance_entries order by as_of desc, created_at desc limit 1`))[0];
+  if (!row) return null;
+  let inTransit: BankInTransitItem[] = [];
+  try {
+    const raw = typeof row.in_transit === "string" ? JSON.parse(row.in_transit) : row.in_transit;
+    if (Array.isArray(raw)) {
+      inTransit = raw
+        .filter((t: any) => t && typeof t.label === "string" && Number.isFinite(Number(t.amount)))
+        .map((t: any) => ({ label: String(t.label), amount: r2(Number(t.amount)), eta: t.eta ?? null }));
+    }
+  } catch { /* malformed in_transit → empty list, never throw on a hot read path */ }
+  return {
+    availableBalance: num(row.available_balance),
+    asOf: new Date(row.as_of).toISOString(),
+    inTransit,
+    source: row.source ?? "manual",
+    enteredBy: row.entered_by ?? null,
+  };
 }
 
 export interface CashFlowResult {
@@ -234,7 +383,16 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
     select cash_on_hand, accounts_receivable, captured_at::date as cash_as_of
     from qb_financial_snapshots where cash_on_hand is not null
     order by captured_at desc limit 1`))[0];
-  const cashOnHand = num(cashRow?.cash_on_hand);
+  const qboCashOnHand = num(cashRow?.cash_on_hand);
+  // Prefer an operator-entered BANK-CONFIRMED balance over the lagging QB ledger. When none
+  // exists this returns the QB value unchanged, so the fallback path is a no-op vs before.
+  const authoritative = await getLatestAuthoritativeBankBalance(db).catch(() => null);
+  const cashSrc = resolveCashSource(
+    authoritative,
+    { cashOnHand: qboCashOnHand, cashAsOf: cashRow?.cash_as_of ?? null },
+    Date.now(),
+  );
+  const cashOnHand = cashSrc.cashOnHand;
   // A/R already earned and in transit (e.g. the Amazon marketplace payout) — real
   // "money on its way" the runway otherwise ignores. From the aging-report total.
   const receivablesInbound = r2(num(cashRow?.accounts_receivable));
@@ -291,6 +449,10 @@ export async function getCashPosition(db: any, windowDays: number, asOf: string)
     dailySalesRunRate: r2(dailyRunRate), windowDays, projectedIncome,
     receivablesInbound, expectedPayouts, inboundWindow, totalDue: 0, tier1Due: 0, projectedLow: 0,
     unfundedCount: 0, unfundedMustPayCount: 0, projectedLowComplete: true,
+    cashSource: cashSrc.cashSource, cashConfirmedAt: cashSrc.cashConfirmedAt,
+    cashStale: cashSrc.cashStale, cashStaleHours: cashSrc.cashStaleHours,
+    cashDivergenceFlag: cashSrc.cashDivergenceFlag,
+    inTransit: cashSrc.inTransit, inTransitTotal: cashSrc.inTransitTotal,
   };
 }
 
@@ -301,12 +463,14 @@ export async function writeCashPosition(db: any, asOf: string): Promise<void> {
   // raced into duplicate rows under concurrent loads. A single INSERT ... ON CONFLICT
   // (as_of) upsert is race-safe (backed by the cash_position_as_of_uidx unique index in
   // startup-checks). expected_payouts_net = the nightly "total on its way" (net of fees).
+  // Record the true source ('bank_confirmed' | 'qbo_ledger') so the persisted snapshot
+  // doesn't masquerade an operator bank number as a QB read (or vice-versa).
   await db.execute(sql`
     insert into cash_position (as_of, cash_on_hand, expected_inflows, expected_payouts_net, source, updated_at)
-    values (${asOf}::date, ${p.cashOnHand}, ${p.projectedIncome}, ${p.expectedPayouts.totalNet}, 'qbo', now())
+    values (${asOf}::date, ${p.cashOnHand}, ${p.projectedIncome}, ${p.expectedPayouts.totalNet}, ${p.cashSource}, now())
     on conflict (as_of) do update set
       cash_on_hand = excluded.cash_on_hand, expected_inflows = excluded.expected_inflows,
-      expected_payouts_net = excluded.expected_payouts_net, source = 'qbo', updated_at = now()`);
+      expected_payouts_net = excluded.expected_payouts_net, source = excluded.source, updated_at = now()`);
 }
 
 // ── DB: keep generated (tax/debt) obligations fresh ─────────────────────────

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, sodBlocksPaid, setObligationStatus, countUnfunded, type Obligation } from "./cash-flow-service";
+import { defaultTier, debtTier, rankAndProject, taxObligationSeeds, classifyVendorTier, sodBlocksPaid, setObligationStatus, countUnfunded, resolveCashSource, bankOverrideFromEntry, type Obligation, type AuthoritativeBankBalance } from "./cash-flow-service";
 
 // Minimal db.execute mock: returns queued results in call order (rows() reads `.rows`).
 function mockDb(responses: any[]) {
@@ -233,5 +233,120 @@ describe("setObligationStatus — SoD enforcement + single-operator handling", (
     const r = await setObligationStatus(db, "obl1", "paid" as any, undefined);
     expect(r.ok).toBe(false);
     expect(r.reason).toBe("no_actor");
+  });
+});
+
+describe("resolveCashSource (bank-confirmed balance wins over the lagging QB ledger)", () => {
+  const NOW = new Date("2026-06-30T20:00:00Z").getTime();
+  const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+  const bank = (over: Partial<AuthoritativeBankBalance>): AuthoritativeBankBalance => ({
+    availableBalance: 53185.82, asOf: hoursAgo(1), inTransit: [], source: "roger_bank_share", enteredBy: "Roger", ...over,
+  });
+
+  it("uses a fresh bank entry over the QB ledger — the actual bug (53,185.82 not 26,900.72)", () => {
+    const r = resolveCashSource(bank({}), { cashOnHand: 26900.72, cashAsOf: "2026-06-29" }, NOW);
+    expect(r.cashOnHand).toBe(53185.82);
+    expect(r.cashSource).toBe("bank_confirmed");
+    expect(r.cashStale).toBe(false);
+    expect(r.cashConfirmedAt).toBe(hoursAgo(1));
+  });
+
+  it("flags a bank entry stale once older than 72h but still uses it (real beats lagging QB)", () => {
+    const r = resolveCashSource(bank({ asOf: hoursAgo(100) }), { cashOnHand: 26900.72, cashAsOf: "2026-06-29" }, NOW);
+    expect(r.cashSource).toBe("bank_confirmed");
+    expect(r.cashOnHand).toBe(53185.82);
+    expect(r.cashStale).toBe(true);
+    expect(r.cashStaleHours).toBe(100);
+  });
+
+  it("falls back to QB when the bank entry is older than 14 days (too old to override)", () => {
+    const r = resolveCashSource(bank({ asOf: hoursAgo(15 * 24) }), { cashOnHand: 26900.72, cashAsOf: "2026-06-30" }, NOW);
+    expect(r.cashSource).toBe("qbo_ledger");
+    expect(r.cashOnHand).toBe(26900.72);
+  });
+
+  it("ignores a future-dated bank entry (negative age) and falls back to QB", () => {
+    const r = resolveCashSource(bank({ asOf: new Date(NOW + 3_600_000).toISOString() }), { cashOnHand: 26900.72, cashAsOf: "2026-06-30" }, NOW);
+    expect(r.cashSource).toBe("qbo_ledger");
+  });
+
+  it("with no bank entry, returns the QB value unchanged (fallback is a no-op vs before)", () => {
+    const r = resolveCashSource(null, { cashOnHand: 38133.9, cashAsOf: "2026-06-30" }, NOW);
+    expect(r.cashOnHand).toBe(38133.9);
+    expect(r.cashSource).toBe("qbo_ledger");
+    expect(r.inTransit).toEqual([]);
+    expect(r.cashStale).toBe(false); // fresh QB snapshot (same day) is not flagged stale
+  });
+
+  it("flags the QB fallback stale when the snapshot is older than 2 days", () => {
+    const r = resolveCashSource(null, { cashOnHand: 26900.72, cashAsOf: "2026-06-27" }, NOW);
+    expect(r.cashSource).toBe("qbo_ledger");
+    expect(r.cashStale).toBe(true);
+  });
+
+  it("sums valid in-transit items and drops malformed ones", () => {
+    const r = resolveCashSource(
+      bank({ inTransit: [
+        { label: "Amazon disbursement", amount: 1519.5 },
+        { label: "Shopify payout (Jul 1)", amount: 1321.15 },
+        { label: "bad", amount: NaN as any },
+        { amount: 10 } as any, // no label
+      ] }),
+      { cashOnHand: 26900.72, cashAsOf: "2026-06-29" }, NOW,
+    );
+    expect(r.inTransit).toHaveLength(2);
+    expect(r.inTransitTotal).toBe(2840.65);
+  });
+
+  it("falls back to QB when the bank balance is non-finite", () => {
+    const r = resolveCashSource(bank({ availableBalance: NaN as any }), { cashOnHand: 26900.72, cashAsOf: "2026-06-30" }, NOW);
+    expect(r.cashSource).toBe("qbo_ledger");
+    expect(r.cashOnHand).toBe(26900.72);
+  });
+
+  it("flags a fat-finger: entered balance >5x the QB ledger sets cashDivergenceFlag", () => {
+    const r = resolveCashSource(bank({ availableBalance: 531858.2 }), { cashOnHand: 26900.72, cashAsOf: "2026-06-29" }, NOW);
+    expect(r.cashSource).toBe("bank_confirmed");
+    expect(r.cashDivergenceFlag).toBe(true); // 531858.2 / 26900.72 ≈ 19.8x
+  });
+
+  it("does NOT flag a plausible bank balance ~2x the QB ledger (the real $53,185.82 case)", () => {
+    const r = resolveCashSource(bank({ availableBalance: 53185.82 }), { cashOnHand: 26900.72, cashAsOf: "2026-06-29" }, NOW);
+    expect(r.cashDivergenceFlag).toBe(false); // ≈1.98x, under the 5x threshold
+  });
+
+  it("never flags divergence on the QB fallback path", () => {
+    const r = resolveCashSource(null, { cashOnHand: 26900.72, cashAsOf: "2026-06-29" }, NOW);
+    expect(r.cashDivergenceFlag).toBe(false);
+  });
+});
+
+describe("bankOverrideFromEntry (single precedence gate shared by all cash consumers)", () => {
+  const NOW = new Date("2026-06-30T20:00:00Z").getTime();
+  const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+  const entry = (over: Partial<AuthoritativeBankBalance>): AuthoritativeBankBalance => ({
+    availableBalance: 53185.82, asOf: hoursAgo(1), inTransit: [], source: "manual", enteredBy: null, ...over,
+  });
+
+  it("returns the bank value for a fresh entry", () => {
+    const o = bankOverrideFromEntry(entry({}), NOW);
+    expect(o?.cashOnHand).toBe(53185.82);
+    expect(o?.stale).toBe(false);
+  });
+  it("returns the value but flags stale past 72h", () => {
+    const o = bankOverrideFromEntry(entry({ asOf: hoursAgo(100) }), NOW);
+    expect(o?.cashOnHand).toBe(53185.82);
+    expect(o?.stale).toBe(true);
+    expect(o?.staleHours).toBe(100);
+  });
+  it("returns null when older than 14 days (too old to override QB)", () => {
+    expect(bankOverrideFromEntry(entry({ asOf: hoursAgo(15 * 24) }), NOW)).toBeNull();
+  });
+  it("returns null for a future-dated entry", () => {
+    expect(bankOverrideFromEntry(entry({ asOf: new Date(NOW + 3_600_000).toISOString() }), NOW)).toBeNull();
+  });
+  it("returns null for a non-finite balance or no entry", () => {
+    expect(bankOverrideFromEntry(entry({ availableBalance: NaN as any }), NOW)).toBeNull();
+    expect(bankOverrideFromEntry(null, NOW)).toBeNull();
   });
 });

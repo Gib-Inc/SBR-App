@@ -93,7 +93,13 @@ export async function computeGovernor(db: DB): Promise<GovernorResult> {
   const cashRow = rows(await db.execute(sql`
     select cash_on_hand from qb_financial_snapshots where cash_on_hand is not null
     order by captured_at desc limit 1`))[0];
-  const cashOnHand = cashRow?.cash_on_hand != null ? num(cashRow.cash_on_hand) : null;
+  const qbCash = cashRow?.cash_on_hand != null ? num(cashRow.cash_on_hand) : null;
+  // Prefer the operator-entered bank-confirmed balance over the lagging QB ledger — the spend
+  // gate must judge the cash floor against REAL bank cash, not a QB number that lags by ~$26K
+  // (which would false-block ad spend). Falls back to QB when no fresh bank entry exists.
+  const { getBankConfirmedOverride } = await import("./cash-flow-service");
+  const bankOv = await getBankConfirmedOverride(db).catch(() => null);
+  const cashOnHand = bankOv ? bankOv.cashOnHand : qbCash;
 
   // September Rule: consecutive most-recent Google days with ROAS < 8x.
   // Scope to the per-campaign '_windsor' grain only. ad_metrics_daily stores the

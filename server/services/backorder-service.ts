@@ -71,8 +71,12 @@ export class BackorderService {
 
       // Allocate from the HILDALE buffer only — NOT pivotQty (audit #13). pivotQty is the
       // Extensiv physical Pivot count that already underlies availableForSaleQty (the real
-      // sellable number, decremented at order time); adding it here double-counts.
-      const availableStock = item.hildaleQty ?? 0;
+      // sellable number, decremented at order time); adding it here double-counts. Also
+      // subtract Hildale units already reserved by prior backorder auto-fulfill runs; those
+      // units have not physically shipped yet, but they are no longer available to allocate
+      // to another waiting customer.
+      const hildaleReserved = await this.storage.getOpenBackorderFulfilledQtyByProduct(itemId);
+      const availableStock = Math.max(0, (item.hildaleQty ?? 0) - hildaleReserved);
 
       // Get open backorder lines for this product (sorted by order date, FIFO)
       const backorderLines = await this.storage.getOpenBackorderLinesByProduct(itemId);

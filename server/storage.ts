@@ -576,6 +576,7 @@ export interface IStorage {
   updateSalesOrderLine(id: string, line: Partial<InsertSalesOrderLine>): Promise<SalesOrderLine | undefined>;
   deleteSalesOrderLine(id: string): Promise<boolean>;
   getOpenBackorderLinesByProduct(productId: string): Promise<SalesOrderLine[]>;
+  getOpenBackorderFulfilledQtyByProduct(productId: string): Promise<number>;
 
   // Backorder Snapshots
   getAllBackorderSnapshots(): Promise<BackorderSnapshot[]>;
@@ -3356,7 +3357,7 @@ export class MemStorage implements IStorage {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - sinceDaysAgo);
     const skuMap = new Map<string, number>();
-    for (const line of this.salesOrderLines.values()) {
+    for (const line of Array.from(this.salesOrderLines.values())) {
       skuMap.set(line.sku, (skuMap.get(line.sku) || 0) + (line.qtyOrdered || 0));
     }
     return Array.from(skuMap.entries())
@@ -3379,8 +3380,13 @@ export class MemStorage implements IStorage {
     const line: SalesOrderLine = {
       id,
       ...insertLine,
+      productId: insertLine.productId ?? null,
+      productName: insertLine.productName ?? null,
       qtyAllocated: insertLine.qtyAllocated ?? 0,
+      backorderFulfilledQty: insertLine.backorderFulfilledQty ?? 0,
       qtyShipped: insertLine.qtyShipped ?? 0,
+      qtyFulfilled: insertLine.qtyFulfilled ?? 0,
+      returnedQty: insertLine.returnedQty ?? 0,
       backorderQty: insertLine.backorderQty ?? 0,
       unitPrice: insertLine.unitPrice ?? null,
       notes: insertLine.notes ?? null,
@@ -3417,6 +3423,19 @@ export class MemStorage implements IStorage {
       const orderB = this.salesOrders.get(b.salesOrderId);
       return (orderA?.orderDate?.getTime() ?? 0) - (orderB?.orderDate?.getTime() ?? 0);
     });
+  }
+
+  async getOpenBackorderFulfilledQtyByProduct(productId: string): Promise<number> {
+    let total = 0;
+    for (const line of Array.from(this.salesOrderLines.values())) {
+      if (line.productId !== productId || (line.backorderFulfilledQty ?? 0) <= 0) continue;
+      const order = await this.getSalesOrder(line.salesOrderId);
+      if (!order || order.status === 'CANCELLED' || order.status === 'DELIVERED' || order.status === 'REFUNDED' || order.status === 'SHIPPED') {
+        continue;
+      }
+      total += line.backorderFulfilledQty ?? 0;
+    }
+    return total;
   }
 
   // Backorder Snapshots
@@ -6921,6 +6940,7 @@ export class PostgresStorage implements IStorage {
       salesOrderId: schema.salesOrderLines.salesOrderId,
       productId: schema.salesOrderLines.productId,
       sku: schema.salesOrderLines.sku,
+      productName: schema.salesOrderLines.productName,
       qtyOrdered: schema.salesOrderLines.qtyOrdered,
       qtyAllocated: schema.salesOrderLines.qtyAllocated,
       qtyShipped: schema.salesOrderLines.qtyShipped,
@@ -6944,6 +6964,24 @@ export class PostgresStorage implements IStorage {
         )
       )
       .orderBy(schema.salesOrders.orderDate);
+  }
+
+  async getOpenBackorderFulfilledQtyByProduct(productId: string): Promise<number> {
+    const result = await this.db
+      .select({
+        total: drizzleSql<number>`CAST(COALESCE(SUM(${schema.salesOrderLines.backorderFulfilledQty}), 0) AS INTEGER)`,
+      })
+      .from(schema.salesOrderLines)
+      .leftJoin(schema.salesOrders, eq(schema.salesOrderLines.salesOrderId, schema.salesOrders.id))
+      .where(
+        and(
+          eq(schema.salesOrderLines.productId, productId),
+          gt(schema.salesOrderLines.backorderFulfilledQty, 0),
+          drizzleSql`${schema.salesOrders.status} NOT IN ('CANCELLED', 'DELIVERED', 'REFUNDED', 'SHIPPED')`
+        )
+      );
+
+    return Number(result[0]?.total ?? 0);
   }
 
   // Backorder Snapshots

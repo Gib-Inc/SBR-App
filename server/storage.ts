@@ -6927,6 +6927,10 @@ export class PostgresStorage implements IStorage {
       qtyFulfilled: schema.salesOrderLines.qtyFulfilled,
       returnedQty: schema.salesOrderLines.returnedQty,
       backorderQty: schema.salesOrderLines.backorderQty,
+      // Must be selected: backorder-service accumulates it across multiple auto-fulfill runs
+      // (line.backorderFulfilledQty + qtyToAllocate). Omitting it makes the read undefined,
+      // so each run clobbers the prior value → cancel mis-restores → oversell (audit #14).
+      backorderFulfilledQty: schema.salesOrderLines.backorderFulfilledQty,
       unitPrice: schema.salesOrderLines.unitPrice,
       notes: schema.salesOrderLines.notes,
     })

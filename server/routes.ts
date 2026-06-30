@@ -21877,13 +21877,16 @@ Generate only the email body text, no subject line.`;
         const user = await storage.getUser(req.session.userId!);
 
         for (const line of lines) {
-          // Only restore if order hasn't been fulfilled/shipped yet
-          const unfulfilledQty = line.qtyOrdered - (line.qtyFulfilled ?? 0);
-          if (unfulfilledQty > 0) {
+          // Restore afs by ONLY the portion actually drawn from afs at order-create =
+          // qtyAllocated minus the backorder-fulfilled units (those came from the Hildale
+          // buffer, never from afs). The old qtyOrdered-qtyFulfilled basis over-restored a
+          // backordered order's never-afs-sourced units → oversell (audit #14, delete path).
+          const afsAllocated = (line.qtyAllocated ?? 0) - (line.backorderFulfilledQty ?? 0);
+          if (afsAllocated > 0) {
             await inventoryMovement.apply({
               eventType: "SALES_ORDER_CANCELLED",
               itemId: line.productId,
-              quantity: unfulfilledQty,
+              quantity: afsAllocated,
               location: "PIVOT",
               source: "USER",
               orderId: id,
@@ -21891,7 +21894,7 @@ Generate only the email body text, no subject line.`;
               channel: order.channel,
               userId: req.session.userId,
               userName: user?.email,
-              notes: `Order ${order.externalOrderId || order.id} deleted: restored ${unfulfilledQty} to availableForSaleQty`,
+              notes: `Order ${order.externalOrderId || order.id} deleted: restored ${afsAllocated} to availableForSaleQty`,
             });
           }
         }

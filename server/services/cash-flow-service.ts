@@ -324,6 +324,7 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
   }
 
   let debt = 0;
+  const debtKeys: string[] = []; // external_keys generated this run → close out the rest
   // Generate a monthly obligation for EVERY active facility with a balance. The
   // due_day filter used to require a non-null due_day, but credit_lines.due_day is
   // NULL on every facility, so the entire ~$1.16M debt stack never appeared in the
@@ -339,6 +340,7 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
     if (now.getUTCDate() > dd) { mm += 1; yy += Math.floor(mm / 12); mm = ((mm % 12) + 12) % 12; }
     const due = `${yy}-${String(mm + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
     const key = `debt:${ln.name}:${yy}-${String(mm + 1).padStart(2, "0")}`;
+    debtKeys.push(key);
     const tier = debtTier(ln.name, ln.type);
     const rationale = `Scheduled ${ln.type || "debt"} payment.${dueKnown ? "" : " Due day is an estimate (15th) until set in the debt schedule."} Enter the monthly amount in the debt schedule.`;
     await db.execute(sql`
@@ -347,6 +349,18 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
       on conflict (external_key) where external_key is not null do update set due_date = excluded.due_date, tier = excluded.tier, rationale = excluded.rationale, updated_at = now()
       where cash_obligations.status = 'pending'`);
     debt++;
+  }
+  // CLOSE-OUT (audit #16): the debt external_key is month-bucketed (debt:NAME:YYYY-MM),
+  // so when the month rolls (or a facility is paid off / deactivated) the prior key's row
+  // is left status='pending', is_active=true, amount=0 forever and keeps showing in the
+  // pay order with a past due date. Deactivate any generated-debt pending row NOT in this
+  // run's key set. Only touches status='pending' (operator-approved/deferred rows are
+  // preserved). Guarded on a non-empty key set so a failed lines query can't mass-close.
+  if (debtKeys.length) {
+    await db.execute(sql`
+      update cash_obligations set is_active = false, updated_at = now()
+      where source = 'debt' and is_active and status = 'pending'
+        and external_key is not null and external_key <> all(${debtKeys})`);
   }
   // Surface (don't silently swallow) a failed cash-position write — a persistent
   // failure here means the nightly "money on its way" post + downstream readers go

@@ -121,7 +121,15 @@ export function defaultTier(category: OblCategory, criticality: Criticality): Ti
 /** Tier for a debt facility by its name/type. MCAs/fintech auto-debit → mca. Pure. */
 export function debtTier(name: string, type: string): Tier {
   const n = (name || "").toLowerCase();
-  if (/shopify capital|fresh funding|paypal|loanbuilder|uncapped|capital on tap|\bfora\b|\bmca\b/.test(n)) return "mca";
+  // MCA / daily-or-weekly auto-debit advances. Broadened to common providers (audit #9:
+  // generic MCAs like Kabbage/Credibly/OnDeck were missed). Bare "paypal" and "capital on
+  // tap" removed (audit #10: a PayPal balance and the Capital On Tap CARD were wrongly
+  // ranked #1) — "loanbuilder" still catches PayPal LoanBuilder. Short tokens stay
+  // word-boundaried so "Comcast"/"Metafora" don't match.
+  const isMcaName = /shopify capital|fresh funding|loanbuilder|uncapped|kabbage|credibly|ondeck|bluevine|forward\s*line|merchant cash|working capital advance|\bfora\b|\bmca\b/.test(n);
+  // Cards and LOCs are revolving credit, never auto-debit advances — don't let an
+  // MCA-ish name force a card to the top of the pay order.
+  if (isMcaName && type !== "card" && type !== "loc") return "mca";
   if (type === "loan") return "tier2";       // SBA / bank term loans
   return "tier3";                            // cards / LOCs
 }

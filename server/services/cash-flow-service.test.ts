@@ -48,6 +48,17 @@ describe("debtTier", () => {
     expect(debtTier("Fora Financial", "loan")).toBe("mca");
     expect(debtTier("BlueVine MCA", "loan")).toBe("mca");
   });
+  it("does NOT rank a card as MCA even if its name looks fintech (audit #10)", () => {
+    // "Capital On Tap 4299" is a charge CARD, not a daily-debit advance — must be tier3.
+    expect(debtTier("Capital On Tap 4299", "card")).toBe("tier3");
+    // a PayPal-branded card/balance is not an MCA (bare "paypal" no longer forces mca)
+    expect(debtTier("PayPal balance", "card")).toBe("tier3");
+  });
+  it("catches generic MCA providers that were missed (audit #9)", () => {
+    expect(debtTier("Kabbage Funding", "loan")).toBe("mca");
+    expect(debtTier("Credibly Working Capital", "loan")).toBe("mca");
+    expect(debtTier("OnDeck Capital", "loan")).toBe("mca");
+  });
 });
 
 describe("sodBlocksPaid (segregation of duties — state machine)", () => {

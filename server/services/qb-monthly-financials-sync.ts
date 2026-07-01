@@ -92,6 +92,12 @@ export async function syncQbMonthlyFinancials(): Promise<{ updated: number; skip
       source: "quickbooks",
     };
     await storage.upsertMonthlyFinancial(row);
+    // A complete QB month supersedes any partial-period stopgap for the SAME month keyed with a
+    // different label (e.g. "Jun 2026 (1-20)" from an accountant email). Without this the partial
+    // lingers as a second row and the YTD sums BOTH (it read the June loss ~$49K too negative).
+    // Protect a full manual override ('accountant_upload'); only drop partial variants.
+    await db.execute(sql`
+      DELETE FROM monthly_financials WHERE month LIKE ${d.month + " (%"} AND source <> 'accountant_upload'`);
     updated++;
   }
   console.log(`[QB MonthlyFinancials] synced from GL: ${updated} months updated, ${skipped} manual-override months kept`);

@@ -39,16 +39,28 @@ export async function syncCreditLineBalances(): Promise<{ synced: number; skippe
     if (isOperationalLiability(a.name)) continue; // taxes, payroll, A/P — not credit lines
     const t = lineType(a.type, a.name);
     const owed = Math.abs(a.balance); // QB returns liabilities credit-negative; show amount owed
+    const aprFromName = parseAprFromName(a.name); // QB names embed the rate, e.g. "... 36% V"
     await db.execute(sql`
-      INSERT INTO credit_lines (name, type, qb_account_id, qb_account_name, balance, balance_synced_at)
-      VALUES (${a.name}, ${t}, ${a.id}, ${a.name}, ${owed}, now())
+      INSERT INTO credit_lines (name, type, qb_account_id, qb_account_name, balance, apr, balance_synced_at)
+      VALUES (${a.name}, ${t}, ${a.id}, ${a.name}, ${owed}, ${aprFromName}, now())
       ON CONFLICT (qb_account_id) WHERE qb_account_id IS NOT NULL
       DO UPDATE SET balance = EXCLUDED.balance, qb_account_name = EXCLUDED.qb_account_name,
+                    apr = COALESCE(credit_lines.apr, EXCLUDED.apr),
                     balance_synced_at = now(), updated_at = now()
     `).catch((e: any) => console.error(`[CreditLines] upsert ${a.name} failed:`, e?.message ?? e));
     synced++;
   }
   return { synced };
+}
+
+/** QuickBooks account names embed the rate (e.g. "SBS HELOC Loan RP ITD 36% V", "Newity SBA
+ *  ... 9.5% F"). Parse it so facilities aren't rate-blind. Used only to FILL a null apr in the
+ *  sync (COALESCE) — never to override an operator-entered value. Returns null when no % token. */
+export function parseAprFromName(name: string): number | null {
+  const m = String(name || "").match(/(\d+(?:\.\d+)?)\s*%/);
+  if (!m) return null;
+  const v = Number(m[1]);
+  return Number.isFinite(v) && v > 0 && v < 100 ? v : null;
 }
 
 /** Next occurrence of a day-of-month from today (today counts), as YYYY-MM-DD in MT. */

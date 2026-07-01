@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Compass, ShieldAlert, TrendingDown, Receipt, Layers, Gauge } from "lucide-react";
+import { Compass, ShieldAlert, TrendingDown, Receipt, Layers, Gauge, AlertTriangle } from "lucide-react";
 import { DataFreshnessBar } from "@/components/data-freshness-bar";
 
 const money = (n: number | null | undefined) =>
@@ -21,8 +21,9 @@ interface Governor {
 }
 interface DebtAval {
   totalDebt: number; byBucket: { bucket: string; tier: string; total: number; count: number }[];
-  facilities: { name: string; balance: number; tier: string; bucket: string; payoffOrder: number }[];
+  facilities: { name: string; balance: number; apr: number | null; tier: string; bucket: string; payoffOrder: number }[];
   interestTrend: { month: string; interest: number }[];
+  aprCoverage?: { missingCount: number; missingBalance: number };
 }
 interface SpendLeaks {
   totalOpex90: number;
@@ -123,11 +124,17 @@ export default function GreenLine() {
                   <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[11px] font-semibold shrink-0 tabular-nums">{f.payoffOrder}</span>
                   <Badge className={`${TIER_CLASS[f.tier] ?? TIER_CLASS.tier3} text-[10px]`}>{f.tier}</Badge>
                   <span className="flex-1 truncate">{f.name}</span>
-                  <span className="tabular-nums font-medium">{money(f.balance)}</span>
+                  <span className={`tabular-nums text-[11px] w-14 text-right shrink-0 ${f.apr != null ? "text-muted-foreground" : "text-amber-600 dark:text-amber-400"}`}>{f.apr != null ? `${f.apr}%` : "rate?"}</span>
+                  <span className="tabular-nums font-medium w-20 text-right shrink-0">{money(f.balance)}</span>
                 </div>
               ))}
             </div>
-            <p className="text-[11px] text-muted-foreground">Ranked by true cost (MCA &gt; bank loan &gt; card/LOC), then balance. Interest trend (6 mo): {debt.data.interestTrend.map((t) => money(t.interest)).join(" → ")}. Recommends a payoff order; it never moves money.</p>
+            {debt.data.aprCoverage && debt.data.aprCoverage.missingCount > 0 && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" /> {money(debt.data.aprCoverage.missingBalance)} of debt ({debt.data.aprCoverage.missingCount} {debt.data.aprCoverage.missingCount === 1 ? "facility" : "facilities"}) has no APR on file — those sort last, so this order is a best-effort until the rates are entered.
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground">Ranked by true cost: MCAs first (daily-debit), then by APR, highest rate first. Interest trend (6 mo): {debt.data.interestTrend.map((t) => money(t.interest)).join(" → ")}. Recommends a payoff order; it never moves money.</p>
           </>) : <p className="text-sm text-muted-foreground">No active facilities found.</p>}
         </CardContent>
       </Card>

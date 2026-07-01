@@ -127,25 +127,41 @@ const TIER_BUCKET: Record<string, string> = {
   mca: "MCA / daily-debit (retire first)", tier2: "SBA / bank term", tier3: "Cards & lines of credit",
 };
 
-export interface DebtFacility { name: string; type: string; balance: number; tier: Tier; bucket: string; payoffOrder: number; }
+export interface DebtFacility { name: string; type: string; balance: number; apr: number | null; tier: Tier; bucket: string; payoffOrder: number; }
 
 export async function computeDebtAvalanche(db: DB): Promise<{
   facilities: DebtFacility[];
   byBucket: Array<{ bucket: string; tier: Tier; total: number; count: number }>;
   totalDebt: number;
   interestTrend: Array<{ month: string; interest: number }>;
+  // FLAG-DON'T-FABRICATE: a true avalanche needs every APR. Surface how much debt has no rate
+  // so the payoff order is presented as partial, not authoritative, while APRs are unset.
+  aprCoverage: { missingCount: number; missingBalance: number };
 }> {
   const rs = rows(await db.execute(sql`
-    select name, type, balance from credit_lines where is_active and balance > 0`));
+    select name, type, balance, apr from credit_lines where is_active and balance > 0`));
+  // TRUE avalanche: retire MCAs first (daily revenue-share debits — effective cost far exceeds
+  // any stated APR), then rank the rest by ACTUAL APR descending (a null rate sorts last so a
+  // rate-blind facility never jumps ahead of a known 36% one), tie-broken by balance. The old
+  // sort used name-keyword tier + balance and ignored the apr column entirely — it told you to
+  // pay 9.5% SBA debt before the 36% HELOC.
   const ranked = rs
     .map((rr: any) => {
       const tier = debtTier(String(rr.name || ""), String(rr.type || ""));
-      return { name: String(rr.name), type: String(rr.type || ""), balance: num(rr.balance), tier };
+      const apr = rr.apr == null ? null : num(rr.apr);
+      return { name: String(rr.name), type: String(rr.type || ""), balance: num(rr.balance), apr, tier };
     })
-    .sort((a, b) => (TIER_COST_RANK[a.tier] - TIER_COST_RANK[b.tier]) || (b.balance - a.balance));
+    .sort((a, b) => {
+      const am = a.tier === "mca" ? 0 : 1, bm = b.tier === "mca" ? 0 : 1;
+      if (am !== bm) return am - bm;                     // MCAs first (daily-debit)
+      if (am === 0) return b.balance - a.balance;        // within MCAs: larger balance first
+      const aApr = a.apr ?? -1, bApr = b.apr ?? -1;      // non-MCA: highest APR first, nulls last
+      if (bApr !== aApr) return bApr - aApr;
+      return b.balance - a.balance;                       // tie-break: larger balance
+    });
 
   const facilities: DebtFacility[] = ranked.map((f, i) => ({
-    ...f, balance: r0(f.balance), bucket: TIER_BUCKET[f.tier] ?? "Other", payoffOrder: i + 1,
+    ...f, balance: r0(f.balance), apr: f.apr, bucket: TIER_BUCKET[f.tier] ?? "Other", payoffOrder: i + 1,
   }));
 
   const bucketMap = new Map<string, { bucket: string; tier: Tier; total: number; count: number }>();
@@ -165,11 +181,13 @@ export async function computeDebtAvalanche(db: DB): Promise<{
     group by 1 order by 1`));
   const interestTrend = trendRows.map((rr: any) => ({ month: String(rr.ym), interest: r0(num(rr.interest)) }));
 
+  const missingApr = ranked.filter((f) => f.apr == null);
   return {
     facilities,
     byBucket,
     totalDebt: r0(ranked.reduce((s, f) => s + f.balance, 0)),
     interestTrend,
+    aprCoverage: { missingCount: missingApr.length, missingBalance: r0(missingApr.reduce((s, f) => s + f.balance, 0)) },
   };
 }
 

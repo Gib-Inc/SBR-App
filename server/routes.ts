@@ -25633,6 +25633,19 @@ Generate only the email body text, no subject line.`;
   // Reconcile the app's WAC inventory valuation against QuickBooks' booked Inventory
   // asset (sign-off blocker: the two must tie). Read-only from QB; the app flags a
   // material variance for Roger to book the adjusting entry — it never posts to QB.
+  // Standing reconciliation guards: every app financial number vs its QuickBooks/bank source,
+  // with DRIFT flags — so a future regression self-reports instead of silently going wrong.
+  app.get("/api/finances/reconciliation", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeFinancialReconciliation } = await import("./services/financial-reconciliation-service");
+      res.json({ success: true, ...(await computeFinancialReconciliation(db)) });
+    } catch (error: any) {
+      console.error("[Reconciliation] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build reconciliation" });
+    }
+  });
+
   app.get("/api/finances/inventory-reconciliation", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");

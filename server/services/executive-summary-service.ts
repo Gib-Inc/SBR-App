@@ -49,7 +49,17 @@ export interface ExecBuildInput {
   cashOnHand: number | null;  // freshest QB cash, overlaid onto BS cash
   bsAsOf?: string | null;
   computed?: boolean;         // false → caller signals it fell back to the seed BS
+  bsSource?: string;          // overrides the balanceSheetSource label (e.g. 'quickbooks_live')
   asOf?: Date;                // "now" for the future-row guard (injectable for tests)
+}
+
+/** Coerce a timestamp to a YYYY-MM-DD string. The pg driver returns `captured_at` as a JS Date,
+ *  uploads as a string, and it may be null — handle all three (Date.prototype.slice doesn't exist,
+ *  which previously threw and silently reverted the whole exec summary to the seed). */
+export function isoDateString(v: any): string | null {
+  if (v == null) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
 }
 
 /**
@@ -183,7 +193,7 @@ export function buildExecutiveSummary(input: ExecBuildInput): any {
     bsAsOf: input.bsAsOf ?? null,
     periodLabel: `${firstLabel} – ${lastRow.row.month} (inception-to-date)`,
     computed: true,
-    balanceSheetSource: usedSeedBs ? "accountant_seed" : "accountant_upload", // match /api/finances/overview
+    balanceSheetSource: input.bsSource ?? (usedSeedBs ? "accountant_seed" : "accountant_upload"), // match /api/finances/overview
     critical,
     headline: {
       cashOnHand: cashOnHand ?? 0,
@@ -220,7 +230,32 @@ export async function getExecutiveSummary(storage: any): Promise<any> {
     const { FINANCIAL_SEED } = await import("../data/financial-seed");
     const uploadedBS: any = (bsSnapshot as any)?.raw?.balanceSheet ?? null;
     const useUploaded = uploadedBS && (uploadedBS.totalLiabilities != null || uploadedBS.cash != null);
-    const balanceSheet = useUploaded ? uploadedBS : (FINANCIAL_SEED as any).balanceSheet;
+    let balanceSheet = useUploaded ? uploadedBS : (FINANCIAL_SEED as any).balanceSheet;
+    // Overlay the LIVE QuickBooks balance-sheet totals so equity, current ratio, and
+    // debt-to-assets reflect TODAY — not the hardcoded June-6 seed (which read equity ~$102K
+    // too negative, current ratio 0.25 vs the true 0.34, assets ~$81K low). Prefer live QB >
+    // uploaded > seed. Only the current-portion subtotals + totals are overlaid (the seed's
+    // per-line breakdown stays for display where live has no equivalent).
+    const liveBS: any = (qbLive as any)?.raw?.qbBalanceSheet ?? null;
+    let bsIsLive = false;
+    // ALL-OR-NOTHING: only overlay when EVERY total we consume is present, so we never mix a live
+    // total with a seed one (which would make equity, current ratio, and debt-to-assets internally
+    // inconsistent). parseBalanceSheet returns an object with per-field nulls, so a partial QB
+    // layout must not partially overlay. NOTE: debtBreakdown (shortTermNotes/creditCards/
+    // longTermLiabilities) is intentionally NOT overlaid — the exec card doesn't render it; the
+    // live debt stack is surfaced via /api/finances/overview's credit_lines overlay.
+    if (liveBS && liveBS.totalAssets != null && liveBS.totalLiabilities != null && liveBS.totalEquity != null
+        && liveBS.totalCurrentAssets != null && liveBS.totalCurrentLiabilities != null) {
+      balanceSheet = {
+        ...balanceSheet,
+        totalAssets: Number(liveBS.totalAssets),
+        totalLiabilities: Number(liveBS.totalLiabilities),
+        totalEquity: Number(liveBS.totalEquity),
+        totalCurrentAssets: Number(liveBS.totalCurrentAssets),
+        totalCurrentLiabilities: Number(liveBS.totalCurrentLiabilities),
+      };
+      bsIsLive = true;
+    }
     const qbCash = (qbLive as any)?.cashOnHand != null ? Number((qbLive as any).cashOnHand) : null;
     // Prefer the operator-entered bank-confirmed balance over the lagging QB ledger so the exec
     // summary shows the same cash as everywhere else. Falls back to QB when no fresh entry exists.
@@ -232,8 +267,10 @@ export async function getExecutiveSummary(storage: any): Promise<any> {
       monthly: (monthly as any[]) || [],
       balanceSheet,
       cashOnHand,
-      bsAsOf: useUploaded ? (uploadedBS.asOf ?? null) : ((FINANCIAL_SEED as any).balanceSheet?.asOf ?? null),
-      computed: useUploaded,
+      bsAsOf: bsIsLive ? isoDateString((qbLive as any)?.capturedAt)
+        : useUploaded ? (uploadedBS.asOf ?? null) : ((FINANCIAL_SEED as any).balanceSheet?.asOf ?? null),
+      computed: useUploaded || bsIsLive,
+      bsSource: bsIsLive ? "quickbooks_live" : undefined,
     });
   } catch (e: any) {
     console.error("[CIPH.R] getExecutiveSummary failed, serving seed:", e?.message ?? e);

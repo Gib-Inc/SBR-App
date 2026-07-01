@@ -1,6 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { buildExecutiveSummary } from "./executive-summary-service";
+import { buildExecutiveSummary, isoDateString } from "./executive-summary-service";
 import { EXECUTIVE_SUMMARY } from "../data/finance-docs";
+
+describe("isoDateString (pg returns captured_at as a Date — .slice on it threw + reverted to seed)", () => {
+  it("formats a Date to YYYY-MM-DD (the live-BS path)", () => {
+    expect(isoDateString(new Date("2026-06-30T21:50:00Z"))).toBe("2026-06-30");
+  });
+  it("formats a string timestamp", () => {
+    expect(isoDateString("2026-06-30T21:50:00Z")).toBe("2026-06-30");
+  });
+  it("returns null for null/undefined/unparseable (never throws)", () => {
+    expect(isoDateString(null)).toBeNull();
+    expect(isoDateString(undefined)).toBeNull();
+    expect(isoDateString("not a date")).toBeNull();
+  });
+});
 
 // Synthetic: 2 months of 2025 + 3 months of 2026 (the latest year = YTD).
 const MONTHLY = [
@@ -33,6 +47,16 @@ describe("buildExecutiveSummary", () => {
     expect(ratio("Gross margin")).toBe("40%"); // 60k / 150k
     expect(ratio("Ad spend")).toBe("50%"); // 75k / 150k
     expect(ratio("Payroll")).toBe("20%"); // 30k / 150k
+  });
+
+  it("computes the CORRECT current ratio from a live QB balance sheet (0.34, not the seed's 0.25)", () => {
+    // The real Jun-30 QB balance sheet the overlay now feeds in (was the stale June-6 seed).
+    const liveBS = { ...BS, totalAssets: 441322, totalLiabilities: 1246938, totalEquity: -805616,
+      totalCurrentAssets: 330822, totalCurrentLiabilities: 981082 };
+    const s = buildExecutiveSummary({ monthly: MONTHLY, balanceSheet: liveBS, cashOnHand: null, bsSource: "quickbooks_live" });
+    expect(s.ratios.find((r: any) => r.metric === "Current ratio")?.value).toBe("0.34"); // 330822/981082
+    expect(s.headline.ownersEquity).toBe(-805616);
+    expect(s.balanceSheetSource).toBe("quickbooks_live"); // bsSource override wired through
   });
 
   it("derives balance-sheet ratios + debt breakdown", () => {

@@ -24070,59 +24070,30 @@ Generate only the email body text, no subject line.`;
 
   app.get("/api/finances/overview", requireAuth, async (_req: Request, res: Response) => {
     try {
-      const isoDaysAgo = (d: number) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
-      const today = new Date().toISOString().slice(0, 10);
-      const [monthly, bsSnapshot, qbLive, adRows] = await Promise.all([
+      const [monthly, bsSnapshot, qbLive] = await Promise.all([
         storage.getMonthlyFinancials(),
         storage.getLatestQbBalanceSheetSnapshot(), // uploaded accountant BS (loans/equity)
         storage.getLatestQbLiveSnapshot(),         // live QB capture (cash/AR/AP/P&L)
-        storage.getAdMetricsInRange(isoDaysAgo(30), today),
       ]);
       const { FINANCIAL_SEED } = await import("./data/financial-seed");
 
-      // Ad spend by channel (last 30 days) — MERGED: live ad_metrics_daily PLUS
-      // uploaded marketing_spend_snapshots, with per-platform precedence (live with
-      // real spend wins; an upload fills a platform with no live spend). This is the
-      // same merge the Unified card uses, so an uploaded Meta CSV shows here too
-      // instead of the card contradicting itself ("Meta $0" vs the unified "$11,733").
-      const { normalizeAdPlatform, mergeAdSpendByPlatform, collapseOverlappingSnapshots, overlapFraction } = await import("./services/unified-performance-service");
-      const adStart = isoDaysAgo(30);
-      const live: Record<string, { spend: number }> = {};
-      for (const r of adRows) {
-        const p = normalizeAdPlatform(String((r as any).platform || ""));
-        if (!p) continue; // skip traffic-source noise
-        live[p] = { spend: (live[p]?.spend || 0) + (Number((r as any).spend) || 0) };
-      }
-      const uploaded: Record<string, { spend: number }> = {};
-      const windsorSpend: Record<string, { spend: number }> = {};
-      try {
-        const upRows = await storage.getMarketingSpendSnapshotsInRange(adStart, today);
-        // Collapse overlapping windows per (bucket, platform) before summing —
-        // Windsor's daily rolling-30d windows pile up and a blind SUM multi-counts
-        // them (the ~6.5x ad-spend bug). See ADSPEND-DEDUP-SPEC.md (Layer A).
-        const grp = new Map<string, any[]>();
-        for (const s of upRows) {
-          const p = String((s as any).platform || "OTHER").toUpperCase();
-          const bucketName = String((s as any).source || "").toLowerCase().startsWith("windsor") ? "windsor" : "uploaded";
-          const key = `${bucketName}|${p}`;
-          const g = grp.get(key);
-          if (g) g.push(s); else grp.set(key, [s]);
-        }
-        for (const [key, group] of Array.from(grp.entries())) {
-          const [bucketName, p] = key.split("|");
-          const bucket = bucketName === "windsor" ? windsorSpend : uploaded;
-          // Prorate each window to the last-30d range so a stale wide upload only
-          // partially inside the window doesn't count at full value.
-          const sum = collapseOverlappingSnapshots(group).reduce((acc, s: any) =>
-            acc + (Number((s as any).spend) || 0) * overlapFraction((s as any).periodStart, (s as any).periodEnd, adStart, today), 0);
-          bucket[p] = { spend: (bucket[p]?.spend || 0) + sum };
-        }
-      } catch { /* no snapshots */ }
+      // ONE ad-spend truth: use the SAME canonical corrected spend the Marketing Analytics
+      // page uses (getCorrectedAdSpendDays → QB for Google, QB/compliant-tracker for Meta,
+      // live only for Amazon/Pinterest; NEVER the raw ad_metrics_daily feed, which is ~31x
+      // inflated for Google). Before this the overview merged raw ad_metrics_daily + snapshots
+      // itself, so its ad-channel card could disagree with Marketing Analytics / the ROAS engine.
       const DISPLAY: Record<string, string> = { GOOGLE: "Google Ads", META: "Meta / Facebook", AMAZON: "Amazon Ads", PINTEREST: "Pinterest", MICROSOFT: "Microsoft / Bing", TIKTOK: "TikTok" };
-      const { platforms: mergedAd } = mergeAdSpendByPlatform(live, uploaded, windsorSpend);
-      const adChannels = mergedAd
-        .filter((p) => p.spend > 0)
-        .map((p) => ({ channel: DISPLAY[p.platform] || p.platform, spend: p.spend, source: p.source }));
+      let adChannels: Array<{ channel: string; spend: number; source?: string }> = [];
+      try {
+        const { getCorrectedAdSpendDays } = await import("./services/corrected-ad-spend");
+        const corrected = await getCorrectedAdSpendDays(30);
+        adChannels = (corrected.platforms || [])
+          .filter((p: any) => (p.spend || 0) > 0)
+          .map((p: any) => ({ channel: DISPLAY[p.platform] || p.platform, spend: p.spend, source: p.source }))
+          .sort((a, b) => b.spend - a.spend);
+      } catch (e: any) {
+        console.warn("[CIPH.R] overview corrected ad spend failed:", e?.message ?? e);
+      }
 
       // Prefer an uploaded balance sheet (stored in the latest snapshot's
       // raw.balanceSheet, incl. named loans) over the static seed. Anti-

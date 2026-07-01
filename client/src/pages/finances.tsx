@@ -45,7 +45,7 @@ interface BalanceSheet {
   longTermLiabilities?: number | null; totalLiabilities: number | null; totalEquity: number | null;
   loans?: LoanLine[]; source?: string;
 }
-interface AdChannel { channel: string; spend: number; source?: "live" | "uploaded"; }
+interface AdChannel { channel: string; spend: number; source?: "live" | "uploaded" | "canonical"; }
 interface ExpectedPayouts { amazonNet: number; shopifyNet: number; totalNet: number; }
 interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; balanceSheetDataGaps?: string[]; qbLive?: QbLive | null; netCashPosition?: number | null; expectedPayouts?: ExpectedPayouts | null; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
 
@@ -237,7 +237,7 @@ export default function Finances() {
                         <div key={x.channel} data-testid={`adch-${x.channel}`}>
                           <div className="flex items-center justify-between text-xs">
                             <span className="flex items-center gap-1.5">{x.channel}
-                              {x.source && <span className={`text-[10px] px-1 rounded ${x.source === "live" ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}>{x.source}</span>}
+                              {x.source && <span className={`text-[10px] px-1 rounded ${x.source === "live" ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}>{x.source === "canonical" ? "QuickBooks" : x.source}</span>}
                             </span>
                             <span className="tabular-nums font-medium">{fmt(x.spend)}{totalCh > 0 ? ` · ${Math.round((x.spend / totalCh) * 100)}%` : ""}</span>
                           </div>

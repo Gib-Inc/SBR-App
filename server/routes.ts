@@ -1366,12 +1366,10 @@ RULES:
       // Calculate metrics
       // For finished products, use totalOwned (pivotQty + hildaleQty)
       // For components, use currentStock
-      const inventoryValue = items.reduce((sum, item) => {
-        const quantity = item.type === "finished_product" 
-          ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
-          : item.currentStock;
-        return sum + (quantity * 10);
-      }, 0); // Mock pricing
+      // Inventory value = the QuickBooks booked Inventory Asset (the authoritative figure),
+      // via the ONE shared helper — not a $10/unit mock (which read ~$264K vs QB's ~$126K).
+      const { getInventoryValue } = await import("./services/inventory-health-service");
+      const inventoryValue = (await getInventoryValue(db)).value ?? 0;
       
       // Find item with lowest days of cover
       let minDaysOfCover = Infinity;
@@ -1495,7 +1493,9 @@ RULES:
    *   activeSalesOrders     — SOs not in a terminal state (DELIVERED/SHIPPED/REFUNDED/CANCELLED),
    *                           same filter the In-House Shipping view uses
    *   pendingReturns        — SOs whose return_status is in flight (anything outside NONE/COMPLETED)
-   *   totalInventoryValue   — SUM(current_stock * default_purchase_cost) across all items
+   *   totalInventoryValue   — the QuickBooks booked Inventory Asset (getInventoryValue), the
+   *                           authoritative figure; falls back to a labeled WAC estimate only
+   *                           if no QB snapshot exists
    */
   app.get("/api/system/stats", requireAuth, async (_req: Request, res: Response) => {
     try {
@@ -1527,9 +1527,11 @@ RULES:
       const pendingReturns = salesOrders.filter(so =>
         !RETURN_TERMINAL.has((so.returnStatus || 'NONE').toUpperCase())
       ).length;
-      const totalInventoryValue = items.reduce((sum, i) =>
-        sum + (i.currentStock ?? 0) * (i.defaultPurchaseCost ?? 0)
-      , 0);
+      // Same ONE inventory-value source as the dashboard — the QuickBooks booked Inventory
+      // Asset — not current_stock×default_cost (which excluded finished-goods on-hand → ~$90K
+      // vs QB's ~$126K). Every inventory-value surface now agrees.
+      const { getInventoryValue } = await import("./services/inventory-health-service");
+      const totalInventoryValue = (await getInventoryValue(db)).value ?? 0;
 
       res.json({
         totalItems,

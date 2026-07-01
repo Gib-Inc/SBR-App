@@ -1,5 +1,32 @@
 import { describe, it, expect } from "vitest";
-import { computeInventoryHealth } from "./inventory-health-service";
+import { computeInventoryHealth, getInventoryValue } from "./inventory-health-service";
+
+// db stub: getInventoryValue runs the QB-snapshot query then the WAC-estimate query.
+const mockDb = (responses: any[]) => { let i = 0; return { execute: async () => responses[i++] ?? { rows: [] } }; };
+
+describe("getInventoryValue — QuickBooks Inventory Asset is the source of truth", () => {
+  it("prefers the QB booked inventory over the (over-valued) app WAC estimate", async () => {
+    const db = mockDb([{ rows: [{ qb_inventory: 126543.24 }] }, { rows: [{ v: 270839.79 }] }]);
+    const r = await getInventoryValue(db as any);
+    expect(r.value).toBe(126543.24);       // QB wins, not the ~2x WAC
+    expect(r.source).toBe("quickbooks");
+    expect(r.qbInventory).toBe(126543.24);
+    expect(r.wacEstimate).toBe(270839.79);
+  });
+  it("falls back to the labeled WAC estimate only when there's no QB snapshot", async () => {
+    const db = mockDb([{ rows: [] }, { rows: [{ v: 90000 }] }]);
+    const r = await getInventoryValue(db as any);
+    expect(r.value).toBe(90000);
+    expect(r.source).toBe("estimate");
+    expect(r.qbInventory).toBeNull();
+  });
+  it("returns null (never a fabricated number) when neither source has a value", async () => {
+    const db = mockDb([{ rows: [] }, { rows: [{ v: null }] }]);
+    const r = await getInventoryValue(db as any);
+    expect(r.value).toBeNull();
+    expect(r.source).toBeNull();
+  });
+});
 
 describe("computeInventoryHealth", () => {
   it("computes turnover/DIO as a range across app-WAC and QB inventory", () => {

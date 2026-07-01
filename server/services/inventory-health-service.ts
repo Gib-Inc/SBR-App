@@ -51,7 +51,7 @@ export function computeInventoryHealth(input: {
   const valuationGap = qbInventory != null ? r2(inventoryValueApp - qbInventory) : null;
   const notes: string[] = [
     "Turnover = annualized Cost of Goods Sold ÷ inventory on hand; days-on-hand = 365 ÷ turnover.",
-    "Shown as a range (app-WAC vs QuickBooks inventory) because the two valuations differ — the true figure sits between until the gap is decomposed and booked.",
+    "QuickBooks' booked Inventory Asset is the authoritative value; the app-WAC figure OVER-values it because it double-counts BOM component cost into finished goods (a finished-good WAC already includes its components, then raw components are counted again). Trust the QuickBooks end, not a midpoint.",
     "COGS is QuickBooks' booked figure (still largely the 35% plug), so treat the magnitude as directional and the month-over-month trend as real. Costed coverage rising toward 90%+ makes it exact.",
   ];
   return {
@@ -64,6 +64,36 @@ export function computeInventoryHealth(input: {
     uncostedSkusWithStock: input.skusWithStock - input.skusCosted,
     notes,
   };
+}
+
+/** The QuickBooks booked Inventory Asset (latest snapshot) — the AUTHORITATIVE inventory dollar
+ *  value. The app's per-item WAC OVER-values it (a finished-good WAC already rolls up its BOM
+ *  component cost, then raw components are counted AGAIN → ~2x), so QuickBooks is the source of
+ *  truth. Returns null when no snapshot exists (FLAG-DON'T-FABRICATE). */
+export async function getQbInventoryAsset(db: DB): Promise<number | null> {
+  const r = rows(await db.execute(sql`
+    SELECT qb_inventory FROM qb_financial_snapshots
+    WHERE qb_inventory IS NOT NULL ORDER BY captured_at DESC LIMIT 1`))[0] || {};
+  return r?.qb_inventory != null ? num(r.qb_inventory) : null;
+}
+
+/** ONE inventory-value source for every headline surface (dashboard, system stats): prefer the
+ *  QuickBooks booked Inventory Asset; fall back to a LABELED operational WAC estimate only when no
+ *  QB snapshot exists — never the old $10/unit mock or a current_stock×default_cost partial. */
+export async function getInventoryValue(db: DB): Promise<{
+  value: number | null; source: "quickbooks" | "estimate" | null; qbInventory: number | null; wacEstimate: number | null;
+}> {
+  const qbInventory = await getQbInventoryAsset(db);
+  const est = rows(await db.execute(sql`
+    SELECT round(sum(
+      (CASE WHEN type = 'finished_product' THEN coalesce(hildale_qty,0) + coalesce(pivot_qty,0)
+            ELSE coalesce(current_stock,0) END)
+      * coalesce(wac_unit_cost, default_purchase_cost, 0))::numeric, 2) AS v
+    FROM items`))[0] || {};
+  const wacEstimate = est?.v != null ? num(est.v) : null;
+  const value = qbInventory ?? wacEstimate;
+  const source: "quickbooks" | "estimate" | null = qbInventory != null ? "quickbooks" : wacEstimate != null ? "estimate" : null;
+  return { value, source, qbInventory, wacEstimate };
 }
 
 export async function getInventoryHealth(db: DB): Promise<InventoryHealth> {
@@ -86,10 +116,7 @@ export async function getInventoryHealth(db: DB): Promise<InventoryHealth> {
       coalesce(sum(qty) FILTER (WHERE qty > 0 AND wac IS NOT NULL), 0) AS units_costed
     FROM valued`))[0] || {};
 
-  const qbRow = rows(await db.execute(sql`
-    SELECT qb_inventory FROM qb_financial_snapshots
-    WHERE qb_inventory IS NOT NULL ORDER BY captured_at DESC LIMIT 1`))[0] || {};
-  const qbInventory = qbRow.qb_inventory != null ? num(qbRow.qb_inventory) : null;
+  const qbInventory = await getQbInventoryAsset(db);
 
   // Trailing complete-month COGS (QuickBooks Cost of Goods Sold account; excludes outbound
   // freight, which isn't relieved from inventory). Mountain-time month boundary.

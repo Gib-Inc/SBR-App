@@ -7636,8 +7636,10 @@ TOTAL: $${subtotal.toFixed(2)}
                 // Track affected products for backorder refresh
                 affectedProductIds.add(product.id);
 
-                // Calculate backorder quantity (ordered - allocated)
-                const qtyAllocated = Math.min(lineItem.qtyOrdered, product.pivotQty || 0);
+                // Calculate backorder quantity (ordered - allocated). Use the
+                // locally decremented sellable number, not raw pivotQty, so
+                // re-import/backfill paths mirror the webhook path.
+                const qtyAllocated = Math.min(lineItem.qtyOrdered, product.availableForSaleQty || 0);
                 const backorderQty = lineItem.qtyOrdered - qtyAllocated;
 
                 const createdLine = await storage.createSalesOrderLine({
@@ -7654,17 +7656,19 @@ TOTAL: $${subtotal.toFixed(2)}
                 // V1: Apply InventoryMovement to decrement availableForSaleQty for Pivot-fulfilled orders
                 // This ensures real-time sell-through visibility before Extensiv reflects the shipment
                 const inventoryMovement = new InventoryMovement(storage);
-                await inventoryMovement.apply({
-                  eventType: "SALES_ORDER_CREATED",
-                  itemId: product.id,
-                  quantity: lineItem.qtyOrdered,
-                  location: "PIVOT",
-                  source: "SYSTEM",
-                  orderId: salesOrder.id,
-                  salesOrderLineId: createdLine.id,
-                  channel: "SHOPIFY",
-                  notes: `Shopify order ${orderData.externalOrderId}: ${lineItem.qtyOrdered} ${lineItem.sku} allocated`,
-                });
+                if (qtyAllocated > 0) {
+                  await inventoryMovement.apply({
+                    eventType: "SALES_ORDER_CREATED",
+                    itemId: product.id,
+                    quantity: qtyAllocated,
+                    location: "PIVOT",
+                    source: "SYSTEM",
+                    orderId: salesOrder.id,
+                    salesOrderLineId: createdLine.id,
+                    channel: "SHOPIFY",
+                    notes: `Shopify order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
+                  });
+                }
               } catch (lineError: any) {
                 errors.push(`${lineItem.sku} in order ${orderData.externalOrderId}: ${lineError.message}`);
                 console.error(`[Shopify] Failed to create line for SKU ${lineItem.sku}:`, lineError);
@@ -8826,8 +8830,10 @@ TOTAL: $${subtotal.toFixed(2)}
                 // Track affected products for backorder refresh
                 affectedProductIds.add(product.id);
 
-                // Calculate backorder quantity (ordered - allocated)
-                const qtyAllocated = Math.min(lineItem.qtyOrdered, product.pivotQty || 0);
+                // Calculate backorder quantity (ordered - allocated). Use the
+                // locally decremented sellable number, not raw pivotQty, so
+                // re-import/backfill paths mirror the webhook path.
+                const qtyAllocated = Math.min(lineItem.qtyOrdered, product.availableForSaleQty || 0);
                 const backorderQty = lineItem.qtyOrdered - qtyAllocated;
 
                 const createdLine = await storage.createSalesOrderLine({
@@ -8844,17 +8850,19 @@ TOTAL: $${subtotal.toFixed(2)}
                 // V1: Apply InventoryMovement to decrement availableForSaleQty for Pivot-fulfilled orders
                 // This ensures real-time sell-through visibility before Extensiv reflects the shipment
                 const inventoryMovement = new InventoryMovement(storage);
-                await inventoryMovement.apply({
-                  eventType: "SALES_ORDER_CREATED",
-                  itemId: product.id,
-                  quantity: lineItem.qtyOrdered,
-                  location: "PIVOT",
-                  source: "SYSTEM",
-                  orderId: salesOrder.id,
-                  salesOrderLineId: createdLine.id,
-                  channel: "AMAZON",
-                  notes: `Amazon order ${orderData.externalOrderId}: ${lineItem.qtyOrdered} ${lineItem.sku} allocated`,
-                });
+                if (qtyAllocated > 0) {
+                  await inventoryMovement.apply({
+                    eventType: "SALES_ORDER_CREATED",
+                    itemId: product.id,
+                    quantity: qtyAllocated,
+                    location: "PIVOT",
+                    source: "SYSTEM",
+                    orderId: salesOrder.id,
+                    salesOrderLineId: createdLine.id,
+                    channel: "AMAZON",
+                    notes: `Amazon order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
+                  });
+                }
               } catch (lineError: any) {
                 errors.push(`${lineItem.sku} in order ${orderData.externalOrderId}: ${lineError.message}`);
                 console.error(`[Amazon] Failed to create line for SKU ${lineItem.sku}:`, lineError);
@@ -13947,6 +13955,10 @@ Notes: ${po.notes || 'None'}
             ...lineData,
             salesOrderId: createdOrder.id,
             qtyAllocated,
+            // In-house/direct orders reserve Hildale units. They were never
+            // drawn from availableForSaleQty, so cancellation must not restore
+            // them to AFS, and shipping must decrement Hildale exactly once.
+            backorderFulfilledQty: qtyAllocated,
             backorderQty,
             qtyShipped: 0,
           });
@@ -21731,6 +21743,7 @@ Generate only the email body text, no subject line.`;
       // Process each line with allocation logic
       const createdLines = [];
       const affectedProductIds = new Set<string>();
+      const isPivotOrder = validatedOrder.channel === 'SHOPIFY' || validatedOrder.channel === 'AMAZON';
 
       for (const lineData of validatedLines) {
         // Get product to verify it exists and get current stock
@@ -21741,8 +21754,14 @@ Generate only the email body text, no subject line.`;
           });
         }
 
-        // Calculate available stock (hildaleQty + pivotQty for finished products)
-        const availableStock = (product.hildaleQty ?? 0) + (product.pivotQty ?? 0);
+        // Pivot-channel orders allocate from the locally tracked sellable pool
+        // (availableForSaleQty). Non-pivot/manual orders reserve Hildale stock.
+        // Hildale reservations are recorded in backorderFulfilledQty because
+        // those units were never deducted from availableForSaleQty.
+        const hildaleReserved = await storage.getOpenBackorderFulfilledQtyByProduct(product.id);
+        const availableStock = isPivotOrder
+          ? (product.availableForSaleQty ?? 0)
+          : Math.max(0, (product.hildaleQty ?? 0) - hildaleReserved);
 
         // Set qtyAllocated = min(qtyOrdered, availableStock)
         const qtyAllocated = Math.min(lineData.qtyOrdered, availableStock);
@@ -21755,6 +21774,7 @@ Generate only the email body text, no subject line.`;
           ...lineData,
           salesOrderId: createdOrder.id,
           qtyAllocated,
+          backorderFulfilledQty: isPivotOrder ? 0 : qtyAllocated,
           backorderQty,
           qtyShipped: 0,
         });
@@ -21772,21 +21792,22 @@ Generate only the email body text, no subject line.`;
       // Log SALES_ORDER_CREATED events for each line and update availableForSaleQty for Pivot-fulfilled orders
       const inventoryMovement = new InventoryMovement(storage);
       const user = await storage.getUser(req.session.userId!);
-      const isPivotOrder = validatedOrder.channel === 'SHOPIFY' || validatedOrder.channel === 'AMAZON';
       
       for (const line of createdLines) {
+        const afsAllocated = (line.qtyAllocated ?? 0) - (line.backorderFulfilledQty ?? 0);
+        if (afsAllocated <= 0 || !line.productId) continue;
         await inventoryMovement.apply({
           eventType: "SALES_ORDER_CREATED",
           itemId: line.productId,
-          quantity: line.qtyOrdered,
-          location: isPivotOrder ? "PIVOT" : "HILDALE",
+          quantity: afsAllocated,
+          location: "PIVOT",
           source: "USER",
           orderId: createdOrder.id,
           salesOrderLineId: line.id,
           channel: validatedOrder.channel,
           userId: req.session.userId,
           userName: user?.email,
-          notes: `Order ${createdOrder.externalOrderId || createdOrder.id}: ${line.qtyAllocated} allocated, ${line.backorderQty} backordered`,
+          notes: `Order ${createdOrder.externalOrderId || createdOrder.id}: ${afsAllocated} AFS allocated, ${line.backorderFulfilledQty ?? 0} Hildale allocated, ${line.backorderQty} backordered`,
         });
       }
 
@@ -21968,51 +21989,69 @@ Generate only the email body text, no subject line.`;
           });
         }
 
-        // Determine which warehouse to ship from. In-house orders
-        // (fulfillmentSource='HILDALE') physically leave from Hildale, so we must
-        // pin the location to HILDALE — the previous prioritize-Pivot logic would
-        // pick PIVOT whenever pivotQty was sufficient, leaving hildaleQty
-        // un-decremented even though Hildale actually shipped the order.
-        // Pivot/3PL orders keep the original prioritize-Pivot fallback.
-        const isInHouse = order.fulfillmentSource === 'HILDALE';
-        let location: 'PIVOT' | 'HILDALE';
-        if (isInHouse) {
-          if ((product.hildaleQty ?? 0) >= shipQty) {
-            location = 'HILDALE';
-          } else {
-            return res.status(400).json({
-              error: `Insufficient Hildale stock to ship line ${line.sku}`,
-            });
-          }
-        } else if ((product.pivotQty ?? 0) >= shipQty) {
-          location = 'PIVOT';
-        } else if ((product.hildaleQty ?? 0) >= shipQty) {
-          location = 'HILDALE';
-        } else {
-          // Not enough stock in either location
+        // Split shipment by allocation source. The AFS/Pivot portion was
+        // already decremented at order-create time, so Pivot shipment is a no-op
+        // here. The Hildale-reserved portion (backorderFulfilledQty) physically
+        // leaves Hildale now and must decrement hildaleQty exactly once.
+        const trackedHildaleQty = Math.min(line.backorderFulfilledQty ?? 0, shipQty);
+        const trackedPivotQty = Math.max(0, shipQty - trackedHildaleQty);
+        const hasSourceTracker = (line.backorderFulfilledQty ?? 0) > 0;
+        const movements: Array<{ location: 'PIVOT' | 'HILDALE'; quantity: number }> = hasSourceTracker
+          ? [
+              { location: 'PIVOT' as const, quantity: trackedPivotQty },
+              { location: 'HILDALE' as const, quantity: trackedHildaleQty },
+            ].filter((m) => m.quantity > 0)
+          : (() => {
+              const isInHouse = order.fulfillmentSource === 'HILDALE';
+              if (isInHouse) {
+                return (product.hildaleQty ?? 0) >= shipQty
+                  ? [{ location: 'HILDALE' as const, quantity: shipQty }]
+                  : [];
+              }
+              if ((product.pivotQty ?? 0) >= shipQty) {
+                return [{ location: 'PIVOT' as const, quantity: shipQty }];
+              }
+              if ((product.hildaleQty ?? 0) >= shipQty) {
+                return [{ location: 'HILDALE' as const, quantity: shipQty }];
+              }
+              return [];
+            })();
+
+        if (movements.length === 0) {
           return res.status(400).json({
             error: `Insufficient stock to ship line ${line.sku}`,
           });
         }
 
-        // Use InventoryMovement helper to update stock and log the movement.
-        // SALES_ORDER_SHIPPED with location='HILDALE' decrements hildaleQty.
-        const result = await inventoryMovement.apply({
-          eventType: "SALES_ORDER_SHIPPED",
-          itemId: product.id,
-          quantity: shipQty,
-          location,
-          source: "USER",
-          orderId: order.id,
-          salesOrderLineId: line.id,
-          channel: order.channel,
-          userId,
-          userName: user?.email,
-          notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
-        });
+        const hildaleShipQty = movements
+          .filter((movement) => movement.location === 'HILDALE')
+          .reduce((sum, movement) => sum + movement.quantity, 0);
+        if (hildaleShipQty > 0 && (product.hildaleQty ?? 0) < hildaleShipQty) {
+          return res.status(400).json({
+            error: `Insufficient Hildale stock to ship line ${line.sku}`,
+          });
+        }
 
-        if (!result.success) {
-          return res.status(400).json({ error: result.error });
+        for (const movement of movements) {
+          // Use InventoryMovement helper to update stock and log the movement.
+          // SALES_ORDER_SHIPPED with location='HILDALE' decrements hildaleQty.
+          const result = await inventoryMovement.apply({
+            eventType: "SALES_ORDER_SHIPPED",
+            itemId: product.id,
+            quantity: movement.quantity,
+            location: movement.location,
+            source: "USER",
+            orderId: order.id,
+            salesOrderLineId: line.id,
+            channel: order.channel,
+            userId,
+            userName: user?.email,
+            notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
+          });
+
+          if (!result.success) {
+            return res.status(400).json({ error: result.error });
+          }
         }
 
         // Legacy inventory_transactions entry. For Hildale ships we tag the row
@@ -22020,13 +22059,13 @@ Generate only the email body text, no subject line.`;
         // item gives net stock change directly. Pivot ships keep the historical
         // type='SHIP' / positive-qty shape — Extensiv owns pivotQty, so those
         // rows are informational anyway.
-        const isHildaleShip = location === 'HILDALE';
+        const isHildaleShip = hildaleShipQty > 0;
         await storage.createInventoryTransaction({
           itemId: product.id,
           itemType: 'FINISHED',
           type: isHildaleShip ? 'SHIPPED_HILDALE' : 'SHIP',
-          quantity: isHildaleShip ? -shipQty : shipQty,
-          location,
+          quantity: isHildaleShip ? -hildaleShipQty : shipQty,
+          location: isHildaleShip ? 'HILDALE' : 'PIVOT',
           notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
           createdBy: userId.toString(),
           createdByName: user?.email ?? null,

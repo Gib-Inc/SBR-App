@@ -132,6 +132,28 @@ describe("OrderCancellationService.cancelOrder (H1: restore allocated, not order
     expect(h.linesByOrder.get("so2")![0].qtyAllocated).toBe(0);
   });
 
+  it("does not restore Hildale-reserved backorder units to availableForSaleQty", async () => {
+    h.items.set("FG1", { id: "FG1", sku: "FG-1", type: "finished_product", availableForSaleQty: 90, pivotQty: 100, hildaleQty: 4 });
+    // 6 units were allocated from AFS at create time; 4 more were later
+    // reserved from Hildale by backorder auto-fulfill.
+    seedOrder("so2b", "SHOPIFY", [{
+      id: "l1",
+      productId: "FG1",
+      qtyAllocated: 10,
+      backorderFulfilledQty: 4,
+      backorderQty: 0,
+      qtyFulfilled: 0,
+    }]);
+
+    const res = await svc.cancelOrder("so2b", opts);
+
+    expect(res.success).toBe(true);
+    expect(h.items.get("FG1").availableForSaleQty).toBe(96); // +6 only, not +10
+    expect(h.items.get("FG1").hildaleQty).toBe(4); // reservation cleared, physical stock unchanged
+    expect(h.linesByOrder.get("so2b")![0].qtyAllocated).toBe(0);
+    expect(h.linesByOrder.get("so2b")![0].backorderFulfilledQty).toBe(0);
+  });
+
   it("sums restores across multiple lines and refreshes each product", async () => {
     h.items.set("FG1", { id: "FG1", sku: "FG-1", type: "finished_product", availableForSaleQty: 50, pivotQty: 60, hildaleQty: 0 });
     h.items.set("FG2", { id: "FG2", sku: "FG-2", type: "finished_product", availableForSaleQty: 20, pivotQty: 25, hildaleQty: 0 });

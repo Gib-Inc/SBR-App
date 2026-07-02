@@ -31,6 +31,12 @@ export interface ScenarioInputs {
   // to the starting cash, NOT to the burn rate. Optional: absent/null counts as 0
   // (it never gaps the runway), so the daily margin contribution is the only inflow
   // when it's not supplied.
+  dailyDebtService?: number | null; // debt principal+interest leaving the bank per day
+  // (MCA daily debits + cadence-normalized facility payments / 30). P&L OpEx NEVER
+  // contains principal (it's balance-sheet), so without this the runway is
+  // systematically rosy — the one failure mode this engine exists to prevent.
+  // Optional so unentered facilities don't blank the runway; the SERVICE flags how
+  // much debt is missing terms so the optimism is visible, never silent.
 }
 
 export interface ScenarioResult {
@@ -65,7 +71,10 @@ export function computeScenarioRunway(inputs: ScenarioInputs): ScenarioResult {
   // it extends the runway as additional starting cash — NOT as a reduction to burn.
   const startingCash = round2(cash + (isNum(inputs.inboundReceivables) ? (inputs.inboundReceivables as number) : 0));
   const burnRate = round2(
-    (inputs.dailyFixedOverhead as number) + (inputs.dailyAdSpend as number) - (inputs.dailyMarginContribution as number),
+    (inputs.dailyFixedOverhead as number)
+    + (inputs.dailyAdSpend as number)
+    + (isNum(inputs.dailyDebtService) ? (inputs.dailyDebtService as number) : 0)
+    - (inputs.dailyMarginContribution as number),
   );
 
   // burnRate <= 0 => sales margin covers costs => cash-flow positive, no finite burn.

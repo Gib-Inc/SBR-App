@@ -290,7 +290,7 @@ function DirectiveSummaryCard() {
     <Card data-testid="card-finops-directive">
       <CardHeader className="pb-3">
         <CardTitle>Today's Ad Directive</CardTitle>
-        <CardDescription>Blended guardrail call (8x target · 5x escalate · 3x pause · September Rule). Full per-campaign board lives on ROAS Guardian.</CardDescription>
+        <CardDescription>Media guardrails (8x target · 5x escalate · 3x pause · September Rule) propose; the MER governor (5x breakeven on ALL marketing cost) authorizes. Same verdict as Green Line.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         {!d ? (
@@ -304,6 +304,14 @@ function DirectiveSummaryCard() {
             <div className="text-xs text-muted-foreground">
               Media ROAS {a.blendedRoas30d}x (30d) on {fmt$(a.adSpend30d)} spend / {fmt$(a.revenue30d)} revenue
             </div>
+            {a.governor && (
+              <div className="text-xs" data-testid="finops-governor-verdict">
+                <span className={`font-semibold ${a.governor.state === "ALLOW_SCALE" ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"}`}>
+                  Governor: {String(a.governor.state).replace("_", " ")}
+                </span>
+                <span className="text-muted-foreground"> · true MER {a.governor.blendedMer != null ? `${a.governor.blendedMer}x` : "—"} vs {a.governor.breakeven}x breakeven{a.governor.merUnderstated ? " · basis incomplete" : ""}</span>
+              </div>
+            )}
           </>
         )}
         <Link href="/marketing" className="text-xs text-primary underline underline-offset-2">Open the per-campaign board →</Link>

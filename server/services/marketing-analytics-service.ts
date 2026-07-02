@@ -332,6 +332,44 @@ export interface BlendedAnalysis {
   directive: Directive;
   dataConfident: boolean;
   dataGaps: string[];
+  // D5: the ONE spend verdict. Media ROAS (above) judges the ads; the governor's
+  // blended MER (all marketing cost incl. credit-line Meta, vs the 5x breakeven)
+  // decides whether scaling is AUTHORIZED. FinOps and Green Line render this same
+  // object so the two surfaces can never disagree.
+  governor?: {
+    state: "ALLOW_SCALE" | "HOLD" | "BLOCK";
+    blendedMer: number | null;
+    breakeven: number;
+    merBasis30d: number | null;
+    merUnderstated: boolean;
+    reasons: string[];
+  } | null;
+}
+
+/** D5: the governor gate — media ROAS may PROPOSE a scale; only the blended-MER
+ *  governor can AUTHORIZE it. A SCALE directive demotes to HOLD whenever the
+ *  governor doesn't say ALLOW_SCALE (never touches PAUSE/REDUCE/ESCALATE cuts —
+ *  the gate only blocks spending MORE, never blocks defensive action). Pure. */
+export function applyGovernorGate(
+  d: Directive,
+  gov: { state: string; blendedMer: number | null; breakeven: number; reasons: string[] } | null,
+): Directive {
+  if (d.action !== "SCALE") return d;
+  if (gov && gov.state === "ALLOW_SCALE") return d;
+  // The headline must state the governor's ACTUAL reason — it can be HOLDing on the
+  // cash floor, the September Rule, or an incomplete basis while MER is fine.
+  // Hardcoding a MER clause here would assert a false fact on those paths.
+  const why = gov?.reasons?.[0] ?? "the MER governor is unavailable";
+  return {
+    ...d,
+    action: "HOLD",
+    magnitudePct: 0,
+    severity: "warn",
+    headline: gov
+      ? `Hold — media ROAS clears the target, but the governor does not authorize scaling: ${why}`
+      : "Hold — the MER governor is unavailable; scaling is never authorized without the breakeven gate.",
+    reason: `${d.reason} GOVERNOR OVERRIDE: media ROAS judges the ads in isolation; the blended MER (ALL marketing cost, including credit-line Meta the ledger doesn't book) and the cash floor decide whether scaling is affordable.${gov ? ` ${gov.reasons.join(" ")}` : ""}`,
+  };
 }
 
 /**
@@ -398,6 +436,24 @@ export async function runMarketingAnalysis(opts?: {
     isImplausibleBlendedRoas(blendedRoas30d);
   directive = applyDataQualityGate(directive, dataGaps, gapped);
 
+  // D5: the governor gate. The 6:30 AM directive Matt reads every morning ran on
+  // media-ROAS alone (8x band) — it could say SCALE at 8.97x media ROAS while true
+  // blended MER sat at ~3x vs the 5x breakeven. Governor failure fails CLOSED for
+  // scaling (applyGovernorGate(_, null) demotes SCALE → HOLD).
+  let governor: BlendedAnalysis["governor"] = null;
+  try {
+    const { computeGovernor } = await import("./marketing-governor-service");
+    const { db } = await import("../db");
+    const g = await computeGovernor(db);
+    governor = {
+      state: g.state, blendedMer: g.blendedMer, breakeven: g.breakeven,
+      merBasis30d: g.merBasis30d, merUnderstated: g.merUnderstated, reasons: g.reasons,
+    };
+  } catch (e: any) {
+    console.warn("[MarketingAnalytics] governor unavailable — SCALE fails closed:", e?.message ?? e);
+  }
+  directive = applyGovernorGate(directive, governor);
+
   const result: BlendedAnalysis = {
     generatedAt: new Date().toISOString(),
     windowDays: 30,
@@ -410,6 +466,7 @@ export async function runMarketingAnalysis(opts?: {
     directive,
     dataConfident: !gapped && dataGaps.length === 0,
     dataGaps,
+    governor,
   };
 
   try {

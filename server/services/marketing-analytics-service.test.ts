@@ -220,3 +220,65 @@ describe("isAttributionBroken (per-campaign Pause/Kill safety)", () => {
     expect(isAttributionBroken(50, 0)).toBe(false);
   });
 });
+
+describe("D5: applyGovernorGate — media ROAS proposes, the MER governor authorizes", () => {
+  const scaleDirective = {
+    platform: "BLENDED", action: "SCALE" as const, magnitudePct: 15, severity: "info" as const,
+    headline: "Scale BLENDED +15% — ROAS 8.9x above the 8x target.",
+    reason: "ROAS 8.9x clears the 8x target.",
+    metrics: { roas: 8.9, roas7d: 8.7, roas30d: 8.5, cac: null, contributionMargin: null },
+    blockedBySeptemberRule: false,
+  };
+  it("GATE FIXTURE: media ROAS > 8x but MER < 5x → HOLD with the governor's reason attached", async () => {
+    const { applyGovernorGate } = await import("./marketing-analytics-service");
+    const gov = { state: "HOLD", blendedMer: 3.64, breakeven: 5, reasons: ["Blended MER 3.64x below 5.0x breakeven"] };
+    const out = applyGovernorGate(scaleDirective as any, gov);
+    expect(out.action).toBe("HOLD");
+    expect(out.magnitudePct).toBe(0);
+    expect(out.headline).toMatch(/3\.64x/);
+    expect(out.reason).toMatch(/GOVERNOR OVERRIDE/);
+    expect(out.reason).toMatch(/below 5\.0x breakeven/);
+  });
+  it("ALLOW_SCALE passes the SCALE through untouched", async () => {
+    const { applyGovernorGate } = await import("./marketing-analytics-service");
+    const out = applyGovernorGate(scaleDirective as any, { state: "ALLOW_SCALE", blendedMer: 5.4, breakeven: 5, reasons: [] });
+    expect(out.action).toBe("SCALE");
+    expect(out.magnitudePct).toBe(15);
+  });
+  it("FAILS CLOSED: no governor at all → SCALE demotes to HOLD", async () => {
+    const { applyGovernorGate } = await import("./marketing-analytics-service");
+    const out = applyGovernorGate(scaleDirective as any, null);
+    expect(out.action).toBe("HOLD");
+    expect(out.headline).toMatch(/governor is unavailable/i);
+  });
+  it("never blocks DEFENSIVE action: PAUSE/REDUCE/HOLD pass through regardless of governor state", async () => {
+    const { applyGovernorGate } = await import("./marketing-analytics-service");
+    const pause = { ...scaleDirective, action: "PAUSE" as const, magnitudePct: -100 };
+    expect(applyGovernorGate(pause as any, { state: "BLOCK", blendedMer: 2, breakeven: 5, reasons: [] }).action).toBe("PAUSE");
+    const hold = { ...scaleDirective, action: "HOLD" as const, magnitudePct: 0 };
+    expect(applyGovernorGate(hold as any, null).action).toBe("HOLD");
+  });
+});
+
+describe("D5 fix: the demoted headline states the governor's ACTUAL reason", () => {
+  const scale = {
+    platform: "BLENDED", action: "SCALE" as const, magnitudePct: 15, severity: "info" as const,
+    headline: "Scale +15%", reason: "ROAS clears target.",
+    metrics: { roas: 8.9, roas7d: 8.7, roas30d: 8.5, cac: null, contributionMargin: null },
+    blockedBySeptemberRule: false,
+  };
+  it("cash-floor HOLD with MER ABOVE breakeven must NOT claim MER failed", async () => {
+    const { applyGovernorGate } = await import("./marketing-analytics-service");
+    const gov = { state: "HOLD", blendedMer: 5.4, breakeven: 5, reasons: ["Cash $53,186 below $60,000 floor"] };
+    const out = applyGovernorGate(scale as any, gov);
+    expect(out.action).toBe("HOLD");
+    expect(out.headline).toMatch(/Cash \$53,186 below/);
+    expect(out.headline).not.toMatch(/does not clear/);
+  });
+  it("understated-basis HOLD names the basis, not a false MER comparison", async () => {
+    const { applyGovernorGate } = await import("./marketing-analytics-service");
+    const gov = { state: "HOLD", blendedMer: 6.1, breakeven: 5, reasons: ["MER basis incomplete — credit-line Meta missing from the trailing window (upload the Meta spend tracker); not scaling on a booked-only MER"] };
+    const out = applyGovernorGate(scale as any, gov);
+    expect(out.headline).toMatch(/basis incomplete/i);
+  });
+});

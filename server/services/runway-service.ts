@@ -55,6 +55,15 @@ export interface RunwayComputation {
   netMargin: number | null;
   /** Pillar 4 self-tuning multiplier applied to revenue inputs (1 = untuned). */
   biasCorrectionFactor?: number;
+  /** D5: the debt drain in the burn — daily debt service from entered facility terms,
+   *  plus how much balance still has NO terms (that debt reads $0 in the burn, so the
+   *  runway is optimistic by exactly that omission — flagged, never silent). */
+  debtService?: {
+    dailyDebtService: number;
+    monthlyDebtService: number;
+    missingPaymentCount: number;
+    missingPaymentBalance: number;
+  };
 }
 
 /**
@@ -80,6 +89,31 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
   const dailyFixedOverhead = snap.operatingExpenses != null ? round2(Number(snap.operatingExpenses) / 30) : null;
 
   const asOf = todayMountain();
+
+  // D5: the debt drain. P&L OpEx never contains principal (balance-sheet), so MCA
+  // daily debits + loan payments were invisible to every runway — a rosy runway
+  // during a debt spiral is the exact failure this app exists to prevent. Sum the
+  // entered facility terms to a calendar-daily rate; when facilities are missing
+  // terms, the shortfall is FLAGGED (debtService.missingPayment*) rather than
+  // guessed. Failure → 0 + no flag update (never fabricated).
+  // NOTE (known conservative bias, follow-up logged): the facility payments summed
+  // here include their INTEREST portion, and P&L OpEx (dailyFixedOverhead) already
+  // carries the interest expense line — bounded double-count ≲$530/day, safe
+  // direction, dwarfed by the principal this adds. Netting it properly needs
+  // per-facility interest splits.
+  let debtService: RunwayComputation["debtService"]; // undefined on failure — never a fabricated all-clear
+  try {
+    const { computeCreditLines } = await import("./credit-lines-service");
+    const cl = await computeCreditLines();
+    debtService = {
+      dailyDebtService: round2(cl.totals.monthlyDebtService / 30),
+      monthlyDebtService: cl.totals.monthlyDebtService,
+      missingPaymentCount: cl.totals.missingPaymentCount,
+      missingPaymentBalance: cl.totals.missingPaymentBalance,
+    };
+  } catch (err: any) {
+    console.warn("[CIPH.R] debt service for runway failed (runway runs WITHOUT debt in the burn):", err?.message ?? err);
+  }
 
   // Money on its way — the DEFENSIBLE near-cash fed into each scenario's starting
   // cash. This is the sales-derived expected channel payout (Amazon trailing-14d +
@@ -155,7 +189,7 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
 
     // inboundReceivables is applied by withWindowedInbound (2-pass) below, so the
     // amount credited never exceeds what settles before the runway ends.
-    return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution };
+    return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution, dailyDebtService: debtService.dailyDebtService };
   };
 
   const scenarioInputs: Record<ScenarioKey, ScenarioInputs> = {
@@ -187,6 +221,7 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
       dailyFixedOverhead,
       dailyAdSpend: scenarioInputs.realistic.dailyAdSpend,
       dailyMarginContribution,
+      dailyDebtService: debtService.dailyDebtService,
     });
     seasonal = {
       result: computeScenarioRunway(inputs),
@@ -201,7 +236,7 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
 
   return {
     ok: true,
-    data: { forecast, scenarioInputs, seasonal, inboundReceivables, snapshotId: snap.id, netMargin, biasCorrectionFactor: biasFactor },
+    data: { forecast, scenarioInputs, seasonal, inboundReceivables, snapshotId: snap.id, netMargin, biasCorrectionFactor: biasFactor, debtService },
   };
 }
 

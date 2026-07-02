@@ -172,3 +172,32 @@ describe("inbound receivables (money on its way) extend the runway", () => {
     expect(computeScenarioRunway({ ...b, inboundReceivables: undefined }).runwayDays).toBe(1);
   });
 });
+
+describe("D5: debt service in the burn", () => {
+  it("dailyDebtService adds to burn and shortens the runway by the expected amount", async () => {
+    const { computeScenarioRunway } = await import("./runway-engine");
+    const base = { cashOnHand: 53000, dailyFixedOverhead: 4000, dailyAdSpend: 1000, dailyMarginContribution: 4500 };
+    const without = computeScenarioRunway(base);
+    const withDebt = computeScenarioRunway({ ...base, dailyDebtService: 1500 });
+    // burn: 4000+1000-4500 = 500/day → 106 days;  with debt: 500+1500 = 2000/day → 26 days
+    expect(without.burnRate).toBe(500);
+    expect(without.runwayDays).toBe(106);
+    expect(withDebt.burnRate).toBe(2000);
+    expect(withDebt.runwayDays).toBe(26); // the true (shorter) number
+  });
+  it("absent/null dailyDebtService behaves exactly like before (no gap, no phantom burn)", async () => {
+    const { computeScenarioRunway } = await import("./runway-engine");
+    const base = { cashOnHand: 10000, dailyFixedOverhead: 300, dailyAdSpend: 100, dailyMarginContribution: 200 };
+    expect(computeScenarioRunway(base).burnRate).toBe(200);
+    expect(computeScenarioRunway({ ...base, dailyDebtService: null }).burnRate).toBe(200);
+    expect(computeScenarioRunway(base).gaps).toEqual([]);
+  });
+  it("debt service can flip a cash-flow-positive read into a real burn", async () => {
+    const { computeScenarioRunway } = await import("./runway-engine");
+    const base = { cashOnHand: 50000, dailyFixedOverhead: 3000, dailyAdSpend: 1000, dailyMarginContribution: 4500 };
+    expect(computeScenarioRunway(base).cashFlowPositive).toBe(true); // -500/day: rosy
+    const truth = computeScenarioRunway({ ...base, dailyDebtService: 2000 });
+    expect(truth.cashFlowPositive).toBe(false); // +1500/day of real burn
+    expect(truth.runwayDays).toBe(33);
+  });
+});

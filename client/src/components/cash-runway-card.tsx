@@ -22,6 +22,7 @@ interface ScenarioInputs {
   dailyAdSpend: number | null;
   dailyMarginContribution: number | null;
   inboundReceivables?: number | null;
+  dailyDebtService?: number | null; // debt principal+interest / day (D5) — in the burn
 }
 type ScenarioKey = "conservative" | "realistic" | "aggressive";
 interface SeasonalScenario {
@@ -60,7 +61,10 @@ function calcScenario(s: ScenarioInputs | undefined, adPct: number, velPct: numb
   if (gaps.length) return { days: null, cashFlowPositive: false, gaps };
   const adSpend = (s.dailyAdSpend as number) * (1 + adPct / 100);
   const margin = (s.dailyMarginContribution as number) * (1 + velPct / 100);
-  const burn = (s.dailyFixedOverhead as number) + adSpend - margin;
+  // Debt service is in the burn (D5), held CONSTANT under What-If variance — you can
+  // flex ad spend and sales, but the lender debits the same amount either way.
+  const debtService = typeof s.dailyDebtService === "number" && !Number.isNaN(s.dailyDebtService) ? s.dailyDebtService : 0;
+  const burn = (s.dailyFixedOverhead as number) + adSpend + debtService - margin;
   if (burn <= 0) return { days: null, cashFlowPositive: true, gaps: [] };
   const inbound = typeof s.inboundReceivables === "number" && !Number.isNaN(s.inboundReceivables) ? s.inboundReceivables : 0;
   return { days: Math.floor(((s.cashOnHand as number) + inbound) / burn), cashFlowPositive: false, gaps: [] };

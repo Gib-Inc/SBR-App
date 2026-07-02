@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { BarChart3, UploadCloud } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { BarChart3, UploadCloud, Activity, Database, Gauge } from 'lucide-react';
 import { Link } from 'wouter';
 import { KPISummaryBar } from '@/components/marketing-analytics/kpi-summary-bar';
 import { CommandCenterView } from '@/components/marketing-analytics/command-center-view';
@@ -36,7 +37,7 @@ export default function MarketingAnalytics() {
             Marketing Analytics
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Command center, ad performance, customer intelligence, product ROAS.
+            Decision-grade marketing read first. Stale and diagnostic reports are separated from the operating view.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -57,43 +58,52 @@ export default function MarketingAnalytics() {
 
       <KPISummaryBar />
 
-      <Tabs defaultValue="command">
-        <TabsList className="flex-wrap h-auto">
-          <TabsTrigger value="command">Command Center</TabsTrigger>
-          <TabsTrigger value="trend">Trend</TabsTrigger>
-          <TabsTrigger value="monthly">Monthly</TabsTrigger>
-          <TabsTrigger value="velocity">Velocity</TabsTrigger>
-          <TabsTrigger value="years">Year/Year</TabsTrigger>
-          <TabsTrigger value="history">CMO History</TabsTrigger>
-          <TabsTrigger value="spend">Spend Pacing</TabsTrigger>
-          <TabsTrigger value="channels">Channel Mix</TabsTrigger>
-          <TabsTrigger value="deep-dive">Deep Dive</TabsTrigger>
-          <TabsTrigger value="breakeven">Break-even</TabsTrigger>
-          <TabsTrigger value="customers">Customers</TabsTrigger>
-          <TabsTrigger value="ltvcac">LTV / CAC</TabsTrigger>
-          <TabsTrigger value="geography">Geography</TabsTrigger>
-          <TabsTrigger value="products">Products</TabsTrigger>
-          <TabsTrigger value="creative">Creative Intel</TabsTrigger>
-          <TabsTrigger value="fatigue">Fatigue</TabsTrigger>
-          <TabsTrigger value="seasonal">Seasonal</TabsTrigger>
+      <Tabs defaultValue="decision" className="space-y-4">
+        <TabsList className="grid h-auto w-full grid-cols-3 md:w-[560px]">
+          <TabsTrigger value="decision" className="gap-1.5"><Gauge className="h-3.5 w-3.5" /> Decision</TabsTrigger>
+          <TabsTrigger value="performance" className="gap-1.5"><Activity className="h-3.5 w-3.5" /> Performance</TabsTrigger>
+          <TabsTrigger value="diagnostics" className="gap-1.5"><Database className="h-3.5 w-3.5" /> Diagnostics</TabsTrigger>
         </TabsList>
-        <TabsContent value="command"><CommandCenterView days={days} /></TabsContent>
-        <TabsContent value="trend"><TrendView /></TabsContent>
-        <TabsContent value="monthly"><MonthlyPerformanceView /></TabsContent>
-        <TabsContent value="velocity"><SalesVelocityView days={days} /></TabsContent>
-        <TabsContent value="years"><MultiYearView /></TabsContent>
-        <TabsContent value="history"><CMOHistoryView /></TabsContent>
-        <TabsContent value="spend"><SpendPacingView days={days} /></TabsContent>
-        <TabsContent value="channels"><ChannelMixView days={days} /></TabsContent>
-        <TabsContent value="deep-dive"><ChannelDeepDiveView days={days} /></TabsContent>
-        <TabsContent value="breakeven"><div className="space-y-4"><BreakevenRoasView days={days} /><BomCompletenessView days={days} /></div></TabsContent>
-        <TabsContent value="customers"><div className="space-y-4"><CustomerCohortsView /><CustomerSplitView days={days} /></div></TabsContent>
-        <TabsContent value="ltvcac"><LtvCacView /></TabsContent>
-        <TabsContent value="geography"><GeographicView days={days} /></TabsContent>
-        <TabsContent value="products"><ProductPerformanceView days={days} /></TabsContent>
-        <TabsContent value="creative"><CreativeIntelligenceView days={days} /></TabsContent>
-        <TabsContent value="fatigue"><CreativeFatigueView days={days} /></TabsContent>
-        <TabsContent value="seasonal"><SeasonalIntelligenceView /></TabsContent>
+        <TabsContent value="decision">
+          <CommandCenterView days={days} />
+        </TabsContent>
+        <TabsContent value="performance">
+          <div className="space-y-4">
+            <TrendView />
+            <MonthlyPerformanceView />
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <ChannelMixView days={days} />
+              <SpendPacingView days={days} />
+            </div>
+            <ProductPerformanceView days={days} />
+          </div>
+        </TabsContent>
+        <TabsContent value="diagnostics">
+          <div className="space-y-4">
+            <Alert>
+              <Database className="h-4 w-4" />
+              <AlertTitle>Diagnostic reports</AlertTitle>
+              <AlertDescription>
+                These views are useful for investigation, but some rely on older attribution feeds, raw ad rows, or low-confidence shape data. Use the Decision tab for headline spend and ROAS.
+              </AlertDescription>
+            </Alert>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <ChannelDeepDiveView days={days} />
+              <SalesVelocityView days={days} />
+              <BreakevenRoasView days={days} />
+              <BomCompletenessView days={days} />
+              <CustomerSplitView days={days} />
+              <GeographicView days={days} />
+              <CreativeIntelligenceView days={days} />
+              <CreativeFatigueView days={days} />
+              <SeasonalIntelligenceView />
+              <LtvCacView />
+              <CustomerCohortsView />
+              <MultiYearView />
+              <CMOHistoryView />
+            </div>
+          </div>
+        </TabsContent>
       </Tabs>
     </div>
   );

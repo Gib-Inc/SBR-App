@@ -324,6 +324,48 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   // "Ad Spend by Channel"): per-platform spend with source badges, total spend,
   // window sales revenue, and sales-based blended ROAS. Backs the Ad Spend card.
   app.get('/api/marketing-analytics/cmo/ad-spend-summary', requireAuth, handle((req) => getCorrectedAdSummary(parseDays(req))));
+  app.get('/api/marketing-analytics/cmo/data-health', requireAuth, handle(async () => {
+    const db = getDb();
+    const [sales, rawAds, spendSnapshots, schedulers] = await Promise.all([
+      db.execute(sql`
+        SELECT max(date)::text AS max_date, max(last_synced_at)::text AS last_synced_at
+        FROM daily_sales_snapshots
+      `),
+      db.execute(sql`
+        SELECT platform,
+               max(date)::text AS max_date,
+               count(*)::int AS rows,
+               sum(spend)::float8 AS spend
+        FROM ad_metrics_daily
+        GROUP BY platform
+        ORDER BY sum(spend) DESC NULLS LAST
+      `),
+      db.execute(sql`
+        SELECT platform,
+               max(coalesce(period_end, period_start))::text AS max_date,
+               count(*)::int AS rows,
+               sum(spend)::float8 AS spend,
+               string_agg(distinct source, ', ' ORDER BY source) AS sources
+        FROM marketing_spend_snapshots
+        WHERE coalesce(superseded, false) = false
+        GROUP BY platform
+        ORDER BY sum(spend) DESC NULLS LAST
+      `),
+      db.execute(sql`
+        SELECT integration_name, last_status, last_success_at::text AS last_success_at, error_message
+        FROM integration_health
+        WHERE integration_name IN ('scheduler:ad-performance-sync', 'scheduler:marketing-analytics')
+        ORDER BY integration_name
+      `),
+    ]);
+    return {
+      generatedAt: new Date().toISOString(),
+      sales: (sales.rows || sales)[0] || null,
+      rawAds: rawAds.rows || rawAds,
+      spendSnapshots: spendSnapshots.rows || spendSnapshots,
+      schedulers: schedulers.rows || schedulers,
+    };
+  }));
   app.get('/api/marketing-analytics/cmo/customer-split', requireAuth, handle((req) => queryCustomerSplit(getDb(), parseDays(req))));
   app.get('/api/marketing-analytics/cmo/geographic', requireAuth, handle((req) => queryGeographic(getDb(), parseDays(req)).then(states => ({ states }))));
   app.get('/api/marketing-analytics/cmo/creative-fatigue', requireAuth, handle((req) => queryCreativeFatigue(getDb(), parseDays(req) > 90 ? parseDays(req) : 90).then(creatives => ({ creatives }))));
@@ -416,7 +458,7 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
 
       if (!force) {
         const last = await db.execute(sql`SELECT generated_at FROM marketing_recommendations ORDER BY generated_at DESC LIMIT 1`);
-        const lastRow = (last.rows || last)[0];
+        const lastRow = (last.rows || last)[0] as { generated_at?: string | Date } | undefined;
         if (lastRow?.generated_at) {
           const ageMs = Date.now() - new Date(lastRow.generated_at).getTime();
           if (ageMs < 7 * 24 * 60 * 60 * 1000) {

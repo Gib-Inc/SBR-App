@@ -137,9 +137,32 @@ export async function computeDebtAvalanche(db: DB): Promise<{
   // FLAG-DON'T-FABRICATE: a true avalanche needs every APR. Surface how much debt has no rate
   // so the payoff order is presented as partial, not authoritative, while APRs are unset.
   aprCoverage: { missingCount: number; missingBalance: number };
+  // D3: what actually leaves the bank — daily ACH out (daily-cadence facilities; reconcile
+  // against the bank statement) + cadence-normalized monthly service, and the balance still
+  // missing payment terms (reads $0 in every runway/forecast until entered).
+  debtService: { dailyAchOut: number; monthlyTotal: number; missingPaymentCount: number; missingPaymentBalance: number };
+  // Ghost facilities (vanished from QuickBooks but still carrying a balance) are EXCLUDED
+  // from the payoff order by default — a settlement number needs a living source.
+  ghosts: { count: number; balance: number; names: string[] };
 }> {
-  const rs = rows(await db.execute(sql`
-    select name, type, balance, apr from credit_lines where is_active and balance > 0`));
+  const all = rows(await db.execute(sql`
+    select name, type, balance, apr, payment_amount, payment_frequency, qb_missing_since
+    from credit_lines where is_active and balance > 0`));
+  const ghostRows = all.filter((rr: any) => rr.qb_missing_since != null);
+  // Ghosts are excluded from the payoff ORDER only (a settlement number needs a living
+  // source) — they stay IN totalDebt and debt service. Dropping them from totals would
+  // fabricate a smaller debt stack on the north-star tile; a debt doesn't stop debiting
+  // the bank because its QB account vanished.
+  const rs = all.filter((rr: any) => rr.qb_missing_since == null);
+  const { monthlyEquivalent, dailyDebitTotal } = await import("./credit-lines-service");
+  const termed = all.map((rr: any) => ({
+    paymentAmount: rr.payment_amount != null ? num(rr.payment_amount) : null,
+    paymentFrequency: rr.payment_frequency ?? null,
+    balance: num(rr.balance),
+  }));
+  const dailyAchOut = dailyDebitTotal(termed);
+  const monthlyTotal = termed.reduce((s: number, t: any) => s + (monthlyEquivalent(t.paymentAmount, t.paymentFrequency) ?? 0), 0);
+  const missingPayment = termed.filter((t: any) => t.paymentAmount == null || t.paymentAmount <= 0);
   // TRUE avalanche: retire MCAs first (daily revenue-share debits — effective cost far exceeds
   // any stated APR), then rank the rest by ACTUAL APR descending (a null rate sorts last so a
   // rate-blind facility never jumps ahead of a known 36% one), tie-broken by balance. The old
@@ -182,12 +205,24 @@ export async function computeDebtAvalanche(db: DB): Promise<{
   const interestTrend = trendRows.map((rr: any) => ({ month: String(rr.ym), interest: r0(num(rr.interest)) }));
 
   const missingApr = ranked.filter((f) => f.apr == null);
+  const ghostBalance = ghostRows.reduce((s: number, rr: any) => s + num(rr.balance), 0);
   return {
     facilities,
     byBucket,
-    totalDebt: r0(ranked.reduce((s, f) => s + f.balance, 0)),
+    // ALL active debt, ghosts included — the ORDER above excludes them, the TOTAL never does.
+    totalDebt: r0(ranked.reduce((s, f) => s + f.balance, 0) + ghostBalance),
     interestTrend,
     aprCoverage: { missingCount: missingApr.length, missingBalance: r0(missingApr.reduce((s, f) => s + f.balance, 0)) },
+    debtService: {
+      dailyAchOut: r0(dailyAchOut), monthlyTotal: r0(monthlyTotal),
+      missingPaymentCount: missingPayment.length,
+      missingPaymentBalance: r0(missingPayment.reduce((s: number, t: any) => s + t.balance, 0)),
+    },
+    ghosts: {
+      count: ghostRows.length,
+      balance: r0(ghostBalance),
+      names: ghostRows.map((rr: any) => String(rr.name)),
+    },
   };
 }
 

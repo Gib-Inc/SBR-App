@@ -19,7 +19,11 @@ interface Governor {
   netRevenue30d: number; cashOnHand: number | null; cashFloor: number; septemberStreak: number;
   septemberTriggered: boolean; dataFresh: boolean; adDataLatest: string | null;
 }
+interface DebtService { dailyAchOut: number; monthlyTotal: number; missingPaymentCount: number; missingPaymentBalance: number }
+interface Ghosts { count: number; balance: number; names: string[] }
 interface DebtAval {
+  debtService?: DebtService;
+  ghosts?: Ghosts;
   totalDebt: number; byBucket: { bucket: string; tier: string; total: number; count: number }[];
   facilities: { name: string; balance: number; apr: number | null; tier: string; bucket: string; payoffOrder: number }[];
   interestTrend: { month: string; interest: number }[];
@@ -129,6 +133,28 @@ export default function GreenLine() {
                 </div>
               ))}
             </div>
+            {debt.data.debtService && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border px-3 py-2 text-sm" data-testid="debt-service-strip">
+                <span title="Sum of daily-cadence facility debits (MCAs) — reconcile this against the bank statement's daily ACH total">
+                  <span className={`font-semibold tabular-nums ${debt.data.debtService.dailyAchOut > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{money(debt.data.debtService.dailyAchOut)}</span>
+                  <span className="text-muted-foreground text-xs"> /business-day ACH out</span>
+                </span>
+                <span title="All facility payments normalized to monthly (daily ×21 business days, weekly ×4.33)">
+                  <span className="font-semibold tabular-nums">{money(debt.data.debtService.monthlyTotal)}</span>
+                  <span className="text-muted-foreground text-xs"> /mo debt service</span>
+                </span>
+              </div>
+            )}
+            {debt.data.debtService && debt.data.debtService.missingPaymentCount > 0 && (
+              <p className="text-[11px] text-red-700 dark:text-red-400 flex items-start gap-1" data-testid="debt-unfunded-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" /> {debt.data.debtService.missingPaymentCount} {debt.data.debtService.missingPaymentCount === 1 ? "facility" : "facilities"} ({money(debt.data.debtService.missingPaymentBalance)} of balance) have no payment amount entered — they read $0 in runway, forecasts, and the pay order. Enter each schedule on the Finances debt card.
+              </p>
+            )}
+            {debt.data.ghosts && debt.data.ghosts.count > 0 && (
+              <p className="text-[11px] text-red-700 dark:text-red-400 flex items-start gap-1" data-testid="debt-ghost-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" /> Excluded from this payoff order (still counted in the debt total): {debt.data.ghosts.names.join(", ")} ({money(debt.data.ghosts.balance)}) — no longer returned by QuickBooks, balance unverifiable. Confirm with Roger, then deactivate or re-link.
+              </p>
+            )}
             {debt.data.aprCoverage && debt.data.aprCoverage.missingCount > 0 && (
               <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" /> {money(debt.data.aprCoverage.missingBalance)} of debt ({debt.data.aprCoverage.missingCount} {debt.data.aprCoverage.missingCount === 1 ? "facility" : "facilities"}) has no APR on file — those sort last, so this order is a best-effort until the rates are entered.

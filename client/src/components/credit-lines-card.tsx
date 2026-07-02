@@ -20,6 +20,10 @@ interface CreditLine {
   balance: number; creditLimit: number | null; apr: number | null;
   available: number | null; utilization: number | null;
   dueDay: number | null; nextDue: string | null; highUtilization: boolean;
+  paymentAmount?: number | null; paymentFrequency?: string | null; nextDebitDate?: string | null;
+  monthlyDebtService?: number | null;
+  qbMissingSince?: string | null;
+  staleness?: "fresh" | "amber" | "red" | "manual";
 }
 interface Resp {
   lines: CreditLine[];
@@ -27,6 +31,9 @@ interface Resp {
     totalBalance: number; totalLimit: number | null; totalAvailable: number | null;
     blendedUtilization: number | null; count: number;
     missingApr?: number; missingDueDay?: number; missingTermsBalance?: number; termsComplete?: boolean;
+    dailyAchOut?: number; monthlyDebtService?: number;
+    missingPaymentCount?: number; missingPaymentBalance?: number;
+    ghostCount?: number; ghostBalance?: number;
   };
 }
 interface LoanLine { name: string; balance: number | null; term?: string | null; rate?: number | null; }
@@ -42,12 +49,18 @@ function EditDialog({ line, onSaved }: { line: CreditLine; onSaved: () => void }
   const [limit, setLimit] = useState(line.creditLimit?.toString() ?? "");
   const [apr, setApr] = useState(line.apr?.toString() ?? "");
   const [due, setDue] = useState(line.dueDay?.toString() ?? "");
+  const [payAmt, setPayAmt] = useState(line.paymentAmount?.toString() ?? "");
+  const [payFreq, setPayFreq] = useState(line.paymentFrequency ?? "monthly");
+  const [nextDebit, setNextDebit] = useState(line.nextDebitDate ?? "");
   const save = useMutation({
     mutationFn: async () => {
       const body: any = {};
       body.creditLimit = limit === "" ? null : Number(limit);
       body.apr = apr === "" ? null : Number(apr);
       body.dueDay = due === "" ? null : Number(due);
+      body.paymentAmount = payAmt === "" ? null : Number(payAmt);
+      body.paymentFrequency = payAmt === "" ? null : payFreq;
+      body.nextDebitDate = nextDebit === "" ? null : nextDebit;
       return (await apiRequest("PATCH", `/api/finances/credit-lines/${line.id}`, body)).json();
     },
     onSuccess: () => { setOpen(false); onSaved(); toast({ title: `Updated ${line.name}` }); },
@@ -64,6 +77,24 @@ function EditDialog({ line, onSaved }: { line: CreditLine; onSaved: () => void }
           <div><Label className="text-xs">Credit limit ($)</Label><Input value={limit} onChange={(e) => setLimit(e.target.value)} inputMode="decimal" placeholder="e.g. 25000" /></div>
           <div><Label className="text-xs">APR (%)</Label><Input value={apr} onChange={(e) => setApr(e.target.value)} inputMode="decimal" placeholder="e.g. 21.99" /></div>
           <div><Label className="text-xs">Due day of month (1-31)</Label><Input value={due} onChange={(e) => setDue(e.target.value)} inputMode="numeric" placeholder="e.g. 15" /></div>
+          <div className="rounded-md border p-2.5 space-y-2.5">
+            <p className="text-[11px] font-medium text-muted-foreground">Payment schedule — from the loan statement. Drives monthly debt service, DSCR, and the pay-order amounts. (Shopify Capital debits a % of sales — enter your average daily debit.)</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div><Label className="text-xs">Payment amount ($)</Label><Input value={payAmt} onChange={(e) => setPayAmt(e.target.value)} inputMode="decimal" placeholder="e.g. 850" data-testid={`input-payment-amount-${line.id}`} /></div>
+              <div>
+                <Label className="text-xs">Frequency</Label>
+                <select value={payFreq} onChange={(e) => setPayFreq(e.target.value)}
+                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  data-testid={`select-payment-frequency-${line.id}`}>
+                  <option value="daily">Daily (MCA ACH, business days)</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Biweekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            </div>
+            <div><Label className="text-xs">Next debit date</Label><Input type="date" value={nextDebit} onChange={(e) => setNextDebit(e.target.value)} /></div>
+          </div>
         </div>
         <DialogFooter>
           <Button onClick={() => save.mutate()} disabled={save.isPending}>Save</Button>
@@ -71,6 +102,17 @@ function EditDialog({ line, onSaved }: { line: CreditLine; onSaved: () => void }
       </DialogContent>
     </Dialog>
   );
+}
+
+const FREQ_SHORT: Record<string, string> = { daily: "/day", weekly: "/wk", biweekly: "/2wk", monthly: "/mo" };
+function stalenessBadge(l: CreditLine) {
+  if (l.qbMissingSince) {
+    return <span className="ml-1.5 rounded bg-red-100 px-1 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-950/50 dark:text-red-300" title={`Not returned by QuickBooks since ${l.qbMissingSince.slice(0, 10)} — balance unverifiable; excluded from the payoff order`}>no longer in QB — verify</span>;
+  }
+  if (l.staleness === "red") return <span className="ml-1.5 rounded bg-red-100 px-1 py-0.5 text-[10px] text-red-700 dark:bg-red-950/50 dark:text-red-300" title="Balance last synced >7 days ago">stale &gt;7d</span>;
+  if (l.staleness === "amber") return <span className="ml-1.5 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-700 dark:bg-amber-950/50 dark:text-amber-300" title="Balance last synced >48h ago">stale &gt;48h</span>;
+  if (l.staleness === "manual") return <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground" title="Manual line — no QuickBooks sync">manual</span>;
+  return null;
 }
 
 function AddDialog({ onSaved }: { onSaved: () => void }) {
@@ -163,8 +205,20 @@ export function CreditLinesCard({ balanceSheet }: { balanceSheet: BalanceSheet |
                 <span><span className="font-semibold text-red-600 dark:text-red-400">{money(totals.totalBalance)}</span><span className="text-muted-foreground"> owed</span></span>
                 {totals.totalAvailable != null && <span><span className="font-semibold">{money(totals.totalAvailable)}</span><span className="text-muted-foreground"> available</span></span>}
                 {totals.blendedUtilization != null && <span className={utilTone(totals.blendedUtilization)}><span className="font-semibold">{totals.blendedUtilization}%</span> utilization</span>}
+                {(totals.dailyAchOut ?? 0) > 0 && <span data-testid="daily-ach-out"><span className="font-semibold text-red-600 dark:text-red-400">{money(totals.dailyAchOut!)}</span><span className="text-muted-foreground"> /business day ACH out</span></span>}
+                {(totals.monthlyDebtService ?? 0) > 0 && <span><span className="font-semibold">{money(totals.monthlyDebtService!)}</span><span className="text-muted-foreground"> /mo debt service</span></span>}
               </div>
             )}
+            {totals && (totals.missingPaymentCount ?? 0) > 0 ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300" data-testid="payment-terms-missing">
+                {totals.missingPaymentCount} facilit{totals.missingPaymentCount! > 1 ? "ies" : "y"} ({money(totals.missingPaymentBalance ?? 0)} of balance) have NO payment amount entered — they read $0 in every runway, forecast, and pay order. Enter each payment schedule (✎) from the loan statement.
+              </div>
+            ) : null}
+            {totals && (totals.ghostCount ?? 0) > 0 ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300" data-testid="ghost-facilities">
+                {totals.ghostCount} facilit{totals.ghostCount! > 1 ? "ies" : "y"} ({money(totals.ghostBalance ?? 0)}) no longer come back from QuickBooks — balances unverifiable, excluded from the payoff order. Verify with Roger, then deactivate or re-link.
+              </div>
+            ) : null}
             {totals && !totals.termsComplete && (totals.missingApr || totals.missingDueDay) ? (
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300" data-testid="credit-terms-incomplete">
                 {totals.missingApr ? `${totals.missingApr} line${totals.missingApr > 1 ? "s" : ""} missing APR` : ""}
@@ -182,6 +236,7 @@ export function CreditLinesCard({ balanceSheet }: { balanceSheet: BalanceSheet |
                     <th className="px-2 py-1.5 text-right font-medium">Limit</th>
                     <th className="px-2 py-1.5 text-right font-medium">Util.</th>
                     <th className="px-2 py-1.5 text-right font-medium">APR</th>
+                    <th className="px-2 py-1.5 text-right font-medium">Payment</th>
                     <th className="px-2 py-1.5 text-right font-medium">Due</th>
                     <th className="px-2 py-1.5"></th>
                   </tr>
@@ -189,12 +244,17 @@ export function CreditLinesCard({ balanceSheet }: { balanceSheet: BalanceSheet |
                 <tbody className="divide-y">
                   {lines.map((l) => (
                     <tr key={l.id} className="hover-elevate" data-testid={`creditline-${l.id}`}>
-                      <td className="px-3 py-1.5"><span className="font-medium">{l.name}</span></td>
+                      <td className="px-3 py-1.5"><span className="font-medium">{l.name}</span>{stalenessBadge(l)}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums">{money(l.balance)}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{l.creditLimit != null ? money(l.creditLimit) : "—"}</td>
                       <td className={`px-2 py-1.5 text-right tabular-nums ${utilTone(l.utilization)}`}>{l.utilization != null ? `${l.utilization}%` : "—"}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{l.apr != null ? `${l.apr}%` : "—"}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{l.nextDue ? l.nextDue.slice(5) : "—"}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {l.paymentAmount != null && l.paymentAmount > 0
+                          ? <>{money(l.paymentAmount)}<span className="text-[10px]">{FREQ_SHORT[String(l.paymentFrequency || "monthly")] ?? "/mo"}</span></>
+                          : l.balance > 0 ? <span className="text-red-600 dark:text-red-400" title="No payment amount entered — this facility reads $0 in runway, forecasts, and the pay order">$0 ⚠</span> : "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{l.nextDebitDate ? l.nextDebitDate.slice(5) : l.nextDue ? l.nextDue.slice(5) : "—"}</td>
                       <td className="px-2 py-1.5 text-right"><EditDialog line={l} onSaved={refetch} /></td>
                     </tr>
                   ))}

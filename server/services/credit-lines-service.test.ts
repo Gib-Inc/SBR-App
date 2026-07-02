@@ -42,3 +42,27 @@ describe("isOperationalLiability", () => {
     }
   });
 });
+
+describe("D3 payment-terms math", () => {
+  it("monthlyEquivalent normalizes cadences (daily ×21 business days, weekly ×4.33)", async () => {
+    const { monthlyEquivalent } = await import("./credit-lines-service");
+    expect(monthlyEquivalent(1000, "daily")).toBe(21000);
+    expect(monthlyEquivalent(1000, "weekly")).toBe(4330);
+    expect(monthlyEquivalent(1000, "biweekly")).toBe(2170);
+    expect(monthlyEquivalent(1000, "monthly")).toBe(1000);
+    expect(monthlyEquivalent(1000, null)).toBe(1000); // default monthly
+    expect(monthlyEquivalent(null, "daily")).toBeNull();
+    expect(monthlyEquivalent(0, "daily")).toBeNull(); // no terms → null, never a fake 0-as-real
+  });
+
+  it("dailyDebitTotal sums ONLY daily-cadence facilities (the bank-reconcilable ACH out)", async () => {
+    const { dailyDebitTotal } = await import("./credit-lines-service");
+    expect(dailyDebitTotal([
+      { paymentAmount: 850, paymentFrequency: "daily" },   // Shopify Capital
+      { paymentAmount: 620, paymentFrequency: "daily" },   // Fresh Funding
+      { paymentAmount: 5000, paymentFrequency: "monthly" }, // SBA — not a daily debit
+      { paymentAmount: null, paymentFrequency: "daily" },   // unentered → contributes 0
+    ])).toBe(1470);
+    expect(dailyDebitTotal([])).toBe(0);
+  });
+});

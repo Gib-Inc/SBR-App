@@ -330,6 +330,18 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "credit_lines.qb_account_uidx",
     sql: `CREATE UNIQUE INDEX IF NOT EXISTS ux_credit_lines_qb_account ON credit_lines (qb_account_id) WHERE qb_account_id IS NOT NULL`,
   },
+  {
+    // D3 debt keystone: per-facility payment terms. Without these columns the entire
+    // ~$1.18M stack reads $0 in every runway, forecast, and pay order (obligations
+    // seeded amount=0) and no daily MCA ACH total can exist anywhere. qb_missing_since
+    // flags "ghost" facilities that vanished from QuickBooks but kept a balance here.
+    name: "credit_lines.payment_terms",
+    sql: `ALTER TABLE credit_lines
+            ADD COLUMN IF NOT EXISTS payment_amount numeric,
+            ADD COLUMN IF NOT EXISTS payment_frequency text,
+            ADD COLUMN IF NOT EXISTS next_debit_date date,
+            ADD COLUMN IF NOT EXISTS qb_missing_since timestamptz`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

@@ -498,8 +498,9 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
   // pay order. Default a NULL due day to the 15th (mid-month, avoids bunching every
   // facility on the 1st) and flag it as an estimate until the operator sets it.
   const lines = rows(await db.execute(sql`
-    select name, type, due_day from credit_lines where is_active and balance > 0`));
+    select name, type, due_day, payment_amount, payment_frequency from credit_lines where is_active and balance > 0`));
   const now = parseYmd(asOf);
+  const { monthlyEquivalent } = await import("./credit-lines-service");
   for (const ln of lines) {
     const dueKnown = ln.due_day != null;
     const dd = Math.max(1, Math.min(28, num(ln.due_day) || 15));
@@ -509,11 +510,24 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
     const key = `debt:${ln.name}:${yy}-${String(mm + 1).padStart(2, "0")}`;
     debtKeys.push(key);
     const tier = debtTier(ln.name, ln.type);
-    const rationale = `Scheduled ${ln.type || "debt"} payment.${dueKnown ? "" : " Due day is an estimate (15th) until set in the debt schedule."} Enter the monthly amount in the debt schedule.`;
+    // D3: REAL amounts from the operator-entered payment terms (monthly-equivalent for
+    // daily/weekly cadences: ×21 business days, ×4.33 weeks). Facilities with no terms
+    // still seed $0 + estimated + an "enter the amount" rationale — visible as unfunded
+    // in the pay order, never silently guessed.
+    const pay = ln.payment_amount != null ? num(ln.payment_amount) : null;
+    const freq = ln.payment_frequency ? String(ln.payment_frequency) : null;
+    const monthlyAmt = monthlyEquivalent(pay, freq);
+    const hasAmount = monthlyAmt != null && monthlyAmt > 0;
+    const isMonthlyCadence = !freq || freq.toLowerCase() === "monthly";
+    const rationale = hasAmount
+      ? `Scheduled ${ln.type || "debt"} payment${!isMonthlyCadence ? ` (${freq} $${pay} ≈ $${monthlyAmt}/mo)` : ""}.${dueKnown ? "" : " Due day is an estimate (15th) until set in the debt schedule."}`
+      : `Scheduled ${ln.type || "debt"} payment.${dueKnown ? "" : " Due day is an estimate (15th) until set in the debt schedule."} Enter the payment amount in the debt schedule.`;
     await db.execute(sql`
       insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
-      values (${ln.name + " payment"}, ${ln.name}, 'debt', ${tier}, 0, true, ${due}::date, 'monthly', ${tier === "tier2" ? "must" : "important"}, 'pending', 'debt', ${key}, ${rationale})
-      on conflict (external_key) where external_key is not null do update set due_date = excluded.due_date, tier = excluded.tier, rationale = excluded.rationale, updated_at = now()
+      values (${ln.name + " payment"}, ${ln.name}, 'debt', ${tier}, ${hasAmount ? monthlyAmt : 0}, ${!hasAmount || !isMonthlyCadence}, ${due}::date, 'monthly', ${tier === "tier2" ? "must" : "important"}, 'pending', 'debt', ${key}, ${rationale})
+      on conflict (external_key) where external_key is not null do update set
+        amount = excluded.amount, amount_estimated = excluded.amount_estimated,
+        due_date = excluded.due_date, tier = excluded.tier, rationale = excluded.rationale, updated_at = now()
       where cash_obligations.status = 'pending' and not coalesce(cash_obligations.manually_edited, false)`);
     debt++;
   }

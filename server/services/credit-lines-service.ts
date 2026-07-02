@@ -85,10 +85,13 @@ export async function syncCreditLineBalances(): Promise<{ synced: number; skippe
   // it first went missing (once), clear on reappearance (above). Guarded on a non-empty
   // fetch so one failed QB pull can't mass-flag the book.
   if (seenQbIds.length) {
+    // Explicit ARRAY[...]::text[] — a bare JS-array binding into ALL() fails on this
+    // driver ("op ANY/ALL requires array on right side" / "malformed array literal").
     await db.execute(sql`
       UPDATE credit_lines SET qb_missing_since = now(), updated_at = now()
       WHERE qb_account_id IS NOT NULL AND COALESCE(is_active, true) = true
-        AND qb_missing_since IS NULL AND qb_account_id <> ALL(${seenQbIds})`);
+        AND qb_missing_since IS NULL
+        AND qb_account_id <> ALL(ARRAY[${sql.join(seenQbIds.map((v) => sql`${v}`), sql`, `)}]::text[])`);
   }
   return { synced };
 }

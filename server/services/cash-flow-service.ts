@@ -538,10 +538,14 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
   // run's key set. Only touches status='pending' (operator-approved/deferred rows are
   // preserved). Guarded on a non-empty key set so a failed lines query can't mass-close.
   if (debtKeys.length) {
+    // Explicit ARRAY[...]::text[] — a bare JS-array binding into ALL() fails on this
+    // driver ("malformed array literal"), which means this close-out had been silently
+    // erroring since it shipped: stale month-bucketed debt rows were never deactivated.
     await db.execute(sql`
       update cash_obligations set is_active = false, updated_at = now()
       where source = 'debt' and is_active and status = 'pending'
-        and external_key is not null and external_key <> all(${debtKeys})`);
+        and external_key is not null
+        and external_key <> all(ARRAY[${sql.join(debtKeys.map((k) => sql`${k}`), sql`, `)}]::text[])`);
   }
   // Surface (don't silently swallow) a failed cash-position write — a persistent
   // failure here means the nightly "money on its way" post + downstream readers go

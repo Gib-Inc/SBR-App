@@ -17,6 +17,7 @@ import { sql } from "drizzle-orm";
 import { db } from "../db";
 import { storage } from "../storage";
 import { classifyAccount } from "./finance-pnl-service";
+import { getCanonicalMonthlySpendByChannel } from "./canonical-spend-service";
 import type { InsertMonthlyFinancial } from "@shared/schema";
 
 const num = (v: any) => (v == null ? 0 : Number(v) || 0);
@@ -24,6 +25,8 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export interface DerivedMonth {
   month: string; // "May 2026"
+  grossSales: number;   // income group only (before discounts/returns)
+  returns: number;      // contra group (discounts/returns), negative in QB
   totalIncome: number; totalCogs: number; grossProfit: number;
   totalExpenses: number; netOperatingIncome: number; netIncome: number;
   expenseCategories: Record<string, number>;
@@ -49,11 +52,53 @@ export function aggregateMonthlyFinancials(
     const grossProfit = r2(totalIncome - b.cogs);
     const netIncome = r2(grossProfit - b.expenses);
     return {
-      month, totalIncome, totalCogs: r2(b.cogs), grossProfit,
+      month, grossSales: r2(b.income), returns: r2(b.contra),
+      totalIncome, totalCogs: r2(b.cogs), grossProfit,
       totalExpenses: r2(b.expenses), netOperatingIncome: netIncome, netIncome,
       expenseCategories: b.cats,
     };
   });
+}
+
+const MONTH_NUM: Record<string, number> = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+
+/** Pure: "Jun 2026" → { year: 2026, month: 6, ym: "2026-06" }; null if unparseable. */
+export function monthLabelToYm(label: string): { year: number; month: number; ym: string } | null {
+  const m = /^([A-Z][a-z]{2})\s+(\d{4})$/.exec(String(label).trim());
+  if (!m || !MONTH_NUM[m[1]]) return null;
+  const month = MONTH_NUM[m[1]];
+  const year = Number(m[2]);
+  return { year, month, ym: `${year}-${String(month).padStart(2, "0")}` };
+}
+
+export interface HistoricalRow {
+  year: number; month: number;
+  revenue: number; returns: number; totalIncome: number; cogs: number; grossProfit: number;
+  adSpend: number; totalExpenses: number; netIncome: number; grossMarginPct: number;
+}
+
+/** Pure: map a derived month (+ its ad spend) into the historical_monthly_sales row shape.
+ *  Ad spend precedence: canonical bookedMarketingTotal (the MER denominator) when the
+ *  canonical engine has the month; else the GL advertising/marketing expense categories
+ *  (the same booked concept, computed locally). grossMarginPct uses NET income (totalIncome)
+ *  as the denominator, matching the startup seed's convention. */
+export function buildHistoricalRow(d: DerivedMonth, adSpend: number): HistoricalRow | null {
+  const ym = monthLabelToYm(d.month);
+  if (!ym) return null;
+  return {
+    year: ym.year, month: ym.month,
+    revenue: d.grossSales, returns: d.returns, totalIncome: d.totalIncome,
+    cogs: d.totalCogs, grossProfit: d.grossProfit,
+    adSpend: r2(adSpend), totalExpenses: d.totalExpenses, netIncome: d.netIncome,
+    grossMarginPct: d.totalIncome > 0 ? r2((d.grossProfit / d.totalIncome) * 100) : 0,
+  };
+}
+
+/** Pure: GL fallback for a month's ad spend — the advertising/marketing expense categories. */
+export function glAdSpend(d: DerivedMonth): number {
+  return r2(Object.entries(d.expenseCategories)
+    .filter(([k]) => /advertis|marketing/i.test(k))
+    .reduce((s, [, v]) => s + v, 0));
 }
 
 /** Roll up qb_pl_detail (complete months only, Mountain time) into monthly_financials,
@@ -100,6 +145,52 @@ export async function syncQbMonthlyFinancials(): Promise<{ updated: number; skip
       DELETE FROM monthly_financials WHERE month LIKE ${d.month + " (%"} AND source <> 'accountant_upload'`);
     updated++;
   }
-  console.log(`[QB MonthlyFinancials] synced from GL: ${updated} months updated, ${skipped} manual-override months kept`);
+
+  // ── historical_monthly_sales: the SAME derived months, live-synced ──
+  // This table drives the MER trajectory, YoY, Path-to-Profitability, and seasonal
+  // models — but until now its only writers were a static array frozen at May 2026
+  // (so June, the first profitable month, didn't exist anywhere forward-looking, and
+  // May itself was stale: -$48.8K in the array vs -$8.0K reconciled). Upsert every
+  // complete GL month with source='qb_sync' — live GL beats the static seed; the
+  // manual re-seed endpoint is guarded to never overwrite qb_sync rows.
+  let histUpdated = 0;
+  let canonicalAd = new Map<string, number>();
+  try {
+    const canonical = await getCanonicalMonthlySpendByChannel(db, 18);
+    canonicalAd = new Map(
+      canonical
+        .filter((m) => m.bookedMarketingTotal != null)
+        .map((m) => [m.month, m.bookedMarketingTotal as number]),
+    );
+  } catch (e) {
+    console.warn(`[QB MonthlyFinancials] canonical spend unavailable for historical ad_spend, using GL advertising categories:`, (e as Error)?.message);
+  }
+  for (const d of derived) {
+    if (d.totalIncome <= 0) continue; // same gapped-pull guard as above
+    // Same accountant-override rule as the monthly_financials loop: if the accountant
+    // manually uploaded this month, the GL derivation must NOT land in EITHER table —
+    // otherwise the Exec Summary (monthly_financials, accountant numbers) and the MER
+    // trajectory/YoY (this table, GL numbers) would silently disagree on the same month.
+    if (manual.has(d.month)) continue;
+    const ym = monthLabelToYm(d.month);
+    if (!ym) continue;
+    const row = buildHistoricalRow(d, canonicalAd.get(ym.ym) ?? glAdSpend(d));
+    if (!row) continue;
+    await db.execute(sql`
+      INSERT INTO historical_monthly_sales
+        (year, month, revenue, returns, total_income, cogs, gross_profit,
+         ad_spend, total_expenses, net_income, gross_margin_pct, source)
+      VALUES (${row.year}, ${row.month}, ${row.revenue}, ${row.returns}, ${row.totalIncome},
+              ${row.cogs}, ${row.grossProfit}, ${row.adSpend}, ${row.totalExpenses},
+              ${row.netIncome}, ${row.grossMarginPct}, 'qb_sync')
+      ON CONFLICT (year, month) DO UPDATE SET
+        revenue = EXCLUDED.revenue, returns = EXCLUDED.returns, total_income = EXCLUDED.total_income,
+        cogs = EXCLUDED.cogs, gross_profit = EXCLUDED.gross_profit, ad_spend = EXCLUDED.ad_spend,
+        total_expenses = EXCLUDED.total_expenses, net_income = EXCLUDED.net_income,
+        gross_margin_pct = EXCLUDED.gross_margin_pct, source = 'qb_sync'`);
+    histUpdated++;
+  }
+
+  console.log(`[QB MonthlyFinancials] synced from GL: ${updated} months updated, ${skipped} manual-override months kept, ${histUpdated} historical_monthly_sales months live-synced`);
   return { updated, skipped };
 }

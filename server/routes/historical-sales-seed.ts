@@ -16,7 +16,7 @@ export async function seedHistoricalSales(db: DB): Promise<{ inserted: number; s
   for (const row of HISTORICAL_PL_DATA) {
     try {
       const grossMarginPct = row.grossSales > 0 ? (row.grossProfit / row.grossSales) * 100 : 0;
-      await db.execute(sql`
+      const res = await db.execute(sql`
         INSERT INTO historical_monthly_sales (year, month, revenue, returns, total_income, cogs, gross_profit, ad_spend, total_expenses, net_income, gross_margin_pct, source)
         VALUES (${row.year}, ${row.month}, ${row.grossSales}, ${row.returns}, ${row.totalIncome}, ${row.cogs}, ${row.grossProfit}, ${row.adSpend}, ${row.totalExpenses}, ${row.netIncome}, ${grossMarginPct}, 'quickbooks')
         ON CONFLICT (year, month) DO UPDATE SET
@@ -24,8 +24,12 @@ export async function seedHistoricalSales(db: DB): Promise<{ inserted: number; s
           cogs = ${row.cogs}, gross_profit = ${row.grossProfit}, ad_spend = ${row.adSpend},
           total_expenses = ${row.totalExpenses}, net_income = ${row.netIncome},
           gross_margin_pct = ${grossMarginPct}, source = 'quickbooks'
+        WHERE historical_monthly_sales.source <> 'qb_sync'
       `);
-      inserted++;
+      // ^ never overwrite a month the live GL sync owns — the static array is frozen at
+      //   May 2026 (and its May is stale); qb_sync rows are the fresher truth.
+      // rowCount 0 = the WHERE guard skipped a qb_sync-owned month; report it honestly.
+      if (((res as any)?.rowCount ?? 1) > 0) inserted++; else skipped++;
     } catch (e) {
       skipped++;
     }

@@ -97,14 +97,14 @@ describe("getBudgetScorecard", () => {
 });
 
 describe("getTopVendors", () => {
-  // db.execute order: (1) vendors, (2) net sales, (3) pyvott amount, (4) order count
-  function mockDb(vendors: any[], netSales: number, pyvott: number, orders: number) {
+  // db.execute order: (1) vendors, (2) net-sales per-account rows, (3) pyvott amount, (4) order count
+  function mockDb(vendors: any[], nsAccounts: any[], pyvott: number, orders: number) {
     let call = 0;
     return {
       execute: async () => {
         call += 1;
         if (call === 1) return { rows: vendors };
-        if (call === 2) return { rows: [{ net_sales: netSales }] };
+        if (call === 2) return { rows: nsAccounts };
         if (call === 3) return { rows: [{ amount: pyvott }] };
         return { rows: [{ orders }] };
       },
@@ -116,9 +116,29 @@ describe("getTopVendors", () => {
       { vendor: "Pyvott", amount: 67000, lines: 12, top_account: "Shipping, Freight & Delivery" },
       { vendor: "Facebook", amount: 25000, lines: 10, top_account: "Advertising & Marketing" },
     ];
-    const v = await getTopVendors(mockDb(vendors, 825645, 67000, 1500), 3, 15);
+    const nsAccounts = [
+      { account: "Gross Sales", amount: 850645 },
+      { account: "Discounts", amount: -25000 },
+    ];
+    const v = await getTopVendors(mockDb(vendors, nsAccounts, 67000, 1500), 3, 15);
+    expect(v.netSales).toBe(825645);
     expect(v.vendors[0].vendor).toBe("Pyvott");
     expect(v.vendors[0].pctOfNetSales).toBeCloseTo(8.1, 1);
     expect(v.fulfillment?.costPerOrder).toBeCloseTo(44.67, 1); // 67000 / 1500
+  });
+
+  it("REGRESSION: net sales excludes the Match-Shopify duplicate tree and includes other income", async () => {
+    // The old raw ILIKE summed the duplicate tree (phantom revenue) and missed
+    // \bincome\b accounts. classifyAccount handles both.
+    const nsAccounts = [
+      { account: "Gross Sales", amount: 100000 },
+      { account: "Discounts given", amount: -5000 },
+      { account: "1 - Gross Sales (Match Shopify Total Sales Breakdown)", amount: 70000 }, // duplicate → excluded
+      { account: "2 - Discounts (Match Shopify Total Sales Breakdown)", amount: -3000 },   // duplicate → excluded
+      { account: "Interest Income", amount: 250 },                                          // income → included
+      { account: "Cost of Goods Sold", amount: 35000 },                                     // cogs → excluded
+    ];
+    const v = await getTopVendors(mockDb([], nsAccounts, 0, 0), 3, 15);
+    expect(v.netSales).toBe(95250); // 100000 - 5000 + 250; NOT 162250
   });
 });

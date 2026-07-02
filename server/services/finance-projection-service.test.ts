@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
-  addMonths, defaultDriver, buildRevenueForecast, assembleProjection,
+  addMonths, defaultDriver, buildRevenueForecast, assembleProjection, getProjection,
   type ResolvedCategory,
 } from "./finance-projection-service";
+import { rollup } from "./finance-pnl-service";
 
 describe("addMonths", () => {
   it("adds months across year boundaries", () => {
@@ -102,5 +103,57 @@ describe("assembleProjection", () => {
     expect(p.summary.firstProfitableMonth).toBeNull();
     expect(p.summary.cumulativeBreakevenMonth).toBeNull();
     expect(p.summary.annualNetIncome).toBe((100000 - 150000) * 6);
+  });
+});
+
+describe("getProjection revenue base excludes the Match-Shopify duplicate tree (REGRESSION)", () => {
+  // The old raw ILIKE ("%gross sales%"/"%discount%"/...) matched BOTH income trees and
+  // inflated the projection's revenue base ~1.7x — phantom path-to-breakeven. Every
+  // month here carries the duplicate tree; the classifier must drop it.
+  const MONTHS = ["2026-04", "2026-05", "2026-06"];
+  const perMonthAccounts = MONTHS.flatMap((month) => [
+    { month, account: "Gross Sales", amount: 100000 },
+    { month, account: "Discounts given", amount: -5000 },
+    { month, account: "1 - Gross Sales (Match Shopify Total Sales Breakdown)", amount: 70000 },
+    { month, account: "2 - Discounts (Match Shopify Total Sales Breakdown)", amount: -3000 },
+  ]);
+  // db.execute order in getProjection: (1) net-sales per-month-per-account rows,
+  // (2) per-account cost totals, (3) reclassify vendor rows, (4) assumptions, (5) settings
+  function mockDb() {
+    let call = 0;
+    return {
+      execute: async () => {
+        call += 1;
+        if (call === 1) return { rows: perMonthAccounts };
+        if (call === 2) return { rows: [{ account: "Cost of Goods Sold", amount: 99750 }, { account: "Wages", amount: 45000 }] };
+        if (call === 3) return { rows: [] };
+        if (call === 4) return { rows: [] };
+        return { rows: [] }; // settings
+      },
+    } as any;
+  }
+
+  it("revenue base = primary tree only, in exact parity with the Budget Scorecard rollup", async () => {
+    const p = await getProjection(mockDb(), { months: 3 });
+    // trailing-3 average of the TRUE net sales (95k/mo), not the inflated 162k
+    expect(p.revenueBase).toBe(95000);
+    // parity: the same month's rows through the Scorecard's rollup() give the same net sales
+    const juneRows = perMonthAccounts.filter((r) => r.month === "2026-06")
+      .map((r) => ({ account: r.account, amount: r.amount }));
+    expect(Math.abs(p.revenueBase - rollup(juneRows).netSales)).toBeLessThan(1);
+    // COGS % of sales must be computed against the TRUE base too: 99750 / 285000 = 35%
+    const cogs = p.categories.find((c) => c.account === "Cost of Goods Sold")!;
+    expect(cogs.trailingPctOfSales).toBe(35);
+    // and the projection starts after the latest actual month
+    expect(p.startMonth).toBe("2026-07");
+  });
+
+  it("a projection fed the duplicate tree would have called the business profitable — the fix flips it to the truth", async () => {
+    const p = await getProjection(mockDb(), { months: 3 });
+    // true picture: 95000 - (35% cogs) - 15000 wages/mo ≈ 46,750/mo profit on these toy
+    // numbers — the POINT is the base: with the old bug the base would be 162,000 and
+    // every downstream % (cogs 21.6%!) and breakeven month would be fiction.
+    expect(p.forecast[0].netSales).toBe(95000);
+    expect(p.forecast.every((m) => m.netSales === 95000)).toBe(true);
   });
 });

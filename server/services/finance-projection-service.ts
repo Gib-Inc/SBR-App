@@ -156,19 +156,28 @@ export async function getProjection(db: DB, opts: {
   const months = opts.months ?? 12;
   const monthsBack = opts.monthsBack ?? 12;
 
-  // 1) trailing monthly net sales
-  const nsRows = rows(await db.execute(sql`
+  // 1) trailing monthly net sales — classified per account via classifyAccount so the
+  //    Match-Shopify duplicate income tree is EXCLUDED. The old raw name-pattern match
+  //    ("%gross sales%"/"%discount%"/...) summed BOTH trees and inflated the revenue
+  //    base ~1.7x — the phantom-profit bug class, on the one surface whose job is the
+  //    path to breakeven. The cost side below already classifies; this keeps both sides
+  //    on the ONE classifier (and in exact parity with the Budget Scorecard's rollup).
+  const nsRaw = rows(await db.execute(sql`
     SELECT to_char(date_trunc('month', txn_date), 'YYYY-MM') AS month,
-           round(sum(amount)::numeric, 2) AS net_sales
+           account_name AS account,
+           round(sum(amount)::numeric, 2) AS amount
     FROM qb_pl_detail
     WHERE txn_date >= (date_trunc('month', now()) - (${monthsBack} || ' months')::interval)
       AND txn_date <  date_trunc('month', now())
-      AND (account_name ILIKE '%gross sales%' OR account_name ILIKE '%discount%'
-        OR account_name ILIKE '%return%' OR account_name ILIKE '%refund%')
-    GROUP BY 1 ORDER BY 1`)) as Array<{ month: string; net_sales: any }>;
-  const nsByMonth = new Map(nsRows.map((r) => [r.month, num(r.net_sales)]));
-  const salesMonths = nsRows.map((r) => r.month).sort();
-  const trailingNetSales = r2(nsRows.reduce((s, r) => s + num(r.net_sales), 0));
+    GROUP BY 1, 2 ORDER BY 1`)) as Array<{ month: string; account: string; amount: any }>;
+  const nsByMonth = new Map<string, number>();
+  for (const r of nsRaw) {
+    const g = classifyAccount(r.account);
+    if (g !== "income" && g !== "contra") continue; // contra (discounts/returns) is already negative in QB
+    nsByMonth.set(r.month, r2((nsByMonth.get(r.month) ?? 0) + num(r.amount)));
+  }
+  const salesMonths = Array.from(nsByMonth.keys()).sort();
+  const trailingNetSales = r2(Array.from(nsByMonth.values()).reduce((s, x) => s + x, 0));
 
   // 2) trailing per-account cost totals (cogs + expense)
   const acctRows = rows(await db.execute(sql`

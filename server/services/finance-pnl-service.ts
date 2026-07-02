@@ -290,7 +290,7 @@ export interface VendorView {
 export async function getTopVendors(db: DB, monthsBack = 3, limit = 15): Promise<VendorView> {
   const since = sql`(date_trunc('month', now()) - (${monthsBack} || ' months')::interval)`;
   const until = sql`date_trunc('month', now())`;
-  const notIncome = sql`account_name NOT ILIKE '%gross sales%' AND account_name NOT ILIKE '%discount%' AND account_name NOT ILIKE '%return%' AND account_name NOT ILIKE '%refund%'`;
+  const notIncome = sql`account_name NOT ILIKE '%gross sales%' AND account_name NOT ILIKE '%discount%' AND account_name NOT ILIKE '%return%' AND account_name NOT ILIKE '%refund%' AND account_name NOT ILIKE '%match shopify total sales breakdown%'`;
 
   const vrows = rows(await db.execute(sql`
     SELECT COALESCE(vendor_or_payee, '(unlabeled)') AS vendor,
@@ -301,11 +301,17 @@ export async function getTopVendors(db: DB, monthsBack = 3, limit = 15): Promise
     GROUP BY 1 HAVING sum(amount) > 0
     ORDER BY sum(amount) DESC LIMIT ${limit}`)) as any[];
 
-  const nsRow = rows(await db.execute(sql`
-    SELECT round(sum(amount)::numeric, 2) AS net_sales FROM qb_pl_detail
+  // Net sales via classifyAccount — the raw name-pattern version summed the Match-Shopify
+  // duplicate income tree too (same phantom-revenue bug class as the Finances page had).
+  const nsRows = rows(await db.execute(sql`
+    SELECT account_name AS account, round(sum(amount)::numeric, 2) AS amount
+    FROM qb_pl_detail
     WHERE txn_date >= ${since} AND txn_date < ${until}
-      AND (account_name ILIKE '%gross sales%' OR account_name ILIKE '%discount%' OR account_name ILIKE '%return%' OR account_name ILIKE '%refund%')`))[0];
-  const netSales = r2(num(nsRow?.net_sales));
+    GROUP BY 1`)) as Array<{ account: string; amount: any }>;
+  const netSales = r2(nsRows.reduce((s, r) => {
+    const g = classifyAccount(r.account);
+    return g === "income" || g === "contra" ? s + num(r.amount) : s;
+  }, 0));
 
   const vendors: TopVendor[] = vrows.map((v: any) => ({
     vendor: v.vendor, amount: r2(num(v.amount)), monthlyAvg: r2(num(v.amount) / (monthsBack || 1)),

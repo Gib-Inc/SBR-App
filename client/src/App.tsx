@@ -42,6 +42,7 @@ import CashFlow from "@/pages/cash-flow";
 import CashOut from "@/pages/cash-out";
 import GreenLine from "@/pages/green-line";
 import Health from "@/pages/health";
+import InventoryIntegrity from "@/pages/inventory-integrity";
 import FinOps from "@/pages/finops";
 import { FinanceGate } from "@/components/finance-gate";
 import ReorderAlerts from "@/pages/reorder-alerts";
@@ -150,6 +151,7 @@ function AuthenticatedApp() {
                     <Route path="/cash-out"><FinanceGate><CashOut /></FinanceGate></Route>
                     <Route path="/green-line"><FinanceGate><GreenLine /></FinanceGate></Route>
                     <Route path="/health" component={Health} />
+                    <Route path="/inventory-integrity" component={InventoryIntegrity} />
                     <Route path="/finops"><FinanceGate><FinOps /></FinanceGate></Route>
                     <Route path="/reorder-alerts" component={ReorderAlerts} />
                     <Route path="/products" component={Products} />

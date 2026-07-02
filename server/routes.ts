@@ -2787,6 +2787,17 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GET /api/inventory-integrity - Read-only inventory truth dashboard.
+  app.get("/api/inventory-integrity", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getInventoryIntegritySummary } = await import("./services/inventory-integrity-service");
+      res.json(await getInventoryIntegritySummary());
+    } catch (error: any) {
+      console.error("[InventoryIntegrity] Error fetching summary:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch inventory integrity summary" });
+    }
+  });
+
   app.get("/api/reorder-alerts", requireAuth, async (_req: Request, res: Response) => {
     try {
       const [alerts, items, suppliers, purchaseOrders] = await Promise.all([

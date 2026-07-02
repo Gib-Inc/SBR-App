@@ -4,7 +4,8 @@ import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Loader2, TrendingUp, TrendingDown, Minus, DollarSign, ShoppingCart, Users, MapPin, Package, RefreshCw, Megaphone } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Loader2, DollarSign, ShoppingCart, Users, MapPin, RefreshCw, Megaphone, ShieldCheck, AlertTriangle, Database } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { RevenueTargetGauge } from './revenue-target-gauge';
 import { NextBestActionView } from './next-best-action-view';
@@ -164,11 +165,19 @@ function CustomerInsight({ days }: { days: number }) {
 }
 
 interface AdSpendSummary {
-  platforms: Array<{ platform: string; spend: number; source: 'windsor' | 'uploaded' | 'live' }>;
+  platforms: Array<{ platform: string; spend: number; source: 'canonical' | 'windsor' | 'uploaded' | 'live' }>;
   totalAdSpend: number | null;
   totalRevenue: number | null;
   blendedRoas: number | null;
   windowDays: number;
+}
+
+interface DataHealth {
+  generatedAt: string;
+  sales: { max_date: string | null; last_synced_at: string | null } | null;
+  rawAds: Array<{ platform: string; max_date: string | null; rows: number; spend: number | null }>;
+  spendSnapshots: Array<{ platform: string; max_date: string | null; rows: number; spend: number | null; sources: string | null }>;
+  schedulers: Array<{ integration_name: string; last_status: string | null; last_success_at: string | null; error_message: string | null }>;
 }
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -176,10 +185,142 @@ const PLATFORM_LABEL: Record<string, string> = {
   PINTEREST: 'Pinterest', MICROSOFT: 'Microsoft / Bing', TIKTOK: 'TikTok',
 };
 const SOURCE_BADGE: Record<string, { label: string; cls: string }> = {
+  canonical: { label: 'canonical', cls: 'text-emerald-700 border-emerald-300' },
   windsor: { label: 'Windsor', cls: 'text-emerald-700 border-emerald-300' },
   uploaded: { label: 'upload', cls: 'text-amber-700 border-amber-300' },
   live: { label: 'live', cls: 'text-muted-foreground' },
 };
+
+const daysOld = (date: string | null | undefined) => {
+  if (!date) return null;
+  const ms = Date.now() - new Date(`${date}T00:00:00`).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return Math.max(0, Math.floor(ms / 86_400_000));
+};
+
+const sourceDate = (health: DataHealth | undefined, platform: string) => {
+  const p = platform.toUpperCase();
+  if (p === 'META') return health?.spendSnapshots?.find((s) => s.platform?.toUpperCase() === 'META')?.max_date ?? null;
+  if (p === 'GOOGLE') return health?.spendSnapshots?.find((s) => s.platform?.toUpperCase() === 'GOOGLE')?.max_date
+    ?? health?.rawAds?.find((r) => r.platform?.toUpperCase().includes('GOOGLE'))?.max_date ?? null;
+  if (p === 'AMAZON') return health?.spendSnapshots?.find((s) => s.platform?.toUpperCase() === 'AMAZON')?.max_date
+    ?? health?.rawAds?.find((r) => r.platform?.toUpperCase().includes('AMAZON'))?.max_date ?? null;
+  return health?.rawAds?.find((r) => r.platform?.toUpperCase() === p)?.max_date ?? null;
+};
+
+function DecisionBrief({ days }: { days: number }) {
+  const { data: spend } = useQuery<AdSpendSummary>({
+    queryKey: ['/api/marketing-analytics/cmo/ad-spend-summary', { days }],
+    queryFn: async () => {
+      const res = await fetch(`/api/marketing-analytics/cmo/ad-spend-summary?days=${days}`, { credentials: 'include' });
+      return res.json();
+    },
+  });
+  const { data: health } = useQuery<DataHealth>({ queryKey: ['/api/marketing-analytics/cmo/data-health'] });
+
+  const salesAge = daysOld(health?.sales?.max_date);
+  const stalePlatforms = (spend?.platforms ?? [])
+    .filter((p) => p.spend > 0)
+    .map((p) => ({ ...p, maxDate: sourceDate(health, p.platform) }))
+    .filter((p) => {
+      const age = daysOld(p.maxDate);
+      return age == null || age > 7;
+    });
+  const schedulerFailures = (health?.schedulers ?? []).filter((s) => s.last_status && s.last_status !== 'success');
+  const isStale = (salesAge != null && salesAge > 2) || stalePlatforms.length > 0 || schedulerFailures.length > 0;
+  const roas = spend?.blendedRoas ?? null;
+  const spendTotal = spend?.totalAdSpend ?? null;
+  const revenue = spend?.totalRevenue ?? null;
+  const decision =
+    isStale ? 'Read with caution'
+      : roas == null ? 'Waiting on data'
+      : roas >= 8 ? 'Decision-grade: scale carefully'
+      : roas >= 5 ? 'Decision-grade: hold and watch'
+      : 'Decision-grade: fix before scaling';
+
+  return (
+    <Alert className={isStale ? 'border-amber-300 bg-amber-50/60 dark:bg-amber-950/20' : 'border-emerald-300 bg-emerald-50/60 dark:bg-emerald-950/20'}>
+      {isStale ? <AlertTriangle className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
+      <AlertTitle className="flex flex-wrap items-center gap-2">
+        <span>{decision}</span>
+        <Badge variant="outline" className={isStale ? 'border-amber-400 text-amber-700' : 'border-emerald-400 text-emerald-700'}>
+          {isStale ? 'freshness warning' : 'fresh inputs'}
+        </Badge>
+      </AlertTitle>
+      <AlertDescription>
+        <div className="grid gap-3 md:grid-cols-[1.4fr_1fr]">
+          <p className="leading-relaxed">
+            Media ROAS is <span className="font-semibold text-foreground">{roas != null ? `${roas.toFixed(2)}x` : 'not available'}</span>
+            {spendTotal != null && revenue != null ? <> on <span className="font-semibold text-foreground">{fmt(spendTotal)}</span> corrected media spend and <span className="font-semibold text-foreground">{fmt(revenue)}</span> revenue.</> : '.'}
+            {' '}Headline spend uses the canonical engine; raw ad rows are diagnostic only.
+          </p>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded border bg-background/70 p-2">
+              <div className="text-muted-foreground">Sales data through</div>
+              <div className="font-medium text-foreground">{health?.sales?.max_date ?? 'unknown'}</div>
+            </div>
+            <div className="rounded border bg-background/70 p-2">
+              <div className="text-muted-foreground">Ad spend health</div>
+              <div className="font-medium text-foreground">{stalePlatforms.length ? `${stalePlatforms.length} stale source${stalePlatforms.length > 1 ? 's' : ''}` : 'current enough'}</div>
+            </div>
+          </div>
+        </div>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function DataFreshnessPanel({ days }: { days: number }) {
+  const { data } = useQuery<DataHealth>({ queryKey: ['/api/marketing-analytics/cmo/data-health'] });
+  const { data: spend } = useQuery<AdSpendSummary>({
+    queryKey: ['/api/marketing-analytics/cmo/ad-spend-summary', { days }],
+    queryFn: async () => {
+      const res = await fetch(`/api/marketing-analytics/cmo/ad-spend-summary?days=${days}`, { credentials: 'include' });
+      return res.json();
+    },
+  });
+  const rows = (spend?.platforms ?? []).filter((p) => p.spend > 0).map((p) => {
+    const maxDate = sourceDate(data, p.platform);
+    const age = daysOld(maxDate);
+    return { ...p, maxDate, age };
+  });
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-1"><Database className="h-3.5 w-3.5" /> Data Freshness</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="rounded border p-2">
+            <div className="text-muted-foreground">Daily sales</div>
+            <div className="font-medium">{data?.sales?.max_date ?? 'unknown'}</div>
+          </div>
+          <div className="rounded border p-2">
+            <div className="text-muted-foreground">Last sales sync</div>
+            <div className="font-medium truncate">{data?.sales?.last_synced_at ? data.sales.last_synced_at.slice(0, 16) : 'unknown'}</div>
+          </div>
+        </div>
+        <div className="space-y-1">
+          {rows.map((p) => (
+            <div key={p.platform} className="flex items-center justify-between gap-3 text-xs border-b last:border-0 py-1.5">
+              <span className="font-medium">{PLATFORM_LABEL[p.platform] || p.platform}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">{p.maxDate ?? 'unknown'}</span>
+                <Badge variant="outline" className={p.age == null || p.age > 7 ? 'text-amber-700 border-amber-300' : 'text-emerald-700 border-emerald-300'}>
+                  {p.age == null ? 'unknown' : `${p.age}d old`}
+                </Badge>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted-foreground leading-snug">
+          Decision mode hides raw-feed noise. Deep-dive reports may still use older diagnostic feeds for shape, clicks, or attribution.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
 
 function AdSpendByChannelCard({ days }: { days: number }) {
   const { toast } = useToast();
@@ -326,6 +467,7 @@ function MorningHeadline() {
 export function CommandCenterView({ days }: { days: number }) {
   return (
     <div className="space-y-4">
+      <DecisionBrief days={days} />
       <TopMetrics />
       <MorningHeadline />
 
@@ -337,6 +479,7 @@ export function CommandCenterView({ days }: { days: number }) {
         </div>
         <div className="space-y-4">
           <AdSpendByChannelCard days={days} />
+          <DataFreshnessPanel days={days} />
           <WastedSpendView days={days} compact />
           <TopStates days={days} />
           <CustomerInsight days={days} />

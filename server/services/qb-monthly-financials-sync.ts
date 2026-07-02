@@ -157,10 +157,15 @@ export async function syncQbMonthlyFinancials(): Promise<{ updated: number; skip
   let canonicalAd = new Map<string, number>();
   try {
     const canonical = await getCanonicalMonthlySpendByChannel(db, 18);
+    // ad_spend = the MER denominator (booked QB marketing + credit-line-era Meta), the
+    // same composition the marketing governor gates on — so the Breakeven Scoreboard's
+    // monthly MER and the daily gate can never disagree about what marketing costs.
+    // Require BOOKED to be present: a Meta-only month (booked null = QB gap) must fall
+    // through to the GL fallback, never land as an unflagged "real" ad_spend.
     canonicalAd = new Map(
       canonical
         .filter((m) => m.bookedMarketingTotal != null)
-        .map((m) => [m.month, m.bookedMarketingTotal as number]),
+        .map((m) => [m.month, (m.merDenominator ?? m.bookedMarketingTotal) as number]),
     );
   } catch (e) {
     console.warn(`[QB MonthlyFinancials] canonical spend unavailable for historical ad_spend, using GL advertising categories:`, (e as Error)?.message);

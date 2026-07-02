@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assembleMonth } from "./canonical-spend-service";
+import { assembleMonth, merDenominator } from "./canonical-spend-service";
 
 describe("assembleMonth — per-channel precedence", () => {
   it("daily-card month: Google=QB, Meta=QB-Facebook (high), Amazon/Pinterest=ad_metrics", () => {
@@ -36,5 +36,42 @@ describe("assembleMonth — per-channel precedence", () => {
     expect(m.byChannel.META.spend).toBeNull();
     expect(m.byChannel.META.understated).toBe(true);
     expect(m.byChannel.META.gapReason).toMatch(/credit line/i);
+  });
+
+  it("Amazon is ALWAYS flagged understated — ad_metrics knowably undercounts vs Giant Horizons", () => {
+    const m = assembleMonth("2026-06", { qbGoogle: 5000, metaSnap: 10000, amazon: 3000, booked: 40000 });
+    expect(m.byChannel.AMAZON).toMatchObject({ spend: 3000, understated: true });
+    expect(m.byChannel.AMAZON.gapReason).toMatch(/giant horizons/i);
+  });
+});
+
+describe("merDenominator — THE one MER-denominator composition (booked + credit-line Meta)", () => {
+  it("card era: booked alone is complete (Meta already inside booked)", () => {
+    expect(merDenominator({ booked: 106650, creditLineMeta: null, creditLineEra: false }))
+      .toEqual({ value: 106650, understated: false });
+  });
+  it("credit-line era with tracker Meta: booked + Meta", () => {
+    expect(merDenominator({ booked: 90000, creditLineMeta: 12903, creditLineEra: true }))
+      .toEqual({ value: 102903, understated: false });
+  });
+  it("credit-line era with NO tracker Meta: booked alone, flagged understated (never pretend it's complete)", () => {
+    expect(merDenominator({ booked: 40000, creditLineMeta: null, creditLineEra: true }))
+      .toEqual({ value: 40000, understated: true });
+  });
+  it("nothing available → null, understated (never a false 0)", () => {
+    expect(merDenominator({ booked: null, creditLineMeta: null, creditLineEra: true }))
+      .toEqual({ value: null, understated: true });
+  });
+
+  it("assembleMonth carries the composition: credit month = booked+Meta; card month = booked; missing Meta = understated", () => {
+    const credit = assembleMonth("2026-06", { qbGoogle: 10848, qbMeta: 0, metaSnap: 12903, amazon: 2513, booked: 90000 });
+    expect(credit.merDenominator).toBe(102903);
+    expect(credit.merUnderstated).toBe(false);
+    const card = assembleMonth("2026-04", { qbGoogle: 4059, qbMeta: 57164, amazon: 3849, pinterest: 1065, booked: 106650 });
+    expect(card.merDenominator).toBe(106650); // Meta already inside booked — no double count
+    expect(card.merUnderstated).toBe(false);
+    const gap = assembleMonth("2026-07", { qbGoogle: 5000, qbMeta: 0, metaSnap: null, amazon: 1000, booked: 40000 });
+    expect(gap.merDenominator).toBe(40000);
+    expect(gap.merUnderstated).toBe(true);
   });
 });

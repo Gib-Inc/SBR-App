@@ -58,8 +58,32 @@ export interface MonthSpend {
   month: string; // YYYY-MM
   byChannel: Record<Channel, ChannelSpend>;
   channelTotal: number; // sum of non-null channels (media — for media ROAS)
-  bookedMarketingTotal: number | null; // QB total Advertising (MER denominator)
+  bookedMarketingTotal: number | null; // QB total Advertising (booked only)
   otherMarketing: number | null; // booked − channelTotal (agency/creative/etc.)
+  // THE MER denominator: booked QB marketing + credit-line-era Meta (which QB stopped
+  // booking at the 2026-05 switch). bookedMarketingTotal alone UNDERSTATES true
+  // marketing cost post-cutoff — a gate or scoreboard dividing by it overstates MER.
+  merDenominator: number | null;
+  merUnderstated: boolean; // true when a known component (credit-line Meta) is missing
+}
+
+/** Pure: THE one MER-denominator composition — booked QB marketing + credit-line-era
+ *  Meta. Used at month grain here (assembleMonth) and at window grain by the
+ *  marketing governor, so the daily gate and the scoreboard can never disagree on
+ *  what "total marketing spend" means. */
+export function merDenominator(opts: {
+  booked: number | null;      // QB booked Advertising for the period
+  creditLineMeta: number | null; // Meta spend QB is NOT booking (compliant tracker), post-cutoff only
+  creditLineEra: boolean;     // does the period fall in the credit-line era?
+}): { value: number | null; understated: boolean } {
+  const hasBooked = opts.booked != null && Number.isFinite(opts.booked);
+  const hasMeta = opts.creditLineMeta != null && Number.isFinite(opts.creditLineMeta);
+  if (!hasBooked && !hasMeta) return { value: null, understated: true };
+  const value = r2((hasBooked ? (opts.booked as number) : 0) + (hasMeta ? (opts.creditLineMeta as number) : 0));
+  // Understated when the era says Meta is running unbooked but we have no tracker
+  // number for it, or when booked itself is missing.
+  const understated = (opts.creditLineEra && !hasMeta) || !hasBooked;
+  return { value, understated };
 }
 
 export interface MonthInputs {
@@ -100,8 +124,12 @@ export function assembleMonth(month: string, inp: MonthInputs): MonthSpend {
     }
   }
 
+  // Amazon's only feed (ad_metrics_daily) is KNOWN to undercount ~25-32% vs the
+  // authoritative Giant Horizons weekly PDF (which has no ingestion path yet) — so an
+  // Amazon number is never clean; flag it understated rather than let Amazon ROAS
+  // silently flatter itself.
   const amazon: ChannelSpend = has(inp.amazon) && (inp.amazon as number) > 0
-    ? { spend: r2(inp.amazon as number), source: "ad_metrics", confidence: "medium", understated: false }
+    ? { spend: r2(inp.amazon as number), source: "ad_metrics", confidence: "medium", understated: true, gapReason: "ad_metrics undercounts ~25-32% vs the authoritative Giant Horizons weekly PDF (no ingestion path yet)" }
     : { spend: null, source: "none", confidence: "low", understated: false, gapReason: "no Amazon ad spend captured" };
 
   const pinterest: ChannelSpend = has(inp.pinterest) && (inp.pinterest as number) > 0
@@ -112,7 +140,12 @@ export function assembleMonth(month: string, inp: MonthInputs): MonthSpend {
   const channelTotal = r2(CHANNELS.reduce((s, c) => s + (byChannel[c].spend ?? 0), 0));
   const bookedMarketingTotal = has(inp.booked) ? r2(inp.booked as number) : null;
   const otherMarketing = bookedMarketingTotal != null ? r2(bookedMarketingTotal - channelTotal) : null;
-  return { month, byChannel, channelTotal, bookedMarketingTotal, otherMarketing };
+  // Credit-line-era Meta is the piece QB doesn't book: only tracker-sourced Meta counts
+  // as an ADDITION to booked (card-era Meta is already inside booked QB advertising).
+  const creditLineEra = !isClosedDailyCard;
+  const creditLineMeta = creditLineEra && meta.source === "tracker:compliant" ? meta.spend : null;
+  const md = merDenominator({ booked: bookedMarketingTotal, creditLineMeta, creditLineEra });
+  return { month, byChannel, channelTotal, bookedMarketingTotal, otherMarketing, merDenominator: md.value, merUnderstated: md.understated };
 }
 
 // Short in-process memo: the canonical series is read by many surfaces (Monthly

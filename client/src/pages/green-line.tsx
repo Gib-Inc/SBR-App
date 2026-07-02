@@ -16,6 +16,7 @@ interface GreenLine {
 }
 interface Governor {
   state: string; reasons: string[]; blendedMer: number | null; breakeven: number; qbMarketing30d: number;
+  creditLineMeta30d: number; merBasis30d: number | null; merUnderstated: boolean;
   netRevenue30d: number; cashOnHand: number | null; cashFloor: number; septemberStreak: number;
   septemberTriggered: boolean; dataFresh: boolean; adDataLatest: string | null;
 }
@@ -197,7 +198,11 @@ export default function GreenLine() {
                 <li key={i} className="flex items-start gap-2"><ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" /><span>{r}</span></li>
               ))}
             </ul>
-            <div className="text-[11px] text-muted-foreground pt-1">MER basis: {money(gov.data.netRevenue30d)} net ÷ {money(gov.data.qbMarketing30d)} QB marketing (30d). September streak: {gov.data.septemberStreak} days &lt;8x. Ad data {gov.data.dataFresh ? "fresh" : "stale"}{gov.data.adDataLatest ? ` (${gov.data.adDataLatest})` : ""}.</div>
+            <div className="text-[11px] text-muted-foreground pt-1">
+              MER basis: {money(gov.data.netRevenue30d)} net ÷ {money(gov.data.merBasis30d ?? gov.data.qbMarketing30d)} marketing (30d = {money(gov.data.qbMarketing30d)} QB booked + {money(gov.data.creditLineMeta30d ?? 0)} credit-line Meta).
+              {gov.data.merUnderstated && <span className="text-amber-600 font-medium"> Basis incomplete — credit-line Meta missing for this window.</span>}
+              {" "}September streak: {gov.data.septemberStreak} days &lt;8x. Ad data {gov.data.dataFresh ? "fresh" : "stale"}{gov.data.adDataLatest ? ` (${gov.data.adDataLatest})` : ""}.
+            </div>
           </>) : <p className="text-sm text-muted-foreground">Unavailable.</p>}
         </CardContent>
       </Card>

@@ -6,9 +6,9 @@
  * AD SPEND IS CORRECTED AT READ TIME. `ad_metrics_daily` holds overlapping
  * marginal breakdown rows (per-SKU AND per-campaign×device×country) so a naive
  * SUM(spend) multi-counts (~3.65x on Google). Every ad-spend figure below is
- * reconciled to the authoritative source-hierarchy total (Windsor > upload >
- * deduped live) via server/services/corrected-ad-spend — the SAME numbers the
- * Finances page shows, so the two pages can never disagree again.
+ * reconciled to the canonical spend engine via
+ * server/services/corrected-ad-spend — the SAME numbers the Finances page shows,
+ * so the two pages can never disagree again.
  */
 
 import { sql } from 'drizzle-orm';
@@ -16,6 +16,7 @@ import {
   getAdSpendCorrection,
   getCorrectedAdSummary,
 } from '../services/corrected-ad-spend';
+import { normalizeAdPlatform } from '../services/unified-performance-service';
 
 type DB = any;
 const rows = (r: any) => r.rows || r;
@@ -54,7 +55,8 @@ export async function queryChannelMix(db: DB, days: number) {
   `);
   const rawByPlatform = new Map<string, any>();
   for (const r of rows(result)) {
-    const p = String(r.platform || '').toUpperCase();
+    const p = normalizeAdPlatform(String(r.platform || ''));
+    if (!p) continue;
     const prev = rawByPlatform.get(p) || { revenue: 0, conversions: 0, clicks: 0, impressions: 0 };
     rawByPlatform.set(p, {
       revenue: prev.revenue + (Number(r.revenue) || 0),

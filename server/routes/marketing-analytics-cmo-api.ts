@@ -326,7 +326,7 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/ad-spend-summary', requireAuth, handle((req) => getCorrectedAdSummary(parseDays(req))));
   app.get('/api/marketing-analytics/cmo/data-health', requireAuth, handle(async () => {
     const db = getDb();
-    const [sales, rawAds, spendSnapshots, schedulers] = await Promise.all([
+    const [sales, rawAds, spendSnapshots, canonicalSources, schedulers] = await Promise.all([
       db.execute(sql`
         SELECT max(date)::text AS max_date, max(last_synced_at)::text AS last_synced_at
         FROM daily_sales_snapshots
@@ -352,6 +352,20 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
         ORDER BY sum(spend) DESC NULLS LAST
       `),
       db.execute(sql`
+        SELECT 'GOOGLE_QB' AS source,
+               max(txn_date)::text AS max_date,
+               count(*)::int AS rows
+        FROM qb_pl_detail
+        WHERE vendor_or_payee ILIKE '%google%'
+           OR account_name ILIKE '%google%'
+        UNION ALL
+        SELECT 'BOOKED_MARKETING_QB' AS source,
+               max(txn_date)::text AS max_date,
+               count(*)::int AS rows
+        FROM qb_pl_detail
+        WHERE account_name ILIKE '%advertising%'
+      `),
+      db.execute(sql`
         SELECT integration_name, last_status, last_success_at::text AS last_success_at, error_message
         FROM integration_health
         WHERE integration_name IN ('scheduler:ad-performance-sync', 'scheduler:marketing-analytics')
@@ -363,6 +377,7 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
       sales: (sales.rows || sales)[0] || null,
       rawAds: rawAds.rows || rawAds,
       spendSnapshots: spendSnapshots.rows || spendSnapshots,
+      canonicalSources: canonicalSources.rows || canonicalSources,
       schedulers: schedulers.rows || schedulers,
     };
   }));

@@ -177,6 +177,7 @@ interface DataHealth {
   sales: { max_date: string | null; last_synced_at: string | null } | null;
   rawAds: Array<{ platform: string; max_date: string | null; rows: number; spend: number | null }>;
   spendSnapshots: Array<{ platform: string; max_date: string | null; rows: number; spend: number | null; sources: string | null }>;
+  canonicalSources?: Array<{ source: string; max_date: string | null; rows: number }>;
   schedulers: Array<{ integration_name: string; last_status: string | null; last_success_at: string | null; error_message: string | null }>;
 }
 
@@ -200,12 +201,20 @@ const daysOld = (date: string | null | undefined) => {
 
 const sourceDate = (health: DataHealth | undefined, platform: string) => {
   const p = platform.toUpperCase();
-  if (p === 'META') return health?.spendSnapshots?.find((s) => s.platform?.toUpperCase() === 'META')?.max_date ?? null;
-  if (p === 'GOOGLE') return health?.spendSnapshots?.find((s) => s.platform?.toUpperCase() === 'GOOGLE')?.max_date
+  if (p === 'GOOGLE') return health?.canonicalSources?.find((s) => s.source === 'GOOGLE_QB')?.max_date
+    ?? health?.spendSnapshots?.find((s) => s.platform?.toUpperCase() === 'GOOGLE')?.max_date
     ?? health?.rawAds?.find((r) => r.platform?.toUpperCase().includes('GOOGLE'))?.max_date ?? null;
+  if (p === 'META') return health?.spendSnapshots?.find((s) => s.platform?.toUpperCase() === 'META')?.max_date ?? null;
   if (p === 'AMAZON') return health?.spendSnapshots?.find((s) => s.platform?.toUpperCase() === 'AMAZON')?.max_date
     ?? health?.rawAds?.find((r) => r.platform?.toUpperCase().includes('AMAZON'))?.max_date ?? null;
   return health?.rawAds?.find((r) => r.platform?.toUpperCase() === p)?.max_date ?? null;
+};
+
+const sourceMaxAgeDays = (platform: string) => {
+  const p = platform.toUpperCase();
+  if (p === 'GOOGLE' || p === 'AMAZON') return 2;
+  if (p === 'META') return 7;
+  return 3;
 };
 
 function DecisionBrief({ days }: { days: number }) {
@@ -224,7 +233,7 @@ function DecisionBrief({ days }: { days: number }) {
     .map((p) => ({ ...p, maxDate: sourceDate(health, p.platform) }))
     .filter((p) => {
       const age = daysOld(p.maxDate);
-      return age == null || age > 7;
+      return age == null || age > sourceMaxAgeDays(p.platform);
     });
   const schedulerFailures = (health?.schedulers ?? []).filter((s) => s.last_status && s.last_status !== 'success');
   const isStale = (salesAge != null && salesAge > 2) || stalePlatforms.length > 0 || schedulerFailures.length > 0;
@@ -282,7 +291,7 @@ function DataFreshnessPanel({ days }: { days: number }) {
   const rows = (spend?.platforms ?? []).filter((p) => p.spend > 0).map((p) => {
     const maxDate = sourceDate(data, p.platform);
     const age = daysOld(maxDate);
-    return { ...p, maxDate, age };
+    return { ...p, maxDate, age, maxAge: sourceMaxAgeDays(p.platform) };
   });
 
   return (
@@ -307,7 +316,7 @@ function DataFreshnessPanel({ days }: { days: number }) {
               <span className="font-medium">{PLATFORM_LABEL[p.platform] || p.platform}</span>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">{p.maxDate ?? 'unknown'}</span>
-                <Badge variant="outline" className={p.age == null || p.age > 7 ? 'text-amber-700 border-amber-300' : 'text-emerald-700 border-emerald-300'}>
+                <Badge variant="outline" className={p.age == null || p.age > p.maxAge ? 'text-amber-700 border-amber-300' : 'text-emerald-700 border-emerald-300'}>
                   {p.age == null ? 'unknown' : `${p.age}d old`}
                 </Badge>
               </div>
@@ -418,7 +427,7 @@ function AdSpendByChannelCard({ days }: { days: number }) {
               })}
             </div>
             <p className="text-[11px] text-muted-foreground leading-snug">
-              Source of truth: Windsor (authoritative) &gt; uploaded CSV &gt; live. Matches the Finances unified view.
+              Source of truth: canonical engine. Google uses QuickBooks, Meta uses the compliant tracker/QuickBooks, and raw ad rows are diagnostic shape data.
               {hasUpload && ' Upload-tagged platforms are from a manual CSV — connect them in Windsor for daily auto-sync.'}
             </p>
           </div>

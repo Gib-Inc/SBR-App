@@ -659,15 +659,18 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
     const totalRevenue = useQbRev ? qbRev : soRev;
     const revenueSource = useQbRev ? 'quickbooks' : 'orders';
 
-    // Ad spend: the COMPLETE QuickBooks total for closed months, live ad_metrics for
-    // the current/open month. Never a partial single-channel snapshot.
-    const useQbSpend = isClosed && qbSpend != null && qbSpend > 0;
-    const adSpend = useQbSpend ? qbSpend : liveSpend;
-    const spendSource = useQbSpend ? 'quickbooks' : (liveSpend > 0 ? 'ad_metrics' : 'none');
-
-    const adRevenue = Number(a.ad_revenue) || 0;
     const canon = canonByMonth.get(month.slice(0, 7));
     const channelMediaSpend = canon ? canon.channelTotal : null; // media only (Google+Meta+Amazon+Pinterest)
+
+    // Ad spend: the COMPLETE QuickBooks total for closed months. For the current
+    // open month, prefer canonical media spend over raw ad_metrics so the visible
+    // Performance tab does not resurrect the inflated diagnostic feed.
+    const useQbSpend = isClosed && qbSpend != null && qbSpend > 0;
+    const useCanonicalOpenMedia = !useQbSpend && channelMediaSpend != null && channelMediaSpend > 0;
+    const adSpend = useQbSpend ? qbSpend : (useCanonicalOpenMedia ? channelMediaSpend : liveSpend);
+    const spendSource = useQbSpend ? 'quickbooks' : (useCanonicalOpenMedia ? 'canonical_media' : (liveSpend > 0 ? 'ad_metrics' : 'none'));
+
+    const adRevenue = Number(a.ad_revenue) || 0;
     return {
       month,
       totalRevenue,

@@ -1,9 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, ClipboardCheck, Database, GitCompareArrows, Loader2, ShieldAlert, ShieldCheck, Truck, Warehouse } from "lucide-react";
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { AlertTriangle, CheckCircle2, ClipboardCheck, Database, ExternalLink, GitCompareArrows, Loader2, ShieldAlert, ShieldCheck, Truck, Warehouse, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 type Severity = "critical" | "warning" | "info";
 
@@ -53,6 +57,20 @@ type IntegritySummary = {
   ledgerDrift: Record<string, any>[];
   openOrders: Record<string, any>[];
   recentMovements: Record<string, any>[];
+};
+
+type IntegrityAction =
+  | "MARK_LEGACY_CLEANUP"
+  | "ZERO_INVALID_FIELD"
+  | "SET_AFS_TO_TARGET"
+  | "MARK_BOM_NOT_REQUIRED";
+
+type ActionPayload = {
+  action: IntegrityAction;
+  itemId?: string;
+  sku?: string;
+  field?: "current_stock" | "hildale_qty" | "pivot_qty" | "available_for_sale_qty";
+  target?: number;
 };
 
 const fmt = (value: unknown) => Number(value ?? 0).toLocaleString("en-US");
@@ -113,7 +131,100 @@ function MetricCard({ title, value, helper, icon: Icon }: { title: string; value
   );
 }
 
-function IssueCard({ issue }: { issue: IntegrityIssue }) {
+function ActionsCell({
+  issue,
+  row,
+  reviewMode,
+  isPending,
+  runAction,
+}: {
+  issue: IntegrityIssue;
+  row: Record<string, any>;
+  reviewMode: boolean;
+  isPending: boolean;
+  runAction: (payload: ActionPayload) => void;
+}) {
+  const sku = row.sku ?? row.extensiv_sku;
+  const itemId = row.id;
+  const productHref = itemId ? `/products?item=${encodeURIComponent(itemId)}` : `/products?sku=${encodeURIComponent(String(sku ?? ""))}`;
+  const salesHref = `/sales-orders?sku=${encodeURIComponent(String(sku ?? ""))}`;
+  const base = { itemId, sku };
+
+  if (!reviewMode) {
+    return (
+      <div className="flex justify-end gap-1">
+        <Button asChild variant="ghost" size="sm" title="Open SKU in Products">
+          <a href={productHref}><ExternalLink className="h-3.5 w-3.5" /></a>
+        </Button>
+      </div>
+    );
+  }
+
+  const zeroButtons = [];
+  if (issue.code === "FINISHED_CURRENT_STOCK" && Number(row.current_stock ?? 0) !== 0) {
+    zeroButtons.push(
+      <Button key="current" variant="outline" size="sm" disabled={isPending} onClick={() => runAction({ ...base, action: "ZERO_INVALID_FIELD", field: "current_stock" })}>
+        Zero invalid field
+      </Button>,
+    );
+  }
+  if (issue.code === "COMPONENT_WAREHOUSE_FIELDS") {
+    ([
+      ["hildale_qty", "Hildale"],
+      ["pivot_qty", "Pyvott"],
+      ["available_for_sale_qty", "AFS"],
+    ] as const).forEach(([field, label]) => {
+      if (Number(row[field] ?? 0) !== 0) {
+        zeroButtons.push(
+          <Button key={field} variant="outline" size="sm" disabled={isPending} onClick={() => runAction({ ...base, action: "ZERO_INVALID_FIELD", field })}>
+            Zero {label}
+          </Button>,
+        );
+      }
+    });
+  }
+
+  return (
+    <div className="flex flex-wrap justify-end gap-1">
+      {(issue.code === "FINISHED_CURRENT_STOCK" || issue.code === "COMPONENT_WAREHOUSE_FIELDS") && (
+        <Button variant="outline" size="sm" disabled={isPending} onClick={() => runAction({ ...base, action: "MARK_LEGACY_CLEANUP" })}>
+          Mark as Legacy Field Cleanup
+        </Button>
+      )}
+      {zeroButtons}
+      {issue.code === "AFS_DRIFT" && (
+        <Button variant="outline" size="sm" disabled={isPending} onClick={() => runAction({ ...base, action: "SET_AFS_TO_TARGET", target: Number(row.target_available_for_sale ?? 0) })}>
+          Set AFS to target
+        </Button>
+      )}
+      {issue.code === "CORE_BOM_GAPS" && (
+        <Button variant="outline" size="sm" disabled={isPending} onClick={() => runAction({ ...base, action: "MARK_BOM_NOT_REQUIRED" })}>
+          Mark BOM not required
+        </Button>
+      )}
+      <Button asChild variant="ghost" size="sm" title="Open SKU in Products">
+        <a href={productHref}>Open SKU in Products</a>
+      </Button>
+      {(issue.code === "AFS_DRIFT" || issue.code === "BACKORDER_PRESSURE") && (
+        <Button asChild variant="ghost" size="sm" title="Open related sales orders">
+          <a href={salesHref}>Open related sales orders</a>
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function IssueCard({
+  issue,
+  reviewMode,
+  isPending,
+  runAction,
+}: {
+  issue: IntegrityIssue;
+  reviewMode: boolean;
+  isPending: boolean;
+  runAction: (payload: ActionPayload) => void;
+}) {
   const sampleRows = issue.rows?.slice(0, 6) ?? [];
   return (
     <Card>
@@ -136,6 +247,7 @@ function IssueCard({ issue }: { issue: IntegrityIssue }) {
                   <TableHead className="text-right">Hildale</TableHead>
                   <TableHead className="text-right">Pyvott</TableHead>
                   <TableHead className="text-right">AFS</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -147,6 +259,9 @@ function IssueCard({ issue }: { issue: IntegrityIssue }) {
                     <TableCell className="text-right tabular-nums">{row.hildale_qty ?? "—"}</TableCell>
                     <TableCell className="text-right tabular-nums">{row.pivot_qty ?? "—"}</TableCell>
                     <TableCell className="text-right tabular-nums">{row.available_for_sale_qty ?? "—"}</TableCell>
+                    <TableCell className="min-w-[240px]">
+                      <ActionsCell issue={issue} row={row} reviewMode={reviewMode} isPending={isPending} runAction={runAction} />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -279,10 +394,31 @@ function RecentMovements({ rows }: { rows: Record<string, any>[] }) {
 }
 
 export default function InventoryIntegrity() {
+  const [reviewMode, setReviewMode] = useState(false);
+  const { toast } = useToast();
   const { data, isLoading, error } = useQuery<IntegritySummary>({
     queryKey: ["/api/inventory-integrity"],
     refetchInterval: 60_000,
   });
+  const actionMutation = useMutation({
+    mutationFn: async (payload: ActionPayload) => {
+      const res = await apiRequest("POST", "/api/inventory-integrity/actions", payload);
+      return res.json() as Promise<{ ok: boolean; message: string }>;
+    },
+    onSuccess: (result) => {
+      toast({ title: "Inventory integrity updated", description: result.message });
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory-integrity"] });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Inventory integrity action failed",
+        description: err?.message || "The action could not be applied.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const runAction = (payload: ActionPayload) => actionMutation.mutate(payload);
 
   if (isLoading) {
     return <div className="flex justify-center py-16"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>;
@@ -302,15 +438,35 @@ export default function InventoryIntegrity() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <ShieldCheck className="h-6 w-6" />
-          Inventory Integrity
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Read-only truth checks for stock fields, Pyvott sync, open orders, BOM coverage, and movement audit trails.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <ShieldCheck className="h-6 w-6" />
+            Inventory Integrity
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Truth checks for stock fields, Pyvott sync, open orders, BOM coverage, and movement audit trails.
+          </p>
+        </div>
+        <Button
+          variant={reviewMode ? "default" : "outline"}
+          onClick={() => setReviewMode((value) => !value)}
+          className="shrink-0"
+        >
+          <Wrench className="h-4 w-4" />
+          {reviewMode ? "Review/Fix mode on" : "Review/Fix mode"}
+        </Button>
       </div>
+
+      {reviewMode && (
+        <Alert className="border-blue-300 bg-blue-50/70 dark:bg-blue-950/20">
+          <Wrench className="h-4 w-4" />
+          <AlertTitle>Review/Fix mode</AlertTitle>
+          <AlertDescription>
+            Actions are row-by-row only. Legacy cleanup decisions are written to the reconciliation log, invalid legacy fields can be zeroed only when safe for that item type, and AFS target changes go through the inventory movement gateway.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <StatusBanner data={data} />
 
@@ -360,7 +516,15 @@ export default function InventoryIntegrity() {
               No integrity issues detected.
             </CardContent>
           </Card>
-        ) : data.issues.map((issue) => <IssueCard key={issue.code} issue={issue} />)}
+        ) : data.issues.map((issue) => (
+          <IssueCard
+            key={issue.code}
+            issue={issue}
+            reviewMode={reviewMode}
+            isPending={actionMutation.isPending}
+            runAction={runAction}
+          />
+        ))}
       </div>
 
       <LedgerDriftTable rows={data.ledgerDrift} />

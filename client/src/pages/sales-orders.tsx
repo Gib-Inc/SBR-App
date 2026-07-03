@@ -256,10 +256,14 @@ export default function SalesOrders() {
     [items]
   );
 
+  const skuFilter = new URLSearchParams(window.location.search).get("sku")?.trim().toLowerCase() || "";
   const filteredOrders = useMemo(() => {
-    if (channelFilter === "ALL") return orders;
-    return orders.filter(order => order.channel === channelFilter);
-  }, [orders, channelFilter]);
+    const byChannel = channelFilter === "ALL" ? orders : orders.filter(order => order.channel === channelFilter);
+    if (!skuFilter) return byChannel;
+    return byChannel.filter((order) =>
+      order.lines?.some((line) => line.sku?.toLowerCase() === skuFilter),
+    );
+  }, [orders, channelFilter, skuFilter]);
 
   const { data: selectedOrder } = useQuery<SalesOrder & { lines: SalesOrderLine[] }>({
     queryKey: ["/api/sales-orders", selectedOrderId],

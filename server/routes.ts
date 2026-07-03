@@ -2804,6 +2804,20 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // POST /api/inventory-integrity/actions - Guarded review/fix actions.
+  // The service constrains each write by item type and records a reconciliation
+  // decision so cleanup never happens silently.
+  app.post("/api/inventory-integrity/actions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { applyInventoryIntegrityAction } = await import("./services/inventory-integrity-service");
+      const result = await applyInventoryIntegrityAction(req.body, { userId: req.session.userId });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[InventoryIntegrity] Error applying action:", error);
+      res.status(400).json({ error: error.message || "Failed to apply inventory integrity action" });
+    }
+  });
+
   app.get("/api/reorder-alerts", requireAuth, async (_req: Request, res: Response) => {
     try {
       const [alerts, items, suppliers, purchaseOrders] = await Promise.all([

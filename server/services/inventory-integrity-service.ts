@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "../db";
+import { storage } from "../storage";
+import { InventoryMovement } from "./inventory-movement";
 
 const rows = (result: any) => result.rows ?? result;
 const num = (value: unknown): number => Number(value ?? 0) || 0;
@@ -52,6 +54,26 @@ export interface InventoryIntegritySummary {
   ledgerDrift: any[];
   openOrders: any[];
   recentMovements: any[];
+}
+
+export type InventoryIntegrityAction =
+  | "MARK_LEGACY_CLEANUP"
+  | "ZERO_INVALID_FIELD"
+  | "SET_AFS_TO_TARGET"
+  | "MARK_BOM_NOT_REQUIRED";
+
+export interface InventoryIntegrityActionInput {
+  action: InventoryIntegrityAction;
+  itemId?: string;
+  sku?: string;
+  field?: "current_stock" | "hildale_qty" | "pivot_qty" | "available_for_sale_qty";
+  target?: number;
+  reason?: string;
+}
+
+export interface InventoryIntegrityActionResult {
+  ok: true;
+  message: string;
 }
 
 function makeIssue(
@@ -121,14 +143,14 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       FROM items
     `),
     db.execute(sql`
-      SELECT sku, name, current_stock, hildale_qty, pivot_qty, available_for_sale_qty
+      SELECT id, sku, name, current_stock, hildale_qty, pivot_qty, available_for_sale_qty
       FROM items
       WHERE type = 'finished_product' AND current_stock <> 0
       ORDER BY abs(current_stock) DESC, sku
       LIMIT 25
     `),
     db.execute(sql`
-      SELECT sku, name, current_stock, hildale_qty, pivot_qty, available_for_sale_qty
+      SELECT id, sku, name, current_stock, hildale_qty, pivot_qty, available_for_sale_qty
       FROM items
       WHERE type = 'component'
         AND (hildale_qty <> 0 OR pivot_qty <> 0 OR available_for_sale_qty <> 0)
@@ -136,14 +158,14 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       LIMIT 25
     `),
     db.execute(sql`
-      SELECT sku, name, type, current_stock, hildale_qty, pivot_qty, available_for_sale_qty
+      SELECT id, sku, name, type, current_stock, hildale_qty, pivot_qty, available_for_sale_qty
       FROM items
       WHERE current_stock < 0 OR hildale_qty < 0 OR pivot_qty < 0 OR available_for_sale_qty < 0
       ORDER BY sku
       LIMIT 25
     `),
     db.execute(sql`
-      SELECT sku, name, extensiv_sku, pivot_qty, extensiv_on_hand_snapshot,
+      SELECT id, sku, name, extensiv_sku, pivot_qty, extensiv_on_hand_snapshot,
              extensiv_last_sync_at::text AS extensiv_last_sync_at
       FROM items
       WHERE extensiv_sku IS NOT NULL
@@ -190,11 +212,19 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       WHERE upper(coalesce(so.status, '')) NOT IN ('SHIPPED','FULFILLED','CANCELLED','DELIVERED','REFUNDED','PENDING_REFUND')
     `),
     db.execute(sql`
-      SELECT fp.sku, fp.name, count(b.component_id)::int AS bom_lines
+      SELECT fp.id, fp.sku, fp.name, count(b.component_id)::int AS bom_lines
       FROM items fp
       LEFT JOIN bill_of_materials b ON b.finished_product_id = fp.id
       WHERE fp.type = 'finished_product'
         AND coalesce(fp.reorder_priority, '') IN ('core_build', 'money_maker', 'finished_good')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM data_reconciliation_log drl
+          WHERE drl.data_type = 'inventory_integrity'
+            AND drl.entity_key = fp.sku
+            AND drl.field = 'bom_required'
+            AND drl.action = 'DISREGARDED'
+        )
       GROUP BY fp.id, fp.sku, fp.name
       HAVING count(b.component_id) = 0
       ORDER BY fp.sku
@@ -403,4 +433,155 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
     openOrders: [openOrderRow],
     recentMovements: rows(movementRes),
   };
+}
+
+async function getActionItem(input: InventoryIntegrityActionInput) {
+  const item = input.itemId
+    ? await storage.getItem(input.itemId)
+    : input.sku
+      ? await storage.getItemBySku(input.sku)
+      : undefined;
+  if (!item) throw new Error("Inventory item not found for integrity action");
+  return item;
+}
+
+async function getOpenUnshippedUnits(itemId: string): Promise<number> {
+  const result = await db.execute(sql`
+    SELECT coalesce(sum(greatest(coalesce(sol.qty_ordered, 0) - coalesce(sol.qty_shipped, 0), 0)), 0)::int AS open_unshipped
+    FROM sales_order_lines sol
+    JOIN sales_orders so ON so.id = sol.sales_order_id
+    WHERE sol.product_id = ${itemId}
+      AND upper(coalesce(so.status, '')) NOT IN ('SHIPPED','FULFILLED','CANCELLED','DELIVERED','REFUNDED','PENDING_REFUND')
+  `);
+  return num(rows(result)[0]?.open_unshipped);
+}
+
+function valueForField(item: any, field: NonNullable<InventoryIntegrityActionInput["field"]>): number {
+  switch (field) {
+    case "current_stock":
+      return num(item.currentStock);
+    case "hildale_qty":
+      return num(item.hildaleQty);
+    case "pivot_qty":
+      return num(item.pivotQty);
+    case "available_for_sale_qty":
+      return num(item.availableForSaleQty);
+  }
+}
+
+async function logIntegrityAction(entry: {
+  sku: string;
+  action: string;
+  field: string | null;
+  oldValue?: string | null;
+  newValue?: string | null;
+  reason: string;
+}) {
+  await storage.createDataReconciliationLog([{
+    dataType: "inventory_integrity",
+    entityKey: entry.sku,
+    action: entry.action,
+    field: entry.field,
+    oldValue: entry.oldValue ?? null,
+    newValue: entry.newValue ?? null,
+    reason: entry.reason,
+    source: "inventory-integrity",
+  }]);
+}
+
+export async function applyInventoryIntegrityAction(
+  input: InventoryIntegrityActionInput,
+  actor: { userId?: string | number | null } = {},
+): Promise<InventoryIntegrityActionResult> {
+  const item = await getActionItem(input);
+  const reason = input.reason?.trim() || "Reviewed from Inventory Integrity Review/Fix mode.";
+
+  if (input.action === "MARK_LEGACY_CLEANUP") {
+    await logIntegrityAction({
+      sku: item.sku,
+      action: "KEPT",
+      field: input.field ?? null,
+      reason: `Marked as legacy field cleanup. ${reason}`,
+    });
+    return { ok: true, message: `${item.sku} marked as legacy field cleanup.` };
+  }
+
+  if (input.action === "MARK_BOM_NOT_REQUIRED") {
+    if (item.type !== "finished_product") {
+      throw new Error("Only finished products can be marked BOM not required");
+    }
+    await logIntegrityAction({
+      sku: item.sku,
+      action: "DISREGARDED",
+      field: "bom_required",
+      oldValue: "required",
+      newValue: "not_required",
+      reason: `BOM gap marked not required. ${reason}`,
+    });
+    return { ok: true, message: `${item.sku} marked BOM not required.` };
+  }
+
+  if (input.action === "ZERO_INVALID_FIELD") {
+    if (!input.field) throw new Error("field is required to zero an invalid field");
+    const validFinishedField = item.type === "finished_product" && input.field === "current_stock";
+    const validComponentField = item.type === "component" && ["hildale_qty", "pivot_qty", "available_for_sale_qty"].includes(input.field);
+    if (!validFinishedField && !validComponentField) {
+      throw new Error(`Refusing to zero ${input.field} for ${item.type}. This is not an invalid legacy field for that item type.`);
+    }
+
+    const before = valueForField(item, input.field);
+    const updatesByField = {
+      current_stock: { currentStock: 0 },
+      hildale_qty: { hildaleQty: 0 },
+      pivot_qty: { pivotQty: 0 },
+      available_for_sale_qty: { availableForSaleQty: 0 },
+    };
+    if (before !== 0) {
+      await storage.updateItem(item.id, updatesByField[input.field]);
+    }
+    await logIntegrityAction({
+      sku: item.sku,
+      action: before === 0 ? "KEPT" : "UPDATED",
+      field: input.field,
+      oldValue: String(before),
+      newValue: "0",
+      reason: `Zeroed invalid legacy inventory field. ${reason}`,
+    });
+    return { ok: true, message: `${item.sku} ${input.field} is now zero.` };
+  }
+
+  if (input.action === "SET_AFS_TO_TARGET") {
+    if (item.type !== "finished_product") {
+      throw new Error("Only finished products have available-for-sale targets");
+    }
+    const openUnshipped = await getOpenUnshippedUnits(item.id);
+    const computedTarget = Math.max(0, num(item.pivotQty) - openUnshipped);
+    const target = Number.isFinite(Number(input.target)) ? Math.max(0, Math.trunc(Number(input.target))) : computedTarget;
+    const currentAfs = num(item.availableForSaleQty);
+    const delta = target - currentAfs;
+    if (delta !== 0) {
+      const movement = new InventoryMovement(storage);
+      const result = await movement.apply({
+        eventType: "MANUAL_COUNT",
+        itemId: item.id,
+        quantity: delta,
+        location: "PIVOT",
+        source: "inventory-integrity",
+        userId: actor.userId ?? undefined,
+        notes: `Inventory Integrity Review/Fix: set AFS to ${target} (Pyvott ${num(item.pivotQty)} - open unshipped ${openUnshipped}).`,
+      });
+      if (!result.success) throw new Error(result.error || "Failed to set AFS target");
+    }
+    await logIntegrityAction({
+      sku: item.sku,
+      action: delta === 0 ? "KEPT" : "UPDATED",
+      field: "available_for_sale_qty",
+      oldValue: String(currentAfs),
+      newValue: String(target),
+      reason: `Set AFS to integrity target. ${reason}`,
+    });
+    return { ok: true, message: `${item.sku} AFS set to ${target}.` };
+  }
+
+  throw new Error(`Unsupported integrity action: ${input.action}`);
 }

@@ -15,6 +15,10 @@ interface Resp {
   turnoverApp: number | null; turnoverQb: number | null; dioApp: number | null; dioQb: number | null;
   costedSkuPct: number | null; costedValuePct: number | null;
   skusWithStock: number; uncostedSkusWithStock: number; notes: string[];
+  // MEAS-3
+  abc?: { a: { skus: number; value: number }; b: { skus: number; value: number }; c: { skus: number; value: number } };
+  agingFinished?: { onHandValue: number; deadValue: number; deadSkus: number };
+  gmroi?: { annualizedGrossProfit: number | null; gmroiApp: number | null; gmroiQb: number | null };
 }
 const money = (v: number | null | undefined) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString("en-US"));
 const range = (a: number | null, b: number | null, suffix: string) => {
@@ -42,6 +46,23 @@ export function InventoryHealthCard() {
           <Metric label="Inventory value" value={money(data.inventoryValueApp)} sub={data.qbInventory != null ? `QB books ${money(data.qbInventory)}` : "app WAC"} />
           <Metric label="Costed coverage" value={data.costedSkuPct != null ? `${data.costedSkuPct}%` : "—"} sub={`${data.uncostedSkusWithStock} SKUs uncosted`} tone={coverageLow ? "warn" : "ok"} />
         </div>
+
+        {(data.abc || data.agingFinished || data.gmroi) ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {data.abc ? (
+              <Metric label="A-items" value={`${data.abc.a.skus} SKUs`} sub={`hold ${money(data.abc.a.value)} — count these first`} />
+            ) : null}
+            {data.agingFinished ? (
+              <Metric label="Dead stock" value={money(data.agingFinished.deadValue)} sub={`${data.agingFinished.deadSkus} finished SKUs, no sale 180d+`} tone={data.agingFinished.deadValue > 10000 ? "warn" : "ok"} />
+            ) : null}
+            {data.gmroi ? (
+              <Metric label="GMROI" value={range(data.gmroi.gmroiApp, data.gmroi.gmroiQb, "×")} sub="gross margin ÷ inventory" />
+            ) : null}
+            {data.agingFinished ? (
+              <Metric label="Finished-goods value" value={money(data.agingFinished.onHandValue)} sub="at app WAC" />
+            ) : null}
+          </div>
+        ) : null}
 
         {data.valuationGap != null && Math.abs(data.valuationGap) > 10000 ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300 flex items-start gap-1.5">

@@ -289,16 +289,25 @@ export async function getInventoryHealth(db: DB): Promise<InventoryHealth> {
 /** MEAS-2: the daily inventory-value history (oldest→newest), for a value trend.
  *  Empty until captureInventoryValueSnapshot has run at least once. */
 export async function getInventoryValueTrend(db: DB, days = 30): Promise<InventoryValuePoint[]> {
-  const r = rows(await db.execute(sql`
-    SELECT snapshot_date::text AS date, total_value_app, qb_inventory
-    FROM inventory_value_snapshots
-    WHERE snapshot_date >= (now() AT TIME ZONE 'America/Denver')::date - ${days}::int
-    ORDER BY snapshot_date ASC`));
-  return r.map((x: any) => ({
-    date: x.date,
-    totalValueApp: num(x.total_value_app),
-    qbInventory: x.qb_inventory != null ? num(x.qb_inventory) : null,
-  }));
+  try {
+    const r = rows(await db.execute(sql`
+      SELECT snapshot_date::text AS date, total_value_app, qb_inventory
+      FROM inventory_value_snapshots
+      WHERE snapshot_date >= (now() AT TIME ZONE 'America/Denver')::date - ${days}::int
+      ORDER BY snapshot_date ASC`));
+    return r.map((x: any) => ({
+      date: x.date,
+      totalValueApp: num(x.total_value_app),
+      qbInventory: x.qb_inventory != null ? num(x.qb_inventory) : null,
+    }));
+  } catch (err: any) {
+    // The table is created by startup-checks; on the very first boot the capture
+    // can run before that (the "relation does not exist" boot race), and reads can
+    // fail transiently. The trend is a nice-to-have — never let it 500 the whole
+    // inventory-health endpoint (which powers the health card + dashboard widgets).
+    console.warn("[Inventory Value] trend read failed, returning empty:", err?.message ?? err);
+    return [];
+  }
 }
 
 /** MEAS-2: persist ONE inventory-value row for today (Mountain-time date), idempotent

@@ -58,6 +58,13 @@ interface SKUContext {
   riskThresholdHighDays: number;
   riskThresholdMediumDays: number;
   safetyStockDays: number;
+  // Data-quality provenance so the model does not treat every number as equally
+  // trustworthy (audit MEAS-6). These mark inputs known to be unreliable for THIS
+  // batch so a low-confidence NEED_ORDER is not accepted-all into a real PO.
+  velocitySource: "sales" | "bom-derived" | "floor-default";
+  availableForSaleSuspect: boolean;
+  dataConfidence: "high" | "low";
+  dataWarnings: string[];
 }
 
 interface LLMRecommendation {
@@ -499,6 +506,27 @@ export class InventoryRecommendationBatch {
       const backorders = backorderMap.get(item.id) || 0;
       const supplierScore = supplierScoreMap.get(item.id) || 85;
 
+      // MEAS-6: mark where dailyVelocity actually came from and where the sellable
+      // figure is suspect, so the LLM (and the accept-all UI) can discount them.
+      const hasSalesVelocity = (item.dailyUsage ?? 0) > 0;
+      const velocitySource: "sales" | "bom-derived" | "floor-default" = isFinished
+        ? (hasSalesVelocity ? "sales" : "floor-default")
+        : (computedComponentUsage > 0 ? "bom-derived" : (hasSalesVelocity ? "sales" : "floor-default"));
+      const stockElsewhere = pivotQty + hildaleQty;
+      const availableForSaleSuspect = isFinished && availableForSale === 0 && stockElsewhere > 0;
+      const dataWarnings: string[] = [];
+      if (velocitySource === "floor-default") {
+        dataWarnings.push(
+          "dailyVelocity is the 0.1 divide-by-zero floor, not measured demand — daysUntilStockout is unreliable and any NEED_ORDER here is likely spurious",
+        );
+      }
+      if (availableForSaleSuspect) {
+        dataWarnings.push(
+          `availableForSale is 0 but ${stockElsewhere} units sit in pivot/hildale — the sellable figure is likely stale, do not treat as a genuine stockout`,
+        );
+      }
+      const dataConfidence: "high" | "low" = dataWarnings.length > 0 ? "low" : "high";
+
       contexts.push({
         sku: item.sku,
         itemId: item.id,
@@ -519,6 +547,10 @@ export class InventoryRecommendationBatch {
         riskThresholdHighDays,
         riskThresholdMediumDays,
         safetyStockDays,
+        velocitySource,
+        availableForSaleSuspect,
+        dataConfidence,
+        dataWarnings,
       });
     }
 
@@ -634,6 +666,11 @@ DECISION FACTORS:
 MOQ CONSTRAINT:
 - If recommending an order, ensure recommendedQty >= supplierMOQ
 - If calculated need is less than MOQ, still recommend MOQ quantity (supplier won't ship less)
+
+DATA QUALITY (read before trusting the numbers):
+- Each SKU carries dataConfidence ("high" | "low") and dataWarnings. When dataConfidence is "low", the inputs behind riskLevel/daysUntilStockout are known to be unreliable — do NOT emit NEED_ORDER/ORDER_TODAY off them.
+- velocitySource "floor-default" means dailyVelocity is a 0.1 placeholder (no real demand history), so daysUntilStockout is meaningless; return UNKNOWN and set recommendedAction to MONITOR, explaining the missing demand data in notesForHuman.
+- availableForSaleSuspect means the sellable count reads 0 while stock exists in pivot/hildale; treat it as a data/sync issue to verify, not a real stockout.
 
 === SKU DATA ===
 ${JSON.stringify(contexts, null, 2)}

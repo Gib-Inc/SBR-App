@@ -289,7 +289,11 @@ export default function Inventory() {
       if (r.location === "Hildale") existing.hildale = r.qty;
       if (r.location === "FX") existing.fx = r.qty;
       existing.total = existing.pyvott + existing.hildale + existing.fx;
-      existing.available = existing.total - existing.committed;
+      // Available = sellable-now only. FX is in-process WIP at the contract
+      // builder (weeks out, cannot ship), so it must NOT count toward Available
+      // even though it is part of Total — including it hid real stockouts behind
+      // a green Available number (audit MC-4). FX stays visible in its own column.
+      existing.available = existing.pyvott + existing.hildale - existing.committed;
       existing.status =
         existing.total === 0 ? "Out" : existing.total < LOW_STOCK_THRESHOLD ? "Low" : "OK";
       if (!existing.name && r.name) existing.name = r.name;
@@ -359,15 +363,19 @@ export default function Inventory() {
   }, [rows, bySku]);
 
   const snapshotDate = rows[0]?.snapshot_date ?? null;
-  // Hide the badge entirely when the snapshot is older than 48 hours so
-  // we don't display a stale "Snapshot: APR 10" that misleads anyone.
+  // Always surface the snapshot date. When it is older than 48h the badge turns
+  // into a loud stale warning instead of hiding — previously the badge was hidden
+  // when stale, which let old data silently pass as current (audit MEAS-4).
   const FRESH_WINDOW_MS = 48 * 60 * 60 * 1000;
-  const snapshotIsFresh = (() => {
-    if (!snapshotDate) return false;
+  const snapshotAgeMs = (() => {
+    if (!snapshotDate) return null;
     const t = new Date(snapshotDate).getTime();
-    if (Number.isNaN(t)) return false;
-    return Date.now() - t <= FRESH_WINDOW_MS;
+    if (Number.isNaN(t)) return null;
+    return Date.now() - t;
   })();
+  const snapshotIsStale = snapshotAgeMs === null || snapshotAgeMs > FRESH_WINDOW_MS;
+  const snapshotAgeLabel =
+    snapshotAgeMs === null ? null : `${Math.floor(snapshotAgeMs / (60 * 60 * 1000))}h old`;
 
   if (isLoading) {
     return (
@@ -405,10 +413,16 @@ export default function Inventory() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {snapshotDate && snapshotIsFresh && (
-            <Badge variant="outline" className="text-sm" data-testid="snapshot-badge">
-              Last updated: {snapshotDate}
-            </Badge>
+          {snapshotDate && (
+            snapshotIsStale ? (
+              <Badge variant="destructive" className="text-sm" data-testid="snapshot-badge">
+                Stale data · updated {snapshotDate}{snapshotAgeLabel ? ` (${snapshotAgeLabel})` : ""}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-sm" data-testid="snapshot-badge">
+                Last updated: {snapshotDate}
+              </Badge>
+            )
           )}
           <Button
             onClick={() => setTransferOpen(true)}

@@ -34,8 +34,22 @@ export interface InventoryIntegritySummary {
     latestExtensivSyncAt: string | null;
     extensivMinutesOld: number | null;
   };
+  ledger: {
+    trackedItems: number;
+    driftItems: number;
+    untrackedItems: number;
+  };
+  accuracy: {
+    iraPercent: number | null;
+    physicalCounts90d: number;
+    neverCountedItems: number;
+    driftEvents90d: number;
+    driftNetUnits90d: number;
+    driftAbsorbedValue90d: number;
+  };
   issues: InventoryIntegrityIssue[];
   drift: any[];
+  ledgerDrift: any[];
   openOrders: any[];
   recentMovements: any[];
 }
@@ -79,6 +93,9 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
     bomGapsRes,
     reorderRes,
     movementRes,
+    ledgerStatsRes,
+    ledgerDriftRes,
+    accuracyRes,
   ] = await Promise.all([
     db.execute(sql`
       SELECT
@@ -202,6 +219,108 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       GROUP BY event_type
       ORDER BY count DESC
     `),
+    // COUNT-4: ledger-vs-on-hand tripwire — compare each item's current physical
+    // buckets to the `after` snapshot of its most-recent gateway movement. A gap
+    // means a write bypassed InventoryMovement (no WAC roll, no shrinkage row).
+    db.execute(sql`
+      WITH last_mv AS (
+        SELECT DISTINCT ON (details->>'itemId')
+          details->>'itemId' AS item_id,
+          (details->'after'->>'pivotQty')::numeric AS l_pivot,
+          (details->'after'->>'hildaleQty')::numeric AS l_hildale,
+          (details->'after'->>'currentStock')::numeric AS l_current
+        FROM audit_logs
+        WHERE entity_type IN ('INVENTORY','ITEM')
+          AND details ? 'after'
+          AND details->>'itemId' IS NOT NULL
+        ORDER BY details->>'itemId', timestamp DESC
+      ),
+      tracked AS (
+        SELECT i.id,
+          abs(coalesce(i.pivot_qty,0)-coalesce(l.l_pivot,0))
+          + abs(coalesce(i.hildale_qty,0)-coalesce(l.l_hildale,0))
+          + abs(coalesce(i.current_stock,0)-coalesce(l.l_current,0)) AS drift
+        FROM last_mv l JOIN items i ON i.id = l.item_id
+      )
+      SELECT
+        (SELECT count(*) FROM tracked)::int AS tracked_items,
+        (SELECT count(*) FROM tracked WHERE drift > 0)::int AS drift_items,
+        (SELECT count(*) FROM items i
+           WHERE i.type IN ('finished_product','component')
+             AND (coalesce(i.pivot_qty,0)+coalesce(i.hildale_qty,0)+coalesce(i.current_stock,0)) <> 0
+             AND NOT EXISTS (
+               SELECT 1 FROM audit_logs a
+               WHERE a.entity_type IN ('INVENTORY','ITEM')
+                 AND a.details->>'itemId' = i.id
+                 AND a.details ? 'after'
+             ))::int AS untracked_items
+    `),
+    db.execute(sql`
+      WITH last_mv AS (
+        SELECT DISTINCT ON (details->>'itemId')
+          details->>'itemId' AS item_id,
+          (details->'after'->>'pivotQty')::numeric AS l_pivot,
+          (details->'after'->>'hildaleQty')::numeric AS l_hildale,
+          (details->'after'->>'currentStock')::numeric AS l_current,
+          timestamp AS last_mv_at
+        FROM audit_logs
+        WHERE entity_type IN ('INVENTORY','ITEM')
+          AND details ? 'after'
+          AND details->>'itemId' IS NOT NULL
+        ORDER BY details->>'itemId', timestamp DESC
+      )
+      SELECT
+        i.sku, i.name, i.current_stock, i.hildale_qty, i.pivot_qty, i.available_for_sale_qty,
+        l.l_pivot::int AS ledger_pivot,
+        l.l_hildale::int AS ledger_hildale,
+        l.l_current::int AS ledger_current,
+        l.last_mv_at::text AS last_movement_at,
+        (abs(coalesce(i.pivot_qty,0)-coalesce(l.l_pivot,0))
+         + abs(coalesce(i.hildale_qty,0)-coalesce(l.l_hildale,0))
+         + abs(coalesce(i.current_stock,0)-coalesce(l.l_current,0)))::int AS drift
+      FROM last_mv l JOIN items i ON i.id = l.item_id
+      WHERE abs(coalesce(i.pivot_qty,0)-coalesce(l.l_pivot,0))
+          + abs(coalesce(i.hildale_qty,0)-coalesce(l.l_hildale,0))
+          + abs(coalesce(i.current_stock,0)-coalesce(l.l_current,0)) > 0
+      ORDER BY drift DESC
+      LIMIT 25
+    `),
+    // COUNT-5: IRA + shrinkage/drift. Real physical counts live in
+    // inventory_adjustments / cycle_count_entries (both empty today); MANUAL_COUNT
+    // and INVENTORY_ADJUSTED audit rows carry the drift the system silently absorbed.
+    db.execute(sql`
+      SELECT
+        ((SELECT count(*) FROM inventory_adjustments WHERE created_at > now()-interval '90 days')
+         + (SELECT count(*) FROM cycle_count_entries e JOIN cycle_count_sessions s ON s.id = e.session_id
+              WHERE s.status = 'COMMITTED' AND s.committed_at > now()-interval '90 days'
+                AND e.counted_qty IS NOT NULL))::int AS physical_counts_90d,
+        ((SELECT count(*) FILTER (WHERE difference = 0) FROM inventory_adjustments
+            WHERE created_at > now()-interval '90 days')
+         + (SELECT count(*) FILTER (WHERE variance = 0) FROM cycle_count_entries e
+              JOIN cycle_count_sessions s ON s.id = e.session_id
+              WHERE s.status = 'COMMITTED' AND s.committed_at > now()-interval '90 days'
+                AND e.counted_qty IS NOT NULL))::int AS accurate_counts_90d,
+        (SELECT count(*)::int FROM items i
+           WHERE i.type IN ('finished_product','component')
+             AND NOT EXISTS (SELECT 1 FROM inventory_adjustments a WHERE a.item_id = i.id)
+             AND NOT EXISTS (SELECT 1 FROM cycle_count_entries e
+                              WHERE e.item_id = i.id AND e.counted_qty IS NOT NULL)) AS never_counted_items,
+        (SELECT count(*)::int FROM audit_logs a
+           WHERE a.event_type IN ('MANUAL_COUNT','INVENTORY_ADJUSTED')
+             AND a.timestamp > now()-interval '90 days'
+             AND a.details ? 'quantityChanged'
+             AND (a.details->>'quantityChanged')::numeric <> 0) AS drift_events_90d,
+        (SELECT coalesce(sum((a.details->>'quantityChanged')::numeric),0)::int FROM audit_logs a
+           WHERE a.event_type IN ('MANUAL_COUNT','INVENTORY_ADJUSTED')
+             AND a.timestamp > now()-interval '90 days'
+             AND a.details ? 'quantityChanged') AS drift_net_units_90d,
+        (SELECT coalesce(sum(CASE WHEN (a.details->>'quantityChanged')::numeric < 0
+                    THEN (a.details->>'quantityChanged')::numeric * coalesce(i.wac_unit_cost,0) ELSE 0 END),0)
+           FROM audit_logs a LEFT JOIN items i ON i.id = a.details->>'itemId'
+           WHERE a.event_type IN ('MANUAL_COUNT','INVENTORY_ADJUSTED')
+             AND a.timestamp > now()-interval '90 days'
+             AND a.details ? 'quantityChanged') AS drift_absorbed_value_90d
+    `),
   ]);
 
   const totalsRow = rows(totalsRes)[0] ?? {};
@@ -218,6 +337,27 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
   const staleExtensiv = rows(staleExtensivRes);
   const drift = rows(driftRes);
   const bomGaps = rows(bomGapsRes);
+  const ledgerStatsRow = rows(ledgerStatsRes)[0] ?? {};
+  const ledgerDrift = rows(ledgerDriftRes);
+  const accuracyRow = rows(accuracyRes)[0] ?? {};
+
+  const ledger = {
+    trackedItems: num(ledgerStatsRow.tracked_items),
+    driftItems: num(ledgerStatsRow.drift_items),
+    untrackedItems: num(ledgerStatsRow.untracked_items),
+  };
+
+  const physicalCounts90d = num(accuracyRow.physical_counts_90d);
+  const accurateCounts90d = num(accuracyRow.accurate_counts_90d);
+  const accuracy = {
+    // IRA is only real when physical counts exist; otherwise it is unmeasured, not 100%.
+    iraPercent: physicalCounts90d > 0 ? Math.round((accurateCounts90d / physicalCounts90d) * 100) : null,
+    physicalCounts90d,
+    neverCountedItems: num(accuracyRow.never_counted_items),
+    driftEvents90d: num(accuracyRow.drift_events_90d),
+    driftNetUnits90d: num(accuracyRow.drift_net_units_90d),
+    driftAbsorbedValue90d: num(accuracyRow.drift_absorbed_value_90d),
+  };
 
   const issues = [
     makeIssue("critical", "NEGATIVE_STOCK", "Negative stock rows", negativeRows.length, "A stock field is below zero. Fulfillment and reorder decisions are unsafe until reviewed.", negativeRows),
@@ -227,6 +367,13 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
     makeIssue("warning", "COMPONENT_WAREHOUSE_FIELDS", "Components have warehouse values", wrongComponentWarehouse.length, "Components should use current_stock only. Hildale/Pyvott values here are legacy contamination.", wrongComponentWarehouse),
     makeIssue("info", "CORE_BOM_GAPS", "Core finished products missing BOMs", bomGaps.length, "Core build products without BOMs cannot consume components or calculate build cost correctly.", bomGaps),
     makeIssue("info", "BACKORDER_PRESSURE", "Open backordered units", num(openOrderRow.backordered_units) > 0 ? 1 : 0, `${num(openOrderRow.backordered_units)} units are currently backordered across open sales orders.`, [openOrderRow]),
+    // COUNT-4: writes that bypassed the movement gateway (WAC + shrinkage skipped on those).
+    makeIssue("warning", "LEDGER_DRIFT", "Stock differs from movement ledger", ledger.driftItems, `${ledger.driftItems} of ${ledger.trackedItems} ledgered items have a current on-hand that no longer matches the 'after' snapshot of their most-recent gateway movement. A write reached the stock field outside InventoryMovement, so weighted-average cost and the shrinkage ledger were skipped on it.`, ledgerDrift),
+    makeIssue("info", "LEDGER_UNTRACKED", "Stock with no movement ledger", ledger.untrackedItems, `${ledger.untrackedItems} items hold stock but have zero movement-ledger rows, so their on-hand cannot be reconciled against a ledger (SUM of movements vs on-hand is unprovable for them).`),
+    // COUNT-5: inventory record accuracy. Unmeasured until real physical counts are recorded.
+    makeIssue("warning", "IRA_UNMEASURED", "Inventory record accuracy unmeasured", accuracy.iraPercent === null ? 1 : 0, `No physical counts have been recorded in the last 90 days, so inventory record accuracy cannot be measured. ${accuracy.neverCountedItems} SKUs have never been counted through the app.`),
+    makeIssue("warning", "IRA_LOW", "Inventory record accuracy below target", accuracy.iraPercent !== null && accuracy.iraPercent < 95 ? 1 : 0, `Inventory record accuracy is ${accuracy.iraPercent}% over ${accuracy.physicalCounts90d} counts in the last 90 days (target >=95%).`),
+    makeIssue("info", "DRIFT_ABSORBED", "Unreconciled drift absorbed", accuracy.driftEvents90d, `${accuracy.driftEvents90d} count/adjustment movements in the last 90 days silently corrected stock without a physical count behind them, absorbing $${Math.abs(Math.round(accuracy.driftAbsorbedValue90d)).toLocaleString("en-US")} of shrinkage at WAC (${accuracy.driftNetUnits90d} net units).`),
   ].filter(Boolean) as InventoryIntegrityIssue[];
 
   return {
@@ -248,8 +395,11 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       latestExtensivSyncAt: freshnessRow.latest_sync ?? null,
       extensivMinutesOld: freshnessRow.minutes_old == null ? null : num(freshnessRow.minutes_old),
     },
+    ledger,
+    accuracy,
     issues,
     drift,
+    ledgerDrift,
     openOrders: [openOrderRow],
     recentMovements: rows(movementRes),
   };

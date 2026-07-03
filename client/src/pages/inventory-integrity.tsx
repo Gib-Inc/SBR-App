@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Database, Loader2, ShieldAlert, ShieldCheck, Truck, Warehouse } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardCheck, Database, GitCompareArrows, Loader2, ShieldAlert, ShieldCheck, Truck, Warehouse } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -35,13 +35,30 @@ type IntegritySummary = {
     latestExtensivSyncAt: string | null;
     extensivMinutesOld: number | null;
   };
+  ledger: {
+    trackedItems: number;
+    driftItems: number;
+    untrackedItems: number;
+  };
+  accuracy: {
+    iraPercent: number | null;
+    physicalCounts90d: number;
+    neverCountedItems: number;
+    driftEvents90d: number;
+    driftNetUnits90d: number;
+    driftAbsorbedValue90d: number;
+  };
   issues: IntegrityIssue[];
   drift: Record<string, any>[];
+  ledgerDrift: Record<string, any>[];
   openOrders: Record<string, any>[];
   recentMovements: Record<string, any>[];
 };
 
 const fmt = (value: unknown) => Number(value ?? 0).toLocaleString("en-US");
+
+const fmtMoney = (value: unknown) =>
+  `$${Math.abs(Math.round(Number(value ?? 0))).toLocaleString("en-US")}`;
 
 const fmtDate = (value: string | null | undefined) => {
   if (!value) return "unknown";
@@ -185,6 +202,48 @@ function DriftTable({ rows }: { rows: Record<string, any>[] }) {
   );
 }
 
+function LedgerDriftTable({ rows }: { rows: Record<string, any>[] }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">Ledger Drift — stock changed outside the movement gateway</CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        {rows.length === 0 ? (
+          <div className="p-4 text-sm text-muted-foreground">Every ledgered item matches its last movement snapshot.</div>
+        ) : (
+          <div className="max-h-[420px] overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>SKU</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead className="text-right">Pyvott (ledger→now)</TableHead>
+                  <TableHead className="text-right">Hildale (ledger→now)</TableHead>
+                  <TableHead className="text-right">Current (ledger→now)</TableHead>
+                  <TableHead className="text-right">Drift</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((row) => (
+                  <TableRow key={row.sku}>
+                    <TableCell className="font-medium">{row.sku}</TableCell>
+                    <TableCell className="max-w-[240px] truncate">{row.name}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.ledger_pivot} → {row.pivot_qty}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.ledger_hildale} → {row.hildale_qty}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.ledger_current} → {row.current_stock}</TableCell>
+                    <TableCell className="text-right tabular-nums font-medium text-red-700">{row.drift}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function RecentMovements({ rows }: { rows: Record<string, any>[] }) {
   return (
     <Card>
@@ -262,6 +321,37 @@ export default function InventoryIntegrity() {
         <MetricCard title="Catalog" value={`${fmt(data.totals.finishedProducts)} / ${fmt(data.totals.components)}`} helper="finished products / components" icon={Warehouse} />
       </div>
 
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <MetricCard
+          title="Ledger drift"
+          value={`${fmt(data.ledger.driftItems)} / ${fmt(data.ledger.trackedItems)}`}
+          helper="items changed outside the gateway"
+          icon={GitCompareArrows}
+        />
+        <MetricCard
+          title="Untracked stock"
+          value={fmt(data.ledger.untrackedItems)}
+          helper="no movement ledger — unreconcilable"
+          icon={Database}
+        />
+        <MetricCard
+          title="Record accuracy"
+          value={data.accuracy.iraPercent === null ? "unmeasured" : `${data.accuracy.iraPercent}%`}
+          helper={
+            data.accuracy.physicalCounts90d === 0
+              ? `0 counts in 90d · ${fmt(data.accuracy.neverCountedItems)} never counted`
+              : `${fmt(data.accuracy.physicalCounts90d)} counts in 90d`
+          }
+          icon={ClipboardCheck}
+        />
+        <MetricCard
+          title="Drift absorbed (90d)"
+          value={fmtMoney(data.accuracy.driftAbsorbedValue90d)}
+          helper={`${fmt(data.accuracy.driftEvents90d)} silent count/adjust events`}
+          icon={ShieldAlert}
+        />
+      </div>
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {data.issues.length === 0 ? (
           <Card className="xl:col-span-2">
@@ -272,6 +362,8 @@ export default function InventoryIntegrity() {
           </Card>
         ) : data.issues.map((issue) => <IssueCard key={issue.code} issue={issue} />)}
       </div>
+
+      <LedgerDriftTable rows={data.ledgerDrift} />
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <DriftTable rows={data.drift} />

@@ -3810,28 +3810,26 @@ TOTAL: $${subtotal.toFixed(2)}
               }
               
               const qtyToDeduct = bomEntry.quantityRequired * returnItem.qtyApproved;
-              
-              // Update each field independently - only modify if field has a value
-              const updateData: { hildaleQty?: number; currentStock?: number } = {};
-              
-              if (componentItem.hildaleQty !== null && componentItem.hildaleQty !== undefined) {
-                updateData.hildaleQty = Math.max(0, componentItem.hildaleQty - qtyToDeduct);
-              }
-              if (componentItem.currentStock !== null && componentItem.currentStock !== undefined) {
-                updateData.currentStock = Math.max(0, componentItem.currentStock - qtyToDeduct);
-              }
-              
-              // Track deduction for logging
-              stockDeductions.push({ 
-                itemId: componentItem.id, 
-                sku: componentItem.sku, 
-                qty: qtyToDeduct 
+
+              // Components track stock in currentStock — that is the truth field for
+              // raw materials. hildaleQty/pivotQty on a component is legacy contamination
+              // (see the integrity dashboard's COMPONENT_WAREHOUSE_FIELDS check), and no
+              // component in the catalog holds stock in hildaleQty alone. The prior code
+              // deducted qtyToDeduct from BOTH hildaleQty AND currentStock, writing off
+              // every contaminated component twice over (audit RCV-1). Deduct the single
+              // truth field only. (Routing this write-off through InventoryMovement for a
+              // $-valued shrinkage row is deferred to the Tier B gateway work / MGI-5.)
+              const componentStock = componentItem.currentStock ?? 0;
+              await storage.updateItem(componentItem.id, {
+                currentStock: Math.max(0, componentStock - qtyToDeduct),
               });
-              
-              // Deduct raw material stock - only update fields that have values
-              if (Object.keys(updateData).length > 0) {
-                await storage.updateItem(componentItem.id, updateData);
-              }
+
+              // Track deduction for logging
+              stockDeductions.push({
+                itemId: componentItem.id,
+                sku: componentItem.sku,
+                qty: qtyToDeduct,
+              });
               
               // Create inventory transaction for the component write-off
               try {

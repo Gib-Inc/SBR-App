@@ -1369,7 +1369,8 @@ RULES:
       // Inventory value = the QuickBooks booked Inventory Asset (the authoritative figure),
       // via the ONE shared helper — not a $10/unit mock (which read ~$264K vs QB's ~$126K).
       const { getInventoryValue } = await import("./services/inventory-health-service");
-      const inventoryValue = (await getInventoryValue(db)).value ?? 0;
+      const inventoryValueResult = await getInventoryValue(db);
+      const inventoryValue = inventoryValueResult.value ?? 0;
       
       // Find item with lowest days of cover
       let minDaysOfCover = Infinity;
@@ -1461,6 +1462,9 @@ RULES:
       res.json({
         metrics: {
           inventoryValue: Math.round(inventoryValue),
+          // MEAS-5: label whether this is the QB-booked asset or the WAC-estimate
+          // fallback (which can read ~2x high) so it is never silently authoritative.
+          inventoryValueSource: inventoryValueResult.source,
           daysUntilStockout: Math.floor(minDaysOfCover),
           productionCapacity: maxProducibleUnits,
           activeAlerts,
@@ -1531,7 +1535,8 @@ RULES:
       // Asset — not current_stock×default_cost (which excluded finished-goods on-hand → ~$90K
       // vs QB's ~$126K). Every inventory-value surface now agrees.
       const { getInventoryValue } = await import("./services/inventory-health-service");
-      const totalInventoryValue = (await getInventoryValue(db)).value ?? 0;
+      const inventoryValueResult = await getInventoryValue(db);
+      const totalInventoryValue = inventoryValueResult.value ?? 0;
 
       res.json({
         totalItems,
@@ -1541,6 +1546,7 @@ RULES:
         activeSalesOrders,
         pendingReturns,
         totalInventoryValue: Math.round(totalInventoryValue * 100) / 100,
+        totalInventoryValueSource: inventoryValueResult.source, // MEAS-5: QB-booked vs WAC estimate
       });
     } catch (error: any) {
       console.error("[System Stats] Error:", error);

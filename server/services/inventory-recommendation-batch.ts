@@ -455,11 +455,29 @@ export class InventoryRecommendationBatch {
       }
     }
 
-    // Build backorder map
+    // Build backorder map: units ordered but not yet allocated from stock, per
+    // finished-product item (MC-6 — this was an empty stub, so the AI always saw
+    // backorders=0 and could not weigh unmet demand). Open, non-shipped orders
+    // only; SHIPPED/terminal orders carry no live backorder. Backlog is small, so
+    // fetch the lines in parallel.
     const backorderMap = new Map<string, number>();
-    for (const so of salesOrders) {
-      if (!so.isHistorical && so.status !== "FULFILLED" && so.status !== "DELIVERED" && so.status !== "CANCELLED") {
-        // Would need to check SO lines for actual backorders
+    const openOrders = salesOrders.filter(
+      (so) =>
+        !so.isHistorical &&
+        so.status !== "FULFILLED" &&
+        so.status !== "DELIVERED" &&
+        so.status !== "SHIPPED" &&
+        so.status !== "CANCELLED",
+    );
+    const openOrderLines = await Promise.all(
+      openOrders.map((so) => this.storage.getSalesOrderLines(so.id)),
+    );
+    for (const lines of openOrderLines) {
+      for (const line of lines) {
+        const bo = line.backorderQty ?? 0;
+        if (bo > 0 && line.productId) {
+          backorderMap.set(line.productId, (backorderMap.get(line.productId) || 0) + bo);
+        }
       }
     }
 

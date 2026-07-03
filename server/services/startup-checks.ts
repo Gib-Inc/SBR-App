@@ -38,6 +38,7 @@ const REQUIRED_TABLES = [
   "historical_monthly_sales",
   "marketing_recommendations",
   "ad_metrics_daily",
+  "inventory_value_snapshots",
 ] as const;
 
 const FX_INDUSTRIES_LEAD_TIME = 21;
@@ -102,6 +103,20 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
     );
     CREATE INDEX IF NOT EXISTS inventory_lots_item_id_idx ON inventory_lots(item_id);
     CREATE INDEX IF NOT EXISTS inventory_lots_received_at_idx ON inventory_lots(received_at);
+  `,
+  inventory_value_snapshots: `
+    CREATE TABLE IF NOT EXISTS inventory_value_snapshots (
+      id              VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      snapshot_date   DATE NOT NULL UNIQUE,
+      total_value_app NUMERIC NOT NULL DEFAULT 0,
+      qb_inventory    NUMERIC,
+      finished_value  NUMERIC NOT NULL DEFAULT 0,
+      component_value NUMERIC NOT NULL DEFAULT 0,
+      dead_value      NUMERIC NOT NULL DEFAULT 0,
+      skus_with_stock INTEGER NOT NULL DEFAULT 0,
+      captured_at     TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS inventory_value_snapshots_date_idx ON inventory_value_snapshots(snapshot_date);
   `,
   lot_consumption_events: `
     CREATE TABLE IF NOT EXISTS lot_consumption_events (

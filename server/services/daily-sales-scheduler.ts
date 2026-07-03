@@ -382,6 +382,17 @@ async function runNightlyAggregation(): Promise<void> {
     console.warn("[Cash Command] Nightly obligation refresh failed:", err?.message ?? err);
   }
 
+  // MEAS-2: record one inventory-value snapshot for today so the value trend
+  // accrues nightly. Fire-and-forget + lazy import: never affect daily sales.
+  try {
+    const { db } = await import("../db");
+    const { captureInventoryValueSnapshot } = await import("./inventory-health-service");
+    const snap = await captureInventoryValueSnapshot(db);
+    console.log(`[Inventory Value] Nightly snapshot ${snap.date}: $${Math.round(snap.totalValueApp).toLocaleString("en-US")} (app WAC)`);
+  } catch (err: any) {
+    console.warn("[Inventory Value] Nightly snapshot failed:", err?.message ?? err);
+  }
+
   // Schedule the next run
   scheduleNextRun();
 }
@@ -420,6 +431,15 @@ export function initializeDailySalesScheduler(): void {
   backfillDailySales(14)
     .then((r) => console.log(`[Daily Sales] Boot self-heal: ${r.processed} day(s) recomputed, ${r.errors} error(s)`))
     .catch((err) => console.error("[Daily Sales] Boot self-heal failed:", err?.message ?? err));
+
+  // MEAS-2: capture today's inventory-value snapshot at boot so the trend has a
+  // point on deploy, not only after the first 11:59 PM tick. Fire-and-forget.
+  (async () => {
+    const { db } = await import("../db");
+    const { captureInventoryValueSnapshot } = await import("./inventory-health-service");
+    const snap = await captureInventoryValueSnapshot(db);
+    console.log(`[Inventory Value] Boot snapshot ${snap.date}: $${Math.round(snap.totalValueApp).toLocaleString("en-US")} (app WAC)`);
+  })().catch((err) => console.warn("[Inventory Value] Boot snapshot failed:", err?.message ?? err));
 
   // Schedule the recurring run
   scheduleNextRun();

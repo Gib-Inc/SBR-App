@@ -19,6 +19,7 @@ interface Resp {
   abc?: { a: { skus: number; value: number }; b: { skus: number; value: number }; c: { skus: number; value: number } };
   agingFinished?: { onHandValue: number; deadValue: number; deadSkus: number };
   gmroi?: { annualizedGrossProfit: number | null; gmroiApp: number | null; gmroiQb: number | null };
+  valueTrend?: { date: string; totalValueApp: number; qbInventory: number | null }[];
 }
 const money = (v: number | null | undefined) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString("en-US"));
 const range = (a: number | null, b: number | null, suffix: string) => {
@@ -64,6 +65,10 @@ export function InventoryHealthCard() {
           </div>
         ) : null}
 
+        {data.valueTrend && data.valueTrend.length > 0 ? (
+          <ValueTrend points={data.valueTrend} />
+        ) : null}
+
         {data.valuationGap != null && Math.abs(data.valuationGap) > 10000 ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300 flex items-start gap-1.5">
             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -78,6 +83,44 @@ export function InventoryHealthCard() {
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+function ValueTrend({ points }: { points: { date: string; totalValueApp: number }[] }) {
+  const vals = points.map((p) => p.totalValueApp);
+  const first = vals[0];
+  const last = vals[vals.length - 1];
+  const delta = last - first;
+  const W = 240, H = 32;
+  // Sparkline path (skip when only one point — nothing to draw yet).
+  let path = "";
+  if (vals.length > 1) {
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const span = max - min || 1;
+    path = vals
+      .map((v, i) => {
+        const x = (i / (vals.length - 1)) * W;
+        const y = H - ((v - min) / span) * H;
+        return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+  }
+  return (
+    <div className="rounded-xl border p-3 bg-card">
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-muted-foreground">Inventory value trend</div>
+        <div className="text-[11px] text-muted-foreground">
+          {points.length === 1
+            ? "tracking started today"
+            : <>{money(first)} → {money(last)} <span className={delta > 0 ? "text-amber-600" : delta < 0 ? "text-emerald-600" : ""}>({delta >= 0 ? "+" : "-"}{money(Math.abs(delta))})</span> over {points.length}d</>}
+        </div>
+      </div>
+      {path ? (
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="mt-2 w-full h-8">
+          <path d={path} fill="none" stroke="currentColor" strokeWidth={1.5} className="text-muted-foreground" />
+        </svg>
+      ) : null}
+    </div>
   );
 }
 

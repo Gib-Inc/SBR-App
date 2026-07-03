@@ -51,10 +51,16 @@ export interface InventoryGmroi {
   gmroiApp: number | null;         // annualized gross profit ÷ app-WAC inventory
   gmroiQb: number | null;          // annualized gross profit ÷ QB inventory
 }
+export interface InventoryValuePoint {
+  date: string;                    // snapshot_date (YYYY-MM-DD)
+  totalValueApp: number;
+  qbInventory: number | null;
+}
 export interface InventoryHealth extends InventoryHealthBase {
   abc: { a: AbcClass; b: AbcClass; c: AbcClass };  // where the inventory dollars sit
   agingFinished: InventoryAging;   // staleness from real sales-order history
   gmroi: InventoryGmroi;           // gross-margin return on inventory investment
+  valueTrend: InventoryValuePoint[]; // MEAS-2: daily inventory-value history (oldest→newest)
 }
 
 /** Pure: turnover/DIO + coverage from gathered aggregates. */
@@ -263,11 +269,14 @@ export async function getInventoryHealth(db: DB): Promise<InventoryHealth> {
     gmroiQb: gmroiOf(qbInventory),
   };
 
+  const valueTrend = await getInventoryValueTrend(db, 30);
+
   return {
     ...base,
     abc,
     agingFinished,
     gmroi,
+    valueTrend,
     notes: [
       ...base.notes,
       "ABC is by on-hand dollar value (Pareto): A = the SKUs holding the first 80% of inventory value, B = the next 15%, C = the last 5% — count the A items first.",
@@ -275,4 +284,47 @@ export async function getInventoryHealth(db: DB): Promise<InventoryHealth> {
       "GMROI = annualized gross margin ÷ inventory at cost; directional while COGS is the 35% plug, and a range because the app over-values inventory vs QuickBooks.",
     ],
   };
+}
+
+/** MEAS-2: the daily inventory-value history (oldest→newest), for a value trend.
+ *  Empty until captureInventoryValueSnapshot has run at least once. */
+export async function getInventoryValueTrend(db: DB, days = 30): Promise<InventoryValuePoint[]> {
+  const r = rows(await db.execute(sql`
+    SELECT snapshot_date::text AS date, total_value_app, qb_inventory
+    FROM inventory_value_snapshots
+    WHERE snapshot_date >= (now() AT TIME ZONE 'America/Denver')::date - ${days}::int
+    ORDER BY snapshot_date ASC`));
+  return r.map((x: any) => ({
+    date: x.date,
+    totalValueApp: num(x.total_value_app),
+    qbInventory: x.qb_inventory != null ? num(x.qb_inventory) : null,
+  }));
+}
+
+/** MEAS-2: persist ONE inventory-value row for today (Mountain-time date), idempotent
+ *  per day (re-running updates it). Read-only w.r.t. stock — it only records value.
+ *  Called by the nightly scheduler and once at boot so the trend accrues even on days
+ *  nobody opens the page. Reuses getInventoryHealth so the snapshot matches what's shown. */
+export async function captureInventoryValueSnapshot(db: DB): Promise<{ date: string; totalValueApp: number }> {
+  const h = await getInventoryHealth(db);
+  const finishedValue = h.agingFinished.onHandValue;
+  const componentValue = r2(Math.max(0, h.inventoryValueApp - finishedValue));
+  const res = rows(await db.execute(sql`
+    INSERT INTO inventory_value_snapshots
+      (snapshot_date, total_value_app, qb_inventory, finished_value, component_value, dead_value, skus_with_stock, captured_at)
+    VALUES (
+      (now() AT TIME ZONE 'America/Denver')::date,
+      ${h.inventoryValueApp}, ${h.qbInventory}, ${finishedValue}, ${componentValue},
+      ${h.agingFinished.deadValue}, ${h.skusWithStock}, now()
+    )
+    ON CONFLICT (snapshot_date) DO UPDATE SET
+      total_value_app = EXCLUDED.total_value_app,
+      qb_inventory    = EXCLUDED.qb_inventory,
+      finished_value  = EXCLUDED.finished_value,
+      component_value = EXCLUDED.component_value,
+      dead_value      = EXCLUDED.dead_value,
+      skus_with_stock = EXCLUDED.skus_with_stock,
+      captured_at     = now()
+    RETURNING snapshot_date::text AS date, total_value_app`))[0] || {};
+  return { date: res.date, totalValueApp: num(res.total_value_app) };
 }

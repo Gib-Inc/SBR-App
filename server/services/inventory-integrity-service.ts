@@ -146,6 +146,14 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       SELECT id, sku, name, current_stock, hildale_qty, pivot_qty, available_for_sale_qty
       FROM items
       WHERE type = 'finished_product' AND current_stock <> 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM data_reconciliation_log drl
+          WHERE drl.data_type = 'inventory_integrity'
+            AND drl.entity_key = items.sku
+            AND drl.field = 'legacy_field_cleanup'
+            AND drl.action = 'KEPT'
+        )
       ORDER BY abs(current_stock) DESC, sku
       LIMIT 25
     `),
@@ -154,6 +162,14 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       FROM items
       WHERE type = 'component'
         AND (hildale_qty <> 0 OR pivot_qty <> 0 OR available_for_sale_qty <> 0)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM data_reconciliation_log drl
+          WHERE drl.data_type = 'inventory_integrity'
+            AND drl.entity_key = items.sku
+            AND drl.field = 'legacy_field_cleanup'
+            AND drl.action = 'KEPT'
+        )
       ORDER BY abs(hildale_qty) + abs(pivot_qty) + abs(available_for_sale_qty) DESC, sku
       LIMIT 25
     `),
@@ -497,10 +513,12 @@ export async function applyInventoryIntegrityAction(
   const reason = input.reason?.trim() || "Reviewed from Inventory Integrity Review/Fix mode.";
 
   if (input.action === "MARK_LEGACY_CLEANUP") {
+    // Stable marker field: the summary queries exclude SKUs with this decision,
+    // so the reviewed row actually drops off the legacy-contamination lists.
     await logIntegrityAction({
       sku: item.sku,
       action: "KEPT",
-      field: input.field ?? null,
+      field: "legacy_field_cleanup",
       reason: `Marked as legacy field cleanup. ${reason}`,
     });
     return { ok: true, message: `${item.sku} marked as legacy field cleanup.` };

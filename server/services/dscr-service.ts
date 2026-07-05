@@ -57,6 +57,24 @@ export function dscrVerdict(
   return { dscr, status };
 }
 
+/**
+ * Cap the DSCR band when principal is UNKNOWN. With principal floored to 0 the
+ * denominator (interest only) is a lower bound, so the ratio is a best-case
+ * interest-coverage UPPER bound. It must therefore never read HEALTHY — a rosy
+ * "1.81 HEALTHY" that hides the unpaid principal is exactly the flattering-the-
+ * business failure this service's anti-hallucination contract exists to prevent.
+ * Real principal only ever LOWERS the ratio, so downgrade HEALTHY→WARNING; leave
+ * CRITICAL / CALCULATION_GAPPED untouched (they can't get better with more debt).
+ * Pure, unit-tested.
+ */
+export function capStatusForUnknownPrincipal(
+  status: DscrStatus,
+  principalKnown: boolean,
+): DscrStatus {
+  if (principalKnown) return status;
+  return status === "HEALTHY" ? "WARNING" : status;
+}
+
 export async function computeDscr(db: DB): Promise<DscrResult> {
   const snap = rows(await db.execute(sql`
     select net_income, captured_at::date as as_of
@@ -65,9 +83,16 @@ export async function computeDscr(db: DB): Promise<DscrResult> {
   const netIncome = snap?.net_income != null ? num(snap.net_income) : null;
   const asOf = snap?.as_of ?? null;
 
+  // Debt-service interest = BOTH debt-interest accounts in this QB realm. Reading only
+  // 'Interest, Bank Fees & Service Charges' missed 'Interest Expense' entirely (a real
+  // debt-interest line). Explicit list, not ILIKE, so pure operating-fee accounts
+  // ('Bank Fees & Service Charges', 'Merchant Account Fees' — NOT debt service) can't
+  // leak in. The same set feeds the numerator add-back and the denominator, so the
+  // ratio stays internally consistent.
   const intRow = rows(await db.execute(sql`
     select coalesce(sum(amount),0) as interest from qb_pl_detail
-    where account_name = 'Interest, Bank Fees & Service Charges' and txn_date >= (current_date - 30)`))[0];
+    where account_name in ('Interest, Bank Fees & Service Charges', 'Interest Expense')
+      and txn_date >= (current_date - 30)`))[0];
   const interest = intRow ? num(intRow.interest) : null;
 
   // Operator-entered monthly debt principal (cash_obligations debt rows). 0/empty => unknown.
@@ -88,7 +113,10 @@ export async function computeDscr(db: DB): Promise<DscrResult> {
   const debtService = interest != null ? r2(interest + principalEntered) : null;
   const interestCoverage = operatingCashFlow != null && interest && interest > 0 ? r2(operatingCashFlow / interest) : null;
 
-  const { dscr, status } = dscrVerdict(operatingCashFlow, debtService);
+  const verdict = dscrVerdict(operatingCashFlow, debtService);
+  const dscr = verdict.dscr;
+  // Never let an interest-only (principal-unknown) ratio read HEALTHY.
+  const status = capStatusForUnknownPrincipal(verdict.status, principalKnown);
 
   return {
     asOf,

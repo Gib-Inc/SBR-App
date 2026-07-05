@@ -12216,7 +12216,19 @@ Notes: ${po.notes || 'None'}
   // IMPORT OPERATIONS
   // ============================================================================
 
-  const upload = multer({ storage: multer.memoryStorage() });
+  // P12b: cap size + allowlist extensions. Serves 5 routes with mixed content
+  // (CSV/XLSX imports, invoice images, financial docs) — one combined allowlist
+  // still blocks executables/scripts, and 20MB bounds the memory-storage DoS.
+  const UPLOAD_ALLOWED_EXT = new Set(["csv", "xlsx", "xls", "pdf", "png", "jpg", "jpeg", "webp", "heic"]);
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+    fileFilter: (_req, file, cb) => {
+      const ext = file.originalname.split(".").pop()?.toLowerCase() ?? "";
+      if (UPLOAD_ALLOWED_EXT.has(ext)) return cb(null, true);
+      cb(new Error(`File type .${ext} not allowed (accepted: ${Array.from(UPLOAD_ALLOWED_EXT).join(", ")})`));
+    },
+  });
 
   app.post("/api/import/upload", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
     try {

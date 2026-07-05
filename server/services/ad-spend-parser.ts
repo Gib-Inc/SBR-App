@@ -237,7 +237,7 @@ export function readSpreadsheetRows(buffer: Buffer, fileName = "", mime = ""): R
   if (isCsv) {
     return parseCsv(buffer, { columns: true, skip_empty_lines: true, relax_column_count: true, bom: true }) as Record<string, any>[];
   }
-  const wb = XLSX.read(buffer, { type: "buffer" });
+  const wb = XLSX.read(buffer, { type: "buffer", cellFormula: false, cellHTML: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) return [];
   return XLSX.utils.sheet_to_json(ws, { defval: null }) as Record<string, any>[];

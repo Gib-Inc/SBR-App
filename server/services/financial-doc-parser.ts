@@ -174,7 +174,7 @@ const BS_LABELS: Record<keyof Omit<BalanceSheetFields, "asOf" | "basis" | "loans
 export function parseBalanceSheetXlsx(buffer: Buffer): ParsedDoc<BalanceSheetFields> {
   let wb: XLSX.WorkBook;
   try {
-    wb = XLSX.read(buffer, { type: "buffer" });
+    wb = XLSX.read(buffer, { type: "buffer", cellFormula: false, cellHTML: false });
   } catch (e: any) {
     return emptyBS(`Could not read the spreadsheet: ${e?.message ?? e}`);
   }

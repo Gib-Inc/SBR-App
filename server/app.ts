@@ -472,6 +472,15 @@ export default async function runApp(
   })();
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    // P12b: multer limit/filter violations are client errors, not server faults —
+    // map them to 413/400 instead of a generic 500 (and don't rethrow user error).
+    if (err?.name === "MulterError") {
+      const status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+      return res.status(status).json({ message: err.code === "LIMIT_FILE_SIZE" ? "File too large (20 MB limit)" : err.message });
+    }
+    if (typeof err?.message === "string" && err.message.includes("not allowed (accepted:")) {
+      return res.status(400).json({ message: err.message }); // fileFilter rejection
+    }
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 

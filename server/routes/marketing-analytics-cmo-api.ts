@@ -32,7 +32,16 @@ import type { InsertAdMetricsDaily } from '@shared/schema';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
 
-const adCsvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const adCsvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+  // P12b: ad reports are CSV/XLSX only — block anything else at the door.
+  fileFilter: (_req, file, cb) => {
+    const ext = file.originalname.split(".").pop()?.toLowerCase() ?? "";
+    if (ext === "csv" || ext === "xlsx" || ext === "xls") return cb(null, true);
+    cb(new Error(`File type .${ext} not allowed (accepted: csv, xlsx, xls)`));
+  },
+});
 
 // ============================================================================
 // AD CSV PARSING UTILITIES

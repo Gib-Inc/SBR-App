@@ -50,7 +50,7 @@ export class ImportService {
         trim: true,
       });
     } else if (ext === "xlsx" || ext === "xls") {
-      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const workbook = XLSX.read(buffer, { type: "buffer", cellFormula: false, cellHTML: false });
       const firstSheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[firstSheetName];
       return XLSX.utils.sheet_to_json(worksheet);

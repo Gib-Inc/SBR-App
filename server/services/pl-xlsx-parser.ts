@@ -54,7 +54,7 @@ export function parsePLWorkbook(buffer: Buffer): ParseResult {
   const warnings: string[] = [];
   let wb: XLSX.WorkBook;
   try {
-    wb = XLSX.read(buffer, { type: "buffer" });
+    wb = XLSX.read(buffer, { type: "buffer", cellFormula: false, cellHTML: false });
   } catch (e: any) {
     return { ok: false, error: `Could not read the spreadsheet: ${e?.message ?? e}`, months: [], warnings };
   }

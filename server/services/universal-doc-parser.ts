@@ -158,7 +158,7 @@ export function normalizeTabular(buffer: Buffer, fileName = "", mime = ""): { co
       bom: true,
     }) as any[][];
   } else {
-    const wb = XLSX.read(buffer, { type: "buffer" });
+    const wb = XLSX.read(buffer, { type: "buffer", cellFormula: false, cellHTML: false });
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws) throw new Error("No worksheet in the file");
     grid = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: null }) as any[][];

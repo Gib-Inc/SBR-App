@@ -66,6 +66,15 @@ describe("D3 payment-terms math", () => {
     expect(dailyDebitTotal([])).toBe(0);
   });
 
+  it("isRateUnreliable flags a scraped APR on factor/revenue-share facilities (Fresh Funding '9.72%' lie)", async () => {
+    const { isRateUnreliable } = await import("./credit-lines-service");
+    expect(isRateUnreliable("factor", 9.72)).toBe(true);        // the MCA with a scraped % — the lie
+    expect(isRateUnreliable("revenue_share", 17)).toBe(true);   // rev-share has no APR
+    expect(isRateUnreliable("factor", null)).toBe(false);       // no apr shown → nothing to mistrust
+    expect(isRateUnreliable("apr", 36)).toBe(false);            // a real APR facility
+    expect(isRateUnreliable(null, 11.5)).toBe(false);           // unclassified → apr presumed real
+  });
+
   it("isDebtServiceBlind trips above 50% of balance without terms (the Jul 2026 prod state — $1.15M, 0 terms — trips it)", async () => {
     const { isDebtServiceBlind } = await import("./credit-lines-service");
     expect(isDebtServiceBlind(1154477, 1154477)).toBe(true);  // 100% blind (verified prod state)

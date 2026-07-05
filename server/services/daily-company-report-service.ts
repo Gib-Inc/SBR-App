@@ -191,6 +191,20 @@ export async function runDailyCompanyReport(opts?: { skipRefresh?: boolean }): P
         );
       }
     } catch { /* credit lines unavailable — runway/DSCR gaps already surface elsewhere */ }
+    // G #15 TRIPWIRE: a breached covenant is a standing solvency alarm, not a footnote —
+    // the Fresh Funding anti-stacking breach (~$175K accelerable) went unmonitored for weeks.
+    try {
+      const cov: any = await db.execute(sql`
+        SELECT facility_name, covenant_type, coalesce(amount_at_risk, 0)::float8 AS at_risk, description
+        FROM debt_covenants WHERE status = 'breached' ORDER BY at_risk DESC`);
+      const breached = (cov.rows ?? cov ?? []) as any[];
+      report.financials.covenantBreaches = breached.length;
+      for (const b of breached) {
+        anomalies.push(
+          `COVENANT BREACH: ${b.facility_name} ${b.covenant_type} — $${Math.round(Number(b.at_risk)).toLocaleString()} accelerable. ${b.description ?? ""}`.trim(),
+        );
+      }
+    } catch { /* covenants table not yet migrated — nothing to alarm on */ }
   } catch (e: any) {
     anomalies.push(`financials snapshot failed: ${e?.message ?? e}`);
   }

@@ -342,6 +342,38 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
             ADD COLUMN IF NOT EXISTS next_debit_date date,
             ADD COLUMN IF NOT EXISTS qb_missing_since timestamptz`,
   },
+  {
+    // G #14: the apr column conflates MCA factor rates with true APRs (Fresh Funding
+    // scraped 9.72% from the QB name while its real factor cost is far higher; Shopify
+    // Capital's 17% revenue-share reads NULL). rate_type makes the pricing model
+    // EXPLICIT ('apr' | 'factor' | 'revenue_share') so cost-of-capital math and the
+    // avalanche ranker stop trusting a number that lies for a third of the stack.
+    name: "credit_lines.rate_structure",
+    sql: `ALTER TABLE credit_lines
+            ADD COLUMN IF NOT EXISTS rate_type text,
+            ADD COLUMN IF NOT EXISTS factor_rate numeric,
+            ADD COLUMN IF NOT EXISTS original_principal numeric,
+            ADD COLUMN IF NOT EXISTS term_months integer,
+            ADD COLUMN IF NOT EXISTS holdback_pct numeric`,
+  },
+  {
+    // G #15: covenant tracking. The Fresh Funding anti-stacking breach (~$175K
+    // accelerable) was the single largest near-term solvency event and completely
+    // unmonitored — a breach converts a short runway into insolvency instantly.
+    // Operator-maintained rows; the daily report alarms on status='breached'.
+    name: "debt_covenants.table",
+    sql: `CREATE TABLE IF NOT EXISTS debt_covenants (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            facility_name text NOT NULL,
+            covenant_type text NOT NULL,
+            description text,
+            status text NOT NULL DEFAULT 'active',
+            amount_at_risk numeric,
+            source text,
+            noted_at timestamptz NOT NULL DEFAULT now(),
+            updated_at timestamptz NOT NULL DEFAULT now()
+          )`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

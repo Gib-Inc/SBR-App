@@ -127,9 +127,24 @@ export interface CreditLine {
   paymentFrequency: string | null; // daily | weekly | biweekly | monthly
   nextDebitDate: string | null;
   monthlyDebtService: number | null; // cadence-normalized (daily ×21, weekly ×4.33)
+  // G #14 rate structure: how this facility is actually priced. 'apr' = the apr column
+  // is real; 'factor' = MCA factor pricing (the apr column, if set, is a scraped LIE);
+  // 'revenue_share' = % of sales (Shopify Capital) — no APR exists.
+  rateType: "apr" | "factor" | "revenue_share" | null;
+  factorRate: number | null;        // e.g. 1.35 (repay $1.35 per $1) — operator-entered
+  originalPrincipal: number | null;
+  termMonths: number | null;
+  holdbackPct: number | null;       // revenue-share % for MCA/rev-share facilities
+  rateUnreliable: boolean;          // apr is displayed but the pricing model says it's not an APR
   // trust indicators
   qbMissingSince: string | null;    // ghost facility: vanished from QB, balance unverifiable
   staleness: "fresh" | "amber" | "red" | "manual"; // balance age: >48h amber, >7d red
+}
+
+/** Pure (G #14): the apr column can't be trusted when the facility is factor/revenue-share
+ *  priced — a scraped "9.72%" on an MCA understates true cost several-fold. Unit-tested. */
+export function isRateUnreliable(rateType: string | null, apr: number | null): boolean {
+  return (rateType === "factor" || rateType === "revenue_share") && apr != null;
 }
 
 export async function computeCreditLines(): Promise<{
@@ -152,7 +167,8 @@ export async function computeCreditLines(): Promise<{
 }> {
   const rs = rows(await db.execute(sql`
     SELECT id, name, type, qb_account_name, balance, credit_limit, apr, due_day, balance_synced_at,
-           payment_amount, payment_frequency, next_debit_date, qb_missing_since
+           payment_amount, payment_frequency, next_debit_date, qb_missing_since,
+           rate_type, factor_rate, original_principal, term_months, holdback_pct
     FROM credit_lines
     WHERE COALESCE(is_active, true) = true
     ORDER BY balance DESC NULLS LAST`));
@@ -179,6 +195,12 @@ export async function computeCreditLines(): Promise<{
       paymentAmount, paymentFrequency,
       nextDebitDate: r.next_debit_date ? String(r.next_debit_date).slice(0, 10) : null,
       monthlyDebtService: monthlyEquivalent(paymentAmount, paymentFrequency),
+      rateType: (r.rate_type as CreditLine["rateType"]) ?? null,
+      factorRate: n(r.factor_rate),
+      originalPrincipal: n(r.original_principal),
+      termMonths: r.term_months != null ? Number(r.term_months) : null,
+      holdbackPct: n(r.holdback_pct),
+      rateUnreliable: isRateUnreliable(r.rate_type ?? null, n(r.apr)),
       qbMissingSince: r.qb_missing_since ? new Date(r.qb_missing_since).toISOString() : null,
       staleness,
     };
@@ -258,6 +280,8 @@ export async function updateCreditLine(id: string, patch: Record<string, any>): 
     creditLimit: "credit_limit", apr: "apr", dueDay: "due_day", statementDay: "statement_day",
     name: "name", type: "type", notes: "notes", isActive: "is_active",
     paymentAmount: "payment_amount", paymentFrequency: "payment_frequency", nextDebitDate: "next_debit_date",
+    rateType: "rate_type", factorRate: "factor_rate", originalPrincipal: "original_principal",
+    termMonths: "term_months", holdbackPct: "holdback_pct",
   };
   for (const [k, col] of Object.entries(allow)) {
     if (patch[k] !== undefined) sets.push(sql`${sql.raw(col)} = ${patch[k]}`);

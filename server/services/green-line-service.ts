@@ -146,7 +146,7 @@ export async function computeDebtAvalanche(db: DB): Promise<{
   ghosts: { count: number; balance: number; names: string[] };
 }> {
   const all = rows(await db.execute(sql`
-    select name, type, balance, apr, payment_amount, payment_frequency, qb_missing_since
+    select name, type, balance, apr, rate_type, payment_amount, payment_frequency, qb_missing_since
     from credit_lines where is_active and balance > 0`));
   const ghostRows = all.filter((rr: any) => rr.qb_missing_since != null);
   // Ghosts are excluded from the payoff ORDER only (a settlement number needs a living
@@ -170,8 +170,12 @@ export async function computeDebtAvalanche(db: DB): Promise<{
   // pay 9.5% SBA debt before the 36% HELOC.
   const ranked = rs
     .map((rr: any) => {
-      const tier = debtTier(String(rr.name || ""), String(rr.type || ""));
-      const apr = rr.apr == null ? null : num(rr.apr);
+      // G #14: an EXPLICIT rate_type ('factor'/'revenue_share') marks MCA-style pricing
+      // even when the name-keyword heuristic misses it (rename-proof) — and it means the
+      // apr column is a scraped lie for this facility, so never rank or display it as real.
+      const explicitMca = rr.rate_type === "factor" || rr.rate_type === "revenue_share";
+      const tier = explicitMca ? ("mca" as Tier) : debtTier(String(rr.name || ""), String(rr.type || ""));
+      const apr = rr.apr == null || explicitMca ? null : num(rr.apr);
       return { name: String(rr.name), type: String(rr.type || ""), balance: num(rr.balance), apr, tier };
     })
     .sort((a, b) => {

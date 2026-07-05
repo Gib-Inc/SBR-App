@@ -6808,12 +6808,20 @@ export class PostgresStorage implements IStorage {
   }
 
   async getSalesOrdersByDateRange(startDate: Date, endDate: Date): Promise<SalesOrder[]> {
+    // P1 #13: window on the BUSINESS date (orderDate), not the row-insert time.
+    // createdAt windowing let a backfill import (createdAt=now, orderDate=months
+    // ago) inject old GMV into the current 30-day ROAS/MER numerator — and it
+    // silently diverged from the MemStorage twin (which windows on orderDate),
+    // so tests couldn't catch it. NOTE deliberately NO is_historical filter:
+    // that's a lifecycle flag (completed orders move to History), not a backfill
+    // marker — filtering it drops most real completed revenue. orderDate
+    // windowing alone keeps backfilled old orders out of current windows.
     return await this.db.select().from(schema.salesOrders)
       .where(and(
-        gte(schema.salesOrders.createdAt, startDate),
-        lte(schema.salesOrders.createdAt, endDate)
+        gte(schema.salesOrders.orderDate, startDate),
+        lte(schema.salesOrders.orderDate, endDate)
       ))
-      .orderBy(desc(schema.salesOrders.createdAt));
+      .orderBy(desc(schema.salesOrders.orderDate));
   }
 
   async getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined> {

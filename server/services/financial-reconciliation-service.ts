@@ -108,6 +108,60 @@ export async function computeFinancialReconciliation(db: DB): Promise<{ checks: 
   add("debt", "Financing debt", num(cl?.v), "credit_lines (active balances)", bookDebt, "QB liabilities − A/P (approx)", 10, 40000, false,
     "App financing debt vs QuickBooks liabilities net of A/P. Approximate (QB liabilities also carry taxes/deferred), so a modest gap is normal; a large drift flags stale facility balances.");
 
+  // 5. GOOGLE AD-SPEND CONTINUITY (P2 #24) — trailing 30d vs the prior 30d at the SINGLE
+  //    authoritative grain (_windsor when present, else ACCOUNT — never both; the grain-fanout
+  //    double-count is exactly what this guards against re-emerging). A dead Windsor feed or a
+  //    re-introduced multi-grain sum shows up as a collapse/spike vs the prior window.
+  const gWin = rows(await db.execute(sql`
+    with grain as (
+      select case when exists (select 1 from ad_metrics_daily
+                               where platform ilike '%google%' and sku='_windsor'
+                                 and date >= current_date - 60)
+                  then '_windsor' else 'ACCOUNT' end as g)
+    select
+      coalesce(sum(spend) filter (where date >= current_date - 30), 0)::float8 as cur,
+      coalesce(sum(spend) filter (where date >= current_date - 60 and date < current_date - 30), 0)::float8 as prior
+    from ad_metrics_daily, grain
+    where platform ilike '%google%' and sku = grain.g`))[0];
+  add("google_spend_feed", "Google ad-spend continuity (30d vs prior 30d)",
+    num(gWin?.cur), "ad_metrics_daily single-grain, trailing 30d",
+    num(gWin?.prior), "same source, prior 30d window", 60, 3000, false,
+    "The Google feed's own recent history is the reference. A collapse means the Windsor sync died (the Meta failure mode); a spike means the grain-fanout double-count is back or spend genuinely jumped — either way, look before trusting ROAS/MER.");
+
+  // 6. META AD-SPEND CONTINUITY (P2 #24) — same guard for the compliant tracker snapshots
+  //    (Meta's ONLY canonical source post-May-2026; its API sync already died once, silently,
+  //    on Jun 9). Overlap-weighted so multi-week snapshots allocate to the window correctly.
+  const mWin = rows(await db.execute(sql`
+    select
+      coalesce(sum(spend * greatest(0, least(period_end, current_date) - greatest(period_start, current_date - 30) + 1)::float8
+                          / nullif(period_end - period_start + 1, 0)), 0)::float8 as cur,
+      coalesce(sum(spend * greatest(0, least(period_end, current_date - 31) - greatest(period_start, current_date - 60) + 1)::float8
+                          / nullif(period_end - period_start + 1, 0)), 0)::float8 as prior
+    from marketing_spend_snapshots
+    where platform ilike '%meta%' and coalesce(superseded, false) = false
+      and period_start is not null and period_end is not null`))[0];
+  add("meta_spend_feed", "Meta ad-spend continuity (30d vs prior 30d)",
+    num(mWin?.cur), "marketing_spend_snapshots (compliant tracker), trailing 30d",
+    num(mWin?.prior), "same source, prior 30d window", 60, 3000, false,
+    "Meta's canonical source is the manually-uploaded compliant tracker — if uploads stop, canonical Meta silently reads 0 and MER inflates. A collapse here = upload the current Meta report before trusting the Governor.");
+
+  // 7. MONTHLY REVENUE vs QUICKBOOKS (P2 #24) — the prior CLOSED month's order-ledger revenue vs
+  //    the QB-recognized figure. The Feb/Mar backfill read ~1.9x QB and nothing flagged it; this
+  //    makes any re-backfill (or a dead order sync) self-report within a month.
+  const rev = rows(await db.execute(sql`
+    select
+      (select coalesce(sum(total_amount), 0) from sales_orders
+        where order_date >= date_trunc('month', current_date - interval '1 month')
+          and order_date < date_trunc('month', current_date)
+          and upper(coalesce(status,'')) not in ('CANCELLED','REFUNDED'))::float8 as app_rev,
+      (select revenue from historical_monthly_sales
+        where year = extract(year from current_date - interval '1 month')::int
+          and month = extract(month from current_date - interval '1 month')::int)::float8 as qb_rev`))[0];
+  add("monthly_revenue", "Prior-month revenue (orders vs QuickBooks)",
+    num(rev?.app_rev), "sales_orders (orderDate month sum)",
+    num(rev?.qb_rev), "historical_monthly_sales (QB recognized)", 20, 30000, true,
+    "Order-ledger gross (tax-inclusive) vs QB recognized revenue — EXPECTED to differ ~10-15% (tax + timing). What this catches: a backfill re-run (order side ~2x QB, the Feb/Mar failure) or a dead order sync (order side far UNDER QB).");
+
   // Only UNEXPECTED drift counts as a health problem — the expected/by-design gaps (cash lag,
   // WAC over-valuation) are tracked but shouldn't read as a regression.
   const driftCount = checks.filter((c) => c.status === "drift" && !c.expected).length;

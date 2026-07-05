@@ -9847,7 +9847,7 @@ TOTAL: $${subtotal.toFixed(2)}
 
           if (!contactId) {
             syncResults.salesOrders.failed++;
-            syncResults.salesOrders.errors.push(`Order ${order.orderNumber}: No contact available`);
+            syncResults.salesOrders.errors.push(`Order ${order.orderName || order.externalOrderId || order.id}: No contact available`);
             continue;
           }
 
@@ -9883,15 +9883,15 @@ Total: $${orderTotal.toFixed(2)}
 
           if (opportunityResult.success) {
             syncResults.salesOrders.synced++;
-            console.log(`[GHL Sync] Sales order ${order.orderNumber}: ${opportunityResult.action || 'synced'}`);
+            console.log(`[GHL Sync] Sales order ${order.orderName || order.externalOrderId || order.id}: ${opportunityResult.action || 'synced'}`);
           } else {
             syncResults.salesOrders.failed++;
-            syncResults.salesOrders.errors.push(`Order ${order.orderNumber}: ${opportunityResult.error}`);
-            console.error(`[GHL Sync] Sales order ${order.orderNumber} failed: ${opportunityResult.error}`);
+            syncResults.salesOrders.errors.push(`Order ${order.orderName || order.externalOrderId || order.id}: ${opportunityResult.error}`);
+            console.error(`[GHL Sync] Sales order ${order.orderName || order.externalOrderId || order.id} failed: ${opportunityResult.error}`);
           }
         } catch (error: any) {
           syncResults.salesOrders.failed++;
-          syncResults.salesOrders.errors.push(`Order ${order.orderNumber}: ${error.message}`);
+          syncResults.salesOrders.errors.push(`Order ${order.orderName || order.externalOrderId || order.id}: ${error.message}`);
         }
       }
       console.log(`[GHL Sync] Sales orders: ${syncResults.salesOrders.synced} synced, ${syncResults.salesOrders.failed} failed`);
@@ -10241,7 +10241,14 @@ Notes: ${po.notes || 'None'}
           
           // Build sets of valid identifiers from LIVE app data only (non-historical)
           // These are items that SHOULD exist in GHL after align
-          const validSalesOrderIds = new Set(salesOrders.map(so => so.orderNumber));
+          // F1 FIX: salesOrders has NO orderNumber field (schema: orderName) — the old
+          // Set was all-undefined, so hasValidOrder below was ALWAYS false and every
+          // live "Order ..." opportunity was deleted as "orphaned" on an align sync.
+          // Opportunity names embed externalOrderId || id (see the create at ~9867),
+          // so the valid-set must use EXACTLY that chain to match.
+          const validSalesOrderIds = new Set(
+            salesOrders.map(so => so.externalOrderId || so.id).filter(Boolean)
+          );
           const validReturnIds = new Set(returns.map(r => r.rmaNumber || r.id));
           const validStockAlertNames = new Set(
             allItemsForCleanup
@@ -10666,7 +10673,8 @@ Notes: ${po.notes || 'None'}
       // Create return request
       const validatedRequest = insertReturnRequestSchema.parse({
         salesOrderId: salesOrder.id,
-        orderNumber: salesOrder.orderNumber,
+        // salesOrders has no orderNumber field — denormalize the customer-facing name
+        orderNumber: salesOrder.orderName || salesOrder.externalOrderId,
         externalOrderId: requestData.externalOrderId,
         salesChannel: requestData.channel,
         source: 'GHL',
@@ -10760,14 +10768,14 @@ Notes: ${po.notes || 'None'}
         }
       }
 
-      console.log(`[GHL Returns] Return created: ${returnRequest.id} for order ${salesOrder.orderNumber}`);
+      console.log(`[GHL Returns] Return created: ${returnRequest.id} for order ${salesOrder.orderName || salesOrder.externalOrderId || salesOrder.id}`);
 
-      res.status(201).json({ 
+      res.status(201).json({
         success: true,
         returnId: returnRequest.id,
         returnNumber: returnRequest.id,
         orderId: salesOrder.id,
-        orderNumber: salesOrder.orderNumber,
+        orderNumber: salesOrder.orderName || salesOrder.externalOrderId,
         status: returnRequest.status,
         resolution: returnRequest.resolutionRequested,
         trackingNumber,
@@ -19118,7 +19126,7 @@ Generate only the email body text, no subject line.`;
         );
         if (salesOrder) {
           salesOrderId = salesOrder.id;
-          orderNumber = salesOrder.orderNumber;
+          orderNumber = salesOrder.orderName || salesOrder.externalOrderId;
         }
       }
 
@@ -19717,14 +19725,15 @@ Generate only the email body text, no subject line.`;
       try {
         const { GHL_CONFIG } = await import("./config/ghl-config");
         
-        const oppName = `Refund - ${salesOrder.orderNumber} - ${salesOrder.customerName}`;
+        const refundOrderLabel = salesOrder.orderName || salesOrder.externalOrderId || salesOrder.id;
+        const oppName = `Refund - ${refundOrderLabel} - ${salesOrder.customerName}`;
         const oppResult = await ghlClient.createOpportunity(
           GHL_CONFIG.pipelineId,
           GHL_CONFIG.stages.REFUND_PROCESSING,
           oppName,
-          Number(salesOrder.total) || 0,
-          `Return initiated for order ${salesOrder.orderNumber}. RMA: ${returnRequest.rmaNumber || 'Pending'}`,
-          { orderId: salesOrder.id, returnId: returnRequest.id, orderNumber: salesOrder.orderNumber },
+          Number(salesOrder.totalAmount ?? salesOrder.total) || 0,
+          `Return initiated for order ${refundOrderLabel}. RMA: ${returnRequest.rmaNumber || 'Pending'}`,
+          { orderId: salesOrder.id, returnId: returnRequest.id, orderNumber: refundOrderLabel },
           contactId
         );
         
@@ -19829,10 +19838,12 @@ Generate only the email body text, no subject line.`;
       let salesOrder = null;
       
       if (orderNumber) {
+        // Match the customer-facing orderName (e.g. "#15020") — the field customers
+        // actually quote — plus externalOrderId. (salesOrders has no orderNumber field.)
         salesOrder = allOrders.find(
-          order => order.orderNumber === orderNumber || 
+          order => order.orderName === orderNumber ||
                    order.externalOrderId === orderNumber ||
-                   order.orderNumber?.includes(orderNumber) ||
+                   order.orderName?.includes(orderNumber) ||
                    order.externalOrderId?.includes(orderNumber)
         );
       }
@@ -19884,7 +19895,7 @@ Generate only the email body text, no subject line.`;
         }
       }
 
-      console.log(`[GHL Custom Action] Found order: ${salesOrder.id} (${salesOrder.orderNumber}), status: ${salesOrder.status}`);
+      console.log(`[GHL Custom Action] Found order: ${salesOrder.id} (${salesOrder.orderName || salesOrder.externalOrderId}), status: ${salesOrder.status}`);
 
       // ELIGIBILITY CHECK 1: Order must be DELIVERED (or PENDING_REFUND if already returning)
       const eligibleStatuses = ['DELIVERED', 'PENDING_REFUND'];
@@ -19895,8 +19906,8 @@ Generate only the email body text, no subject line.`;
         if (salesOrder.status === 'CANCELLED' || salesOrder.status === 'REFUNDED') {
           await createNeedsAttentionOpportunity(
             ghlClient,
-            `Return Request - Invalid Status - ${salesOrder.orderNumber}`,
-            `Customer requested a return for an order with status "${salesOrder.status}".\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\n\nAction required: Verify order status and follow up with customer.`,
+            `Return Request - Invalid Status - ${salesOrder.orderName || salesOrder.externalOrderId || salesOrder.id}`,
+            `Customer requested a return for an order with status "${salesOrder.status}".\n\nOrder: ${salesOrder.orderName || salesOrder.externalOrderId || salesOrder.id}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\n\nAction required: Verify order status and follow up with customer.`,
             contactId
           );
           return res.status(400).json({

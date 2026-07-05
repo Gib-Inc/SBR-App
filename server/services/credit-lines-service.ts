@@ -142,6 +142,9 @@ export async function computeCreditLines(): Promise<{
     dailyAchOut: number; monthlyDebtService: number;
     missingPaymentCount: number; missingPaymentBalance: number;
     ghostCount: number; ghostBalance: number;
+    // TRIPWIRE: >50% of the debt balance has no payment terms → every debt-service
+    // consumer (DSCR, runway, safe-to-pay, 13-wk) is running mostly blind.
+    debtServiceBlind: boolean;
   };
 }> {
   const rs = rows(await db.execute(sql`
@@ -207,6 +210,8 @@ export async function computeCreditLines(): Promise<{
   const missingPayment = lines.filter((l) => (l.paymentAmount == null || l.paymentAmount <= 0) && l.balance > 0);
   const ghosts = lines.filter((l) => l.qbMissingSince != null);
 
+  const missingPaymentBalance = r2(missingPayment.reduce((s, l) => s + l.balance, 0));
+
   return {
     lines,
     totals: {
@@ -214,11 +219,25 @@ export async function computeCreditLines(): Promise<{
       missingApr, missingDueDay, missingTermsBalance, termsComplete,
       dailyAchOut, monthlyDebtService,
       missingPaymentCount: missingPayment.length,
-      missingPaymentBalance: r2(missingPayment.reduce((s, l) => s + l.balance, 0)),
+      missingPaymentBalance,
       ghostCount: ghosts.length,
       ghostBalance: r2(ghosts.reduce((s, l) => s + l.balance, 0)),
+      debtServiceBlind: isDebtServiceBlind(missingPaymentBalance, totalBalance),
     },
   };
+}
+
+/**
+ * TRIPWIRE (pure): more than half the debt balance has no payment terms entered.
+ * Below-threshold gaps are per-facility noise the missingPayment* fields already
+ * surface; above it, monthlyDebtService/dailyAchOut are mostly fiction and every
+ * consumer (DSCR principal, runway burn, safe-to-pay, 13-week) is materially
+ * understating outflows — that's an operator-page alert, not a footnote.
+ * Zero-balance stacks are not blind (nothing to service).
+ */
+export function isDebtServiceBlind(missingPaymentBalance: number, totalBalance: number): boolean {
+  if (!(totalBalance > 0)) return false;
+  return missingPaymentBalance > 0.5 * totalBalance;
 }
 
 const VALID_FREQUENCIES = ["daily", "weekly", "biweekly", "monthly"];

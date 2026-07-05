@@ -62,6 +62,15 @@ describe("merDenominator — THE one MER-denominator composition (booked + credi
     expect(merDenominator({ booked: null, creditLineMeta: null, creditLineEra: true }))
       .toEqual({ value: null, understated: true });
   });
+  it("off-account marketing labor ADDS to the denominator (VA/Contract Labor + Gamerzdojo/Charitable)", () => {
+    // Verified Jul 2026: ~$8.7K/mo VA + ~$4.9K/mo Gamerzdojo booked outside Advertising.
+    expect(merDenominator({ booked: 53140, creditLineMeta: 12903, creditLineEra: true, marketingLabor: 13561 }))
+      .toEqual({ value: 79604, understated: false });
+  });
+  it("labor genuinely $0 in a month is NOT an understatement signal", () => {
+    expect(merDenominator({ booked: 50000, creditLineMeta: 12000, creditLineEra: true, marketingLabor: null }))
+      .toEqual({ value: 62000, understated: false });
+  });
 
   it("assembleMonth carries the composition: credit month = booked+Meta; card month = booked; missing Meta = understated", () => {
     const credit = assembleMonth("2026-06", { qbGoogle: 10848, qbMeta: 0, metaSnap: 12903, amazon: 2513, booked: 90000 });

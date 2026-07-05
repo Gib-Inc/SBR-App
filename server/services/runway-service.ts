@@ -189,7 +189,9 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
 
     // inboundReceivables is applied by withWindowedInbound (2-pass) below, so the
     // amount credited never exceeds what settles before the runway ends.
-    return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution, dailyDebtService: debtService.dailyDebtService };
+    // debtService is undefined when computeCreditLines failed — the runway must then
+    // run WITHOUT debt in the burn (warning already logged), never crash the compute.
+    return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution, dailyDebtService: debtService?.dailyDebtService ?? null };
   };
 
   const scenarioInputs: Record<ScenarioKey, ScenarioInputs> = {
@@ -221,7 +223,7 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
       dailyFixedOverhead,
       dailyAdSpend: scenarioInputs.realistic.dailyAdSpend,
       dailyMarginContribution,
-      dailyDebtService: debtService.dailyDebtService,
+      dailyDebtService: debtService?.dailyDebtService ?? null,
     });
     seasonal = {
       result: computeScenarioRunway(inputs),

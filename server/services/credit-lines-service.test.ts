@@ -65,4 +65,13 @@ describe("D3 payment-terms math", () => {
     ])).toBe(1470);
     expect(dailyDebitTotal([])).toBe(0);
   });
+
+  it("isDebtServiceBlind trips above 50% of balance without terms (the Jul 2026 prod state — $1.15M, 0 terms — trips it)", async () => {
+    const { isDebtServiceBlind } = await import("./credit-lines-service");
+    expect(isDebtServiceBlind(1154477, 1154477)).toBe(true);  // 100% blind (verified prod state)
+    expect(isDebtServiceBlind(600000, 1154477)).toBe(true);   // just over half
+    expect(isDebtServiceBlind(500000, 1154477)).toBe(false);  // under half — per-facility fields cover it
+    expect(isDebtServiceBlind(0, 1154477)).toBe(false);       // all terms entered
+    expect(isDebtServiceBlind(0, 0)).toBe(false);             // nothing to service ≠ blind
+  });
 });

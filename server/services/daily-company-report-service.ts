@@ -175,6 +175,18 @@ export async function runDailyCompanyReport(opts?: { skipRefresh?: boolean }): P
     if (mer != null && perf?.totalAdSpend > 1000 && mer < breakeven) {
       anomalies.push(`Blended MER ${Number(mer).toFixed(1)}x is below the ${breakeven}x breakeven — marketing is under the P&L break-even line; route to budget review.`);
     }
+    // TRIPWIRE: >50% of the debt balance has no payment terms → DSCR/runway/safe-to-pay
+    // are materially understating outflows. The app finds Matt; it doesn't wait to be opened.
+    try {
+      const cl: any = await import("./credit-lines-service").then((m) => m.computeCreditLines());
+      report.financials.debtServiceBlind = cl?.totals?.debtServiceBlind ?? null;
+      report.financials.monthlyDebtService = cl?.totals?.monthlyDebtService ?? null;
+      if (cl?.totals?.debtServiceBlind) {
+        anomalies.push(
+          `DEBT SERVICE BLIND: $${Math.round(cl.totals.missingPaymentBalance).toLocaleString()} of $${Math.round(cl.totals.totalBalance).toLocaleString()} debt balance has NO payment terms — DSCR, runway and safe-to-pay are understating outflows. Enter facility terms in the debt schedule.`,
+        );
+      }
+    } catch { /* credit lines unavailable — runway/DSCR gaps already surface elsewhere */ }
   } catch (e: any) {
     anomalies.push(`financials snapshot failed: ${e?.message ?? e}`);
   }

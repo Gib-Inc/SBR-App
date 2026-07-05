@@ -47,6 +47,32 @@ export const META_QB_CUTOFF_MONTH = "2026-05"; // months >= this use compliant s
 export type Channel = "GOOGLE" | "META" | "AMAZON" | "PINTEREST";
 export const CHANNELS: Channel[] = ["GOOGLE", "META", "AMAZON", "PINTEREST"];
 
+/**
+ * Marketing LABOR booked OUTSIDE the Advertising account — real marketing cost the
+ * ILIKE '%advertising%' denominator can't see (~$13.6K/mo verified Jul 2026):
+ * Vertical Ascension → "Contract Labor", Gamerzdojo Foundation → "Charitable
+ * Contributions" (Zo's pay vehicles per the comp-structure record). Each entry pins
+ * BOTH the vendor pattern AND the exact account: if the bookkeeper ever remaps the
+ * vendor into Advertising the pair stops matching (no double-count), and the many
+ * NON-marketing "Contract Labor" vendors (RCK Ventures, Mayo Stubbs, …) never leak
+ * in. Structural dedupe: the account filter is disjoint from the ILIKE-advertising
+ * booked sum, so a txn can only ever be counted once.
+ */
+export const MARKETING_LABOR_VENDORS: ReadonlyArray<{ vendorPattern: string; account: string }> = [
+  { vendorPattern: "%vertical ascension%", account: "Contract Labor" },
+  { vendorPattern: "%gamerzdojo%", account: "Charitable Contributions" },
+];
+
+/** SQL predicate for the labor allowlist (vendor+account pairs, OR-joined). */
+export function marketingLaborPredicate() {
+  return sql.join(
+    MARKETING_LABOR_VENDORS.map(
+      (v) => sql`(vendor_or_payee ILIKE ${v.vendorPattern} AND account_name = ${v.account})`,
+    ),
+    sql` OR `,
+  );
+}
+
 export interface ChannelSpend {
   spend: number | null;
   source: string;
@@ -60,6 +86,7 @@ export interface MonthSpend {
   channelTotal: number; // sum of non-null channels (media — for media ROAS)
   bookedMarketingTotal: number | null; // QB total Advertising (booked only)
   otherMarketing: number | null; // booked − channelTotal (agency/creative/etc.)
+  marketingLabor: number | null; // allowlisted labor booked outside Advertising (MARKETING_LABOR_VENDORS)
   // THE MER denominator: booked QB marketing + credit-line-era Meta (which QB stopped
   // booking at the 2026-05 switch). bookedMarketingTotal alone UNDERSTATES true
   // marketing cost post-cutoff — a gate or scoreboard dividing by it overstates MER.
@@ -68,20 +95,27 @@ export interface MonthSpend {
 }
 
 /** Pure: THE one MER-denominator composition — booked QB marketing + credit-line-era
- *  Meta. Used at month grain here (assembleMonth) and at window grain by the
- *  marketing governor, so the daily gate and the scoreboard can never disagree on
- *  what "total marketing spend" means. */
+ *  Meta + off-account marketing labor (MARKETING_LABOR_VENDORS). Used at month grain
+ *  here (assembleMonth) and at window grain by the marketing governor, so the daily
+ *  gate and the scoreboard can never disagree on what "total marketing spend" means. */
 export function merDenominator(opts: {
   booked: number | null;      // QB booked Advertising for the period
   creditLineMeta: number | null; // Meta spend QB is NOT booking (compliant tracker), post-cutoff only
   creditLineEra: boolean;     // does the period fall in the credit-line era?
+  marketingLabor?: number | null; // allowlisted marketing labor booked OUTSIDE Advertising
 }): { value: number | null; understated: boolean } {
   const hasBooked = opts.booked != null && Number.isFinite(opts.booked);
   const hasMeta = opts.creditLineMeta != null && Number.isFinite(opts.creditLineMeta);
-  if (!hasBooked && !hasMeta) return { value: null, understated: true };
-  const value = r2((hasBooked ? (opts.booked as number) : 0) + (hasMeta ? (opts.creditLineMeta as number) : 0));
+  const hasLabor = opts.marketingLabor != null && Number.isFinite(opts.marketingLabor);
+  if (!hasBooked && !hasMeta && !hasLabor) return { value: null, understated: true };
+  const value = r2(
+    (hasBooked ? (opts.booked as number) : 0) +
+    (hasMeta ? (opts.creditLineMeta as number) : 0) +
+    (hasLabor ? (opts.marketingLabor as number) : 0),
+  );
   // Understated when the era says Meta is running unbooked but we have no tracker
-  // number for it, or when booked itself is missing.
+  // number for it, or when booked itself is missing. (Labor genuinely can be $0 in a
+  // month, so its absence is not an understatement signal.)
   const understated = (opts.creditLineEra && !hasMeta) || !hasBooked;
   return { value, understated };
 }
@@ -93,6 +127,7 @@ export interface MonthInputs {
   amazon?: number | null;
   pinterest?: number | null;
   booked?: number | null; // total QB Advertising
+  marketingLabor?: number | null; // allowlisted labor outside Advertising (MARKETING_LABOR_VENDORS)
 }
 
 /** Pure: resolve one month's per-channel spend + totals from the gathered inputs. */
@@ -144,8 +179,9 @@ export function assembleMonth(month: string, inp: MonthInputs): MonthSpend {
   // as an ADDITION to booked (card-era Meta is already inside booked QB advertising).
   const creditLineEra = !isClosedDailyCard;
   const creditLineMeta = creditLineEra && meta.source === "tracker:compliant" ? meta.spend : null;
-  const md = merDenominator({ booked: bookedMarketingTotal, creditLineMeta, creditLineEra });
-  return { month, byChannel, channelTotal, bookedMarketingTotal, otherMarketing, merDenominator: md.value, merUnderstated: md.understated };
+  const marketingLabor = has(inp.marketingLabor) ? r2(inp.marketingLabor as number) : null;
+  const md = merDenominator({ booked: bookedMarketingTotal, creditLineMeta, creditLineEra, marketingLabor });
+  return { month, byChannel, channelTotal, bookedMarketingTotal, otherMarketing, marketingLabor, merDenominator: md.value, merUnderstated: md.understated };
 }
 
 // Short in-process memo: the canonical series is read by many surfaces (Monthly
@@ -203,6 +239,13 @@ async function _computeCanonicalMonthlySpendByChannel(db: any, monthsBack: numbe
     FROM qb_pl_detail WHERE account_name ILIKE '%advertising%' AND txn_date >= ${cutStr}::date GROUP BY 1`));
   const bookedMap = new Map<string, number>(booked.map((r) => [r.mo, num(r.booked)]));
 
+  // Marketing LABOR booked outside Advertising (vendor+account allowlist). The account
+  // filter is disjoint from the ILIKE-advertising sum above, so no txn counts twice.
+  const labor = rows(await db.execute(sql`
+    SELECT to_char(date_trunc('month', txn_date), 'YYYY-MM') AS mo, sum(amount) AS labor
+    FROM qb_pl_detail WHERE (${marketingLaborPredicate()}) AND txn_date >= ${cutStr}::date GROUP BY 1`));
+  const laborMap = new Map<string, number>(labor.map((r) => [r.mo, num(r.labor)]));
+
   // Compliant Meta tracker snapshots (non-Windsor), split across the calendar months
   // each window touches and overlap-collapsed so duplicate/rolling windows don't pile up.
   const metaSnapMap = new Map<string, number>();
@@ -224,6 +267,7 @@ async function _computeCanonicalMonthlySpendByChannel(db: any, monthsBack: numbe
     [
       ...Array.from(qbMap.keys()), ...Array.from(admMap.keys()),
       ...Array.from(bookedMap.keys()), ...Array.from(metaSnapMap.keys()),
+      ...Array.from(laborMap.keys()),
     ].filter((m) => m >= cutStr.slice(0, 7)),
   );
 
@@ -235,6 +279,7 @@ async function _computeCanonicalMonthlySpendByChannel(db: any, monthsBack: numbe
       amazon: admMap.has(mo) ? num(admMap.get(mo).amazon) : null,
       pinterest: admMap.has(mo) ? num(admMap.get(mo).pinterest) : null,
       booked: bookedMap.has(mo) ? bookedMap.get(mo)! : null,
+      marketingLabor: laborMap.has(mo) ? laborMap.get(mo)! : null,
     }),
   );
 }

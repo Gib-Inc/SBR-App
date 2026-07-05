@@ -10,7 +10,7 @@
  * It recommends a posture (ALLOW_SCALE / HOLD / BLOCK). It never moves budget.
  */
 import { sql } from "drizzle-orm";
-import { merDenominator, META_QB_CUTOFF_MONTH } from "./canonical-spend-service";
+import { merDenominator, marketingLaborPredicate, META_QB_CUTOFF_MONTH } from "./canonical-spend-service";
 
 type DB = any;
 const rows = (r: any): any[] => r?.rows ?? r ?? [];
@@ -129,6 +129,12 @@ export async function computeGovernor(db: DB): Promise<GovernorResult> {
   const mkt = num(rows(await db.execute(sql`
     select coalesce(sum(amount),0) as v from qb_pl_detail
     where account_name ilike '%advertising%' and txn_date >= (current_date - 30)`))[0]?.v);
+  // Off-account marketing LABOR for the same window (vendor+account allowlist —
+  // Vertical Ascension/Contract Labor, Gamerzdojo/Charitable Contributions). Disjoint
+  // account filter = structurally impossible to double-count vs the booked sum above.
+  const labor30d = num(rows(await db.execute(sql`
+    select coalesce(sum(amount),0) as v from qb_pl_detail
+    where (${marketingLaborPredicate()}) and txn_date >= (current_date - 30)`))[0]?.v);
   const netRev = num(rows(await db.execute(sql`
     select coalesce(sum(net_revenue),0) as v from daily_sales_snapshots where date >= (current_date - 30)`))[0]?.v);
 
@@ -164,6 +170,7 @@ export async function computeGovernor(db: DB): Promise<GovernorResult> {
     booked: mkt > 0 ? mkt : null,
     creditLineMeta: creditLineMeta30d > 0 ? creditLineMeta30d : null,
     creditLineEra: true, // the trailing-30d window is post-cutoff for all current dates
+    marketingLabor: labor30d > 0 ? labor30d : null,
   });
   // FAIL CLOSED: if QB has booked NO marketing in 30d (sync stall / token deadlock — a
   // documented, previously-occurred outage), a Meta-only denominator would compute a

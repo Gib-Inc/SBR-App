@@ -92,6 +92,10 @@ export async function runDailyCompanyReport(opts?: { skipRefresh?: boolean }): P
     report.refresh.shopifyReconciliation = { ok: rec.ok, detail: rec.ok ? `processed=${(rec.value as any)?.ordersProcessed ?? "?"}` : rec.error };
     const si = await safe(() => import("./supplier-intel-service").then((m) => m.refreshSupplierIntelSnapshot("DAILY_REPORT")));
     report.refresh.supplierIntel = { ok: si.ok, detail: si.ok ? "refreshed" : si.error };
+    // C5 self-heal: re-join order lines whose item didn't exist at write time.
+    // Idempotent, product_id-only (no stock effects) — keeps COGS coverage from decaying.
+    const olr = await safe(() => import("./order-line-resolution-service").then((m) => m.resolveUnmappedOrderLines(db)));
+    report.refresh.orderLineResolution = { ok: olr.ok, detail: olr.ok ? `resolved=${(olr.value as any)?.resolved} remaining=${(olr.value as any)?.remaining}` : olr.error };
   }
 
   // 2. SALES CROSS-CHECK — app recorded vs independent Shopify API vs QuickBooks.

@@ -87,6 +87,7 @@ export async function queryBreakevenRoas(db: DB, days: number, fallbackMargin = 
            i.selling_price::real as price,
            bc.cogs::real as bom_cogs,
            bc.cogs_complete,
+           COALESCE(i.wac_unit_cost, i.default_purchase_cost)::real as item_unit_cost,
            ad.spend,
            ad.revenue,
            ad.conversions,
@@ -101,14 +102,21 @@ export async function queryBreakevenRoas(db: DB, days: number, fallbackMargin = 
   // Per-SKU spend has no platform dimension → scale by the corrected window's
   // global factor, then recompute actual ROAS off the corrected spend.
   const { correctSpend } = await getAdSpendCorrection(days);
+  const { COGS_PLUG_RATE } = await import('../services/contribution-margin-service');
   return rows(result).map((r: any) => {
+    // C6 cost ladder: BOM rollup > item WAC/purchase cost > QB COGS plug (35%).
+    // The old final fallback assumed COGS = 40% of price (the 0.6-margin guess);
+    // the QB-validated plug is 35% — and it's now the LAST resort, not the norm.
     let cogs = r.bom_cogs;
     let costSource: string;
     if (r.cogs_complete && r.bom_cogs > 0) {
       costSource = 'bom';
+    } else if (r.item_unit_cost != null && r.item_unit_cost > 0) {
+      cogs = r.item_unit_cost;
+      costSource = 'item_wac';
     } else {
-      cogs = r.price * (1 - fallbackMargin);
-      costSource = 'estimated';
+      cogs = r.price * COGS_PLUG_RATE;
+      costSource = 'estimated(cogs-plug-35%)';
     }
     const margin = r.price - cogs;
     const breakevenRoas = margin > 0 ? r.price / margin : null;

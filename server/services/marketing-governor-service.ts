@@ -121,6 +121,12 @@ export interface GovernorResult {
   septemberTriggered: boolean;
   dataFresh: boolean;
   adDataLatest: string | null;
+  // C6 DIAGNOSTICS (labeled, NOT the gate): the measured blended contribution
+  // margin and the breakeven MER it implies (1/margin). The verdict still runs
+  // on the static BREAKEVEN_MER — switching the gate to the dynamic number is
+  // an operator decision, made with these two figures visible first.
+  contributionMarginPct: number | null;
+  impliedBreakevenMer: number | null;
 }
 
 export async function computeGovernor(db: DB): Promise<GovernorResult> {
@@ -216,6 +222,19 @@ export async function computeGovernor(db: DB): Promise<GovernorResult> {
     merUnderstated: md.understated,
   });
 
+  // C6 DIAGNOSTICS (labeled, not the gate): measured contribution margin + the
+  // breakeven MER it implies. The verdict above intentionally still runs on the
+  // static BREAKEVEN_MER — flipping the gate to the dynamic figure is an operator
+  // decision, to be made with these numbers visible for a while first.
+  let contributionMarginPct: number | null = null;
+  let impliedBreakeven: number | null = null;
+  try {
+    const cm = await import("./contribution-margin-service");
+    const bc = await cm.getBlendedContributionMargin(db, 30);
+    contributionMarginPct = bc.contributionMarginPct;
+    impliedBreakeven = bc.impliedBreakevenMer;
+  } catch { /* diagnostics only — never block the verdict */ }
+
   return {
     state, reasons, blendedMer, breakeven: BREAKEVEN_MER,
     qbMarketing30d: Math.round(mkt),
@@ -225,5 +244,7 @@ export async function computeGovernor(db: DB): Promise<GovernorResult> {
     netRevenue30d: Math.round(netRev),
     cashOnHand: cashOnHand != null ? Math.round(cashOnHand) : null, cashFloor: CASH_FLOOR,
     septemberStreak, septemberTriggered: septemberStreak >= SEPTEMBER_THRESHOLD, dataFresh, adDataLatest,
+    contributionMarginPct,
+    impliedBreakevenMer: impliedBreakeven,
   };
 }

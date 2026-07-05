@@ -394,6 +394,16 @@ export async function runMarketingAnalysis(opts?: {
   const revenue30d = v30.totalRevenue ?? 0;
   const avgDailySpend = adSpend30d > 0 ? adSpend30d / 30 : 0;
 
+  // C6: the REAL blended contribution margin (order-ledger COGS + channel fees)
+  // replaces the hardcoded 0.6 as the default margin feed. Failure → legacy
+  // default with an explicit dataGap, never a silent guess.
+  let contributionMarginPct: number | null = null;
+  try {
+    const { getBlendedContributionMargin } = await import("./contribution-margin-service");
+    const { db } = await import("../db");
+    contributionMarginPct = (await getBlendedContributionMargin(db, 30)).contributionMarginPct;
+  } catch { /* feed unavailable → legacy default + dataGap below */ }
+
   // Real daily revenue → daily blended-ROAS series (spend smoothed to the
   // 30-day average because trusted spend is period-aggregate, not daily). This
   // gives the moving averages + September-Rule streak honest day-to-day variation.
@@ -414,13 +424,17 @@ export async function runMarketingAnalysis(opts?: {
   const today = computeAdMetrics({
     spend: adSpend7d,
     revenue: revenue7d,
-    grossMarginPct: opts?.grossMarginPct,
+    // Explicit operator override > real measured contribution > legacy 0.6 default.
+    grossMarginPct: opts?.grossMarginPct ?? contributionMarginPct ?? undefined,
   });
   const series = dailyRoas.length ? [...dailyRoas, today.roas] : [today.roas];
 
   let directive = generateDirective({ platform: "BLENDED", roasSeries: series, today });
   const blendedRoas30d = adSpend30d > 0 ? round2(revenue30d / adSpend30d) : 0;
   const dataGaps = Array.from(new Set([...(v7.dataGaps || []), ...(v30.dataGaps || [])]));
+  if (contributionMarginPct == null && opts?.grossMarginPct == null) {
+    dataGaps.push("contribution-margin feed unavailable — margin defaulted to the legacy 60% assumption");
+  }
   // A blended ROAS far above SBR's historical ~8-10x band almost always means
   // ad spend is under-reported (a missing platform/feed), not a real return —
   // treat it as a data gap so we never tell Matt to scale on phantom returns.

@@ -66,3 +66,18 @@ describe("COGS_PLUG_RATE", () => {
     expect(COGS_PLUG_RATE).toBe(0.35);
   });
 });
+
+describe("composeRunwayMarginRate (pure) — fee placement matters", () => {
+  it("deducts COGS + Amazon referral but NOT Shopify processing (already in QB overhead)", async () => {
+    const { composeRunwayMarginRate } = await import("./contribution-margin-service");
+    // 90d prod shape: rev 653k, cogs 224k, amazon fees ~44k → ~59%, NOT the 65.8% gross
+    expect(composeRunwayMarginRate(653081, 223756, 43978)).toBe(0.59);
+    // and NOT the fee-inclusive contribution rate either (that would double-count Shopify fees)
+    expect(composeRunwayMarginRate(1000, 350, 0)).toBe(0.65);
+  });
+  it("zero/negative revenue → null (no fabricated rate)", async () => {
+    const { composeRunwayMarginRate } = await import("./contribution-margin-service");
+    expect(composeRunwayMarginRate(0, 100, 10)).toBeNull();
+    expect(composeRunwayMarginRate(-5, 100, 10)).toBeNull();
+  });
+});

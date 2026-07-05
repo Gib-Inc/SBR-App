@@ -53,6 +53,8 @@ export interface RunwayComputation {
   inboundReceivables: number;
   snapshotId: string | null;
   netMargin: number | null;
+  /** Where netMargin came from: measured contribution engine vs legacy QB gross ratio. */
+  marginSource?: "contribution" | "qb-gross-legacy" | "none";
   /** Pillar 4 self-tuning multiplier applied to revenue inputs (1 = untuned). */
   biasCorrectionFactor?: number;
   /** D5: the debt drain in the burn — daily debt service from entered facility terms,
@@ -147,10 +149,30 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     return { ...inputs, inboundReceivables: inbound };
   };
 
+  // C6/#7 MARGIN TRUTH: the rate multiplied against order-value daily revenue is the
+  // measured runway margin rate — (revenue − real COGS − Amazon referral) / revenue —
+  // from the contribution engine. Amazon's ~15% must come out here (netted from
+  // deposits, never in QB OpEx) while Shopify processing must NOT (it's already in
+  // the overhead term as "Merchant Account Fees"). The old grossProfit/totalIncome
+  // (~66%, labeled "netMargin") mixed a QB-net-income base against order-value
+  // revenue and kept Amazon's cut as margin the company never receives.
+  // Fallback: the legacy QB gross ratio, with the source labeled — never silent.
   const grossProfit = snap.grossProfit != null ? Number(snap.grossProfit) : null;
   const totalIncome = snap.totalIncome != null ? Number(snap.totalIncome) : null;
-  const netMargin =
+  const legacyGrossRatio =
     grossProfit != null && totalIncome != null && totalIncome !== 0 ? grossProfit / totalIncome : null;
+  let netMargin: number | null = null;
+  let marginSource: "contribution" | "qb-gross-legacy" | "none" = "none";
+  try {
+    const { getBlendedContributionMargin } = await import("./contribution-margin-service");
+    const { db } = await import("../db");
+    netMargin = (await getBlendedContributionMargin(db, 30)).runwayMarginRate;
+    if (netMargin != null) marginSource = "contribution";
+  } catch { /* contribution engine unavailable → legacy fallback below */ }
+  if (netMargin == null && legacyGrossRatio != null) {
+    netMargin = legacyGrossRatio;
+    marginSource = "qb-gross-legacy";
+  }
 
   // Forecast self-tuning factor (1.0 when untuned). Resolved once per compute
   // so all three scenarios use the same correction.
@@ -167,11 +189,18 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     // Corrected ad spend (Windsor-authoritative > upload > deduped live), NOT the raw
     // ad_metrics_daily sum — that table has overlapping SKU/campaign-grain rows that
     // multi-count spend ~3x, which would overstate burn and shorten the runway falsely.
+    //
+    // #7 DOUBLE-COUNT FIX: dailyFixedOverhead is QB TOTAL Expenses ÷ 30, which already
+    // CONTAINS the QB-booked marketing (canonical Google is QB-sourced, plus agency/
+    // creative). Adding the full corrected total on top counted booked media twice.
+    // Only the UNBOOKED portion belongs here: credit-line-era Meta (QB stopped booking
+    // it May 2026) + Amazon ads (deducted from deposits, never booked) + Pinterest —
+    // i.e. corrected total minus its GOOGLE (QB-booked) slice.
     let totalAdSpend = 0;
     try {
       const { getCorrectedAdSpendRange } = await import("./corrected-ad-spend");
       const corrected = await getCorrectedAdSpendRange(start, end);
-      totalAdSpend = corrected.totalAdSpend ?? 0;
+      totalAdSpend = Math.max(0, (corrected.totalAdSpend ?? 0) - (corrected.spendByPlatform?.GOOGLE ?? 0));
     } catch {
       const adRows = await storage.getAdMetricsInRange(start, end);
       totalAdSpend = adRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
@@ -238,7 +267,7 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
 
   return {
     ok: true,
-    data: { forecast, scenarioInputs, seasonal, inboundReceivables, snapshotId: snap.id, netMargin, biasCorrectionFactor: biasFactor, debtService },
+    data: { forecast, scenarioInputs, seasonal, inboundReceivables, snapshotId: snap.id, netMargin, marginSource, biasCorrectionFactor: biasFactor, debtService },
   };
 }
 

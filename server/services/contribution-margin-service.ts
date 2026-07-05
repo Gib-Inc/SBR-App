@@ -92,12 +92,35 @@ export interface BlendedContribution {
   cogsCosted: number;         // from real WAC/purchase cost
   cogsPlug: number;           // uncosted remainder × COGS_PLUG_RATE
   channelFees: number;
+  channelFeesAmazon: number;  // referral — netted from Amazon deposits, NEVER in QB OpEx
+  channelFeesShopify: number; // processing — booked in QB OpEx as "Merchant Account Fees"
   contributionMargin: number;
   contributionMarginPct: number | null;
   grossMarginPct: number | null;   // before channel fees (comparability with the old 0.6)
   costedRevenueShare: number | null; // how much of revenue has REAL costs (0..1)
   impliedBreakevenMer: number | null;
+  runwayMarginRate: number | null; // see composeRunwayMarginRate
   dataGaps: string[];
+}
+
+/**
+ * Pure: the margin rate the RUNWAY burn model needs. The runway multiplies this
+ * against ORDER-VALUE revenue while separately subtracting QB operating expenses
+ * as overhead — and fee placement differs by channel (verified Jul 2026 in
+ * qb_pl_detail): Shopify processing IS booked in QB OpEx ("Merchant Account
+ * Fees" ~$9.5K/90d) so it must NOT also come out of margin (double-count), while
+ * Amazon's ~15% referral is netted from deposits and never appears in OpEx
+ * ("Amazon Selling Fees" only $840/90d) so it MUST come out of margin — order-
+ * value revenue includes money Amazon keeps. Hence: (rev − COGS − amazonFees)/rev.
+ * Unit-tested.
+ */
+export function composeRunwayMarginRate(
+  revenue: number,
+  cogs: number,
+  amazonFees: number,
+): number | null {
+  if (!(revenue > 0)) return null;
+  return r4((revenue - num(cogs) - num(amazonFees)) / revenue);
 }
 
 let memo: { at: number; days: number; value: BlendedContribution } | null = null;
@@ -136,10 +159,9 @@ export async function getBlendedContributionMargin(db: any, days = 30): Promise<
   const uncostedRevenue = Math.max(0, revenue - costedRevenue);
   const cogsPlug = r2(uncostedRevenue * COGS_PLUG_RATE);
   const cogs = r2(cogsCosted + cogsPlug);
-  const channelFees = r2(
-    num(row.amazon_revenue) * PAYOUT_CONFIG.amazon.feePct +
-    num(row.shopify_revenue) * PAYOUT_CONFIG.shopify.feePct,
-  );
+  const channelFeesAmazon = r2(num(row.amazon_revenue) * PAYOUT_CONFIG.amazon.feePct);
+  const channelFeesShopify = r2(num(row.shopify_revenue) * PAYOUT_CONFIG.shopify.feePct);
+  const channelFees = r2(channelFeesAmazon + channelFeesShopify);
   const contributionMargin = r2(revenue - cogs - channelFees);
   const contributionMarginPct = revenue > 0 ? r4(contributionMargin / revenue) : null;
   const grossMarginPct = revenue > 0 ? r4((revenue - cogs) / revenue) : null;
@@ -162,11 +184,14 @@ export async function getBlendedContributionMargin(db: any, days = 30): Promise<
     cogsCosted: r2(cogsCosted),
     cogsPlug,
     channelFees,
+    channelFeesAmazon,
+    channelFeesShopify,
     contributionMargin,
     contributionMarginPct,
     grossMarginPct,
     costedRevenueShare,
     impliedBreakevenMer: impliedBreakevenMer(contributionMarginPct),
+    runwayMarginRate: composeRunwayMarginRate(revenue, cogs, channelFeesAmazon),
     dataGaps,
   };
   memo = { at: Date.now(), days, value };

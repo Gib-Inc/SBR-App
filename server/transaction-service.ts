@@ -1,5 +1,6 @@
 import type { IStorage } from "./storage";
 import type { InsertInventoryTransaction, Item } from "@shared/schema";
+import { InventoryMovement, type InventoryEventType } from "./services/inventory-movement";
 
 export interface TransactionResult {
   success: boolean;
@@ -24,13 +25,23 @@ export interface ProductionRequest {
 }
 
 export class TransactionService {
-  constructor(private storage: IStorage) {}
+  private movement: InventoryMovement;
 
-  // NOTE: This method mutates inventory immediately via storage layer and does not
-  // participate in database-level transactions. Callers that process multiple
-  // transactions (e.g., bulk PO receipt) should validate upfront, but understand
-  // that if a later transaction fails, earlier ones will have already been committed
-  // to the database with no automatic rollback.
+  constructor(private storage: IStorage) {
+    this.movement = new InventoryMovement(storage);
+  }
+
+  // AUDIT MGI-3/RCV-4: this service used to be a SECOND inventory gateway with
+  // its own read-compute-overwrite math — it wrote the Extensiv-owned pivotQty
+  // directly, skipped WAC, skipped the audit ledger, and raced the real
+  // gateway. It now delegates every stock write to InventoryMovement (atomic,
+  // ledgered, costed) and only keeps its public API + the
+  // inventory_transactions history row for its 9 existing call sites.
+  //
+  // Semantics change vs the legacy math, deliberate and invariant-restoring:
+  // PIVOT-side writes no longer touch pivotQty (read-only from Extensiv) —
+  // they adjust availableForSaleQty, the working sellable field, and the next
+  // Extensiv sync reconciles physical pivot stock.
   async applyTransaction(
     transaction: InsertInventoryTransaction
   ): Promise<TransactionResult> {
@@ -44,7 +55,7 @@ export class TransactionService {
       }
 
       const transactionType = transaction.type;
-      const location = transaction.location;
+      const location = (transaction.location ?? "N/A") as "HILDALE" | "PIVOT" | "N/A";
       const quantity = transaction.quantity;
 
       if (quantity <= 0) {
@@ -55,69 +66,53 @@ export class TransactionService {
       }
 
       // Normalize itemType to handle both formats: "finished_product"/"component" and "FINISHED"/"RAW"
-      const normalizedItemType = 
-        transaction.itemType === "finished_product" || transaction.itemType === "FINISHED" 
-          ? "FINISHED" 
+      const normalizedItemType =
+        transaction.itemType === "finished_product" || transaction.itemType === "FINISHED"
+          ? "FINISHED"
           : "RAW";
 
-      const updates: Partial<Omit<Item, 'forecastData'>> & { forecastData?: any; forecastDirty?: boolean } = {};
+      // Map the legacy transaction vocabulary onto gateway events. `signedQty`
+      // carries direction for MANUAL_ADJUSTMENT (the gateway adds it as-is).
+      let eventType: InventoryEventType;
+      let signedQty = quantity;
 
       if (normalizedItemType === "FINISHED") {
         if (transactionType === "TRANSFER_OUT") {
-          if (location === "HILDALE") {
-            if ((item.hildaleQty ?? 0) < quantity) {
-              return {
-                success: false,
-                error: `Insufficient stock at Hildale. Available: ${item.hildaleQty ?? 0}, Requested: ${quantity}`,
-              };
-            }
-            updates.hildaleQty = (item.hildaleQty ?? 0) - quantity;
-          } else if (location === "PIVOT") {
-            if ((item.pivotQty ?? 0) < quantity) {
-              return {
-                success: false,
-                error: `Insufficient stock at Pivot. Available: ${item.pivotQty ?? 0}, Requested: ${quantity}`,
-              };
-            }
-            updates.pivotQty = (item.pivotQty ?? 0) - quantity;
+          const available = location === "HILDALE" ? (item.hildaleQty ?? 0) : (item.availableForSaleQty ?? 0);
+          if (available < quantity) {
+            return {
+              success: false,
+              error: location === "HILDALE"
+                ? `Insufficient stock at Hildale. Available: ${available}, Requested: ${quantity}`
+                : `Insufficient sellable stock at Pivot. Available: ${available}, Requested: ${quantity}. If Pivot AFS is wrong, fix it on /inventory-integrity first.`,
+            };
           }
-        } else if (transactionType === "TRANSFER_IN") {
-          if (location === "HILDALE") {
-            updates.hildaleQty = (item.hildaleQty ?? 0) + quantity;
-          } else if (location === "PIVOT") {
-            updates.pivotQty = (item.pivotQty ?? 0) + quantity;
-          }
+          eventType = "MANUAL_ADJUSTMENT";
+          signedQty = -quantity;
+        } else if (transactionType === "TRANSFER_IN" || transactionType === "RECEIVE" || transactionType === "ADJUST") {
+          eventType = "MANUAL_ADJUSTMENT";
         } else if (transactionType === "PRODUCE") {
-          updates.hildaleQty = (item.hildaleQty ?? 0) + quantity;
+          eventType = "PRODUCTION_COMPLETED";
         } else if (transactionType === "SHIP") {
-          if (location === "PIVOT") {
-            if ((item.pivotQty ?? 0) < quantity) {
-              return {
-                success: false,
-                error: `Insufficient stock at Pivot to ship. Available: ${item.pivotQty ?? 0}, Requested: ${quantity}`,
-              };
-            }
-            updates.pivotQty = (item.pivotQty ?? 0) - quantity;
-          } else {
+          if (location !== "PIVOT") {
             return {
               success: false,
               error: "Finished products can only be shipped from PIVOT location",
             };
           }
-        } else if (transactionType === "RECEIVE") {
-          if (location === "HILDALE") {
-            updates.hildaleQty = (item.hildaleQty ?? 0) + quantity;
-          } else if (location === "PIVOT") {
-            updates.pivotQty = (item.pivotQty ?? 0) + quantity;
+          const sellable = item.availableForSaleQty ?? 0;
+          if (sellable < quantity) {
+            return {
+              success: false,
+              error: `Insufficient sellable stock at Pivot to ship. Available: ${sellable}, Requested: ${quantity}. If Pivot AFS is wrong, fix it on /inventory-integrity first.`,
+            };
           }
-        } else if (transactionType === "ADJUST") {
-          if (location === "HILDALE") {
-            updates.hildaleQty = (item.hildaleQty ?? 0) + quantity;
-          } else if (location === "PIVOT") {
-            updates.pivotQty = (item.pivotQty ?? 0) + quantity;
-          }
+          eventType = "MANUAL_ADJUSTMENT";
+          signedQty = -quantity;
+        } else {
+          return { success: false, error: `Unsupported transaction type: ${transactionType}` };
         }
-      } else if (normalizedItemType === "RAW") {
+      } else {
         if (transactionType === "PRODUCE") {
           if ((item.currentStock ?? 0) < quantity) {
             return {
@@ -125,33 +120,39 @@ export class TransactionService {
               error: `Insufficient raw material stock. Available: ${item.currentStock ?? 0}, Required: ${quantity}`,
             };
           }
-          updates.currentStock = (item.currentStock ?? 0) - quantity;
+          eventType = "BOM_CONSUMPTION";
         } else if (transactionType === "RECEIVE") {
-          updates.currentStock = (item.currentStock ?? 0) + quantity;
+          // PURCHASE_ORDER_RECEIVED keeps WAC alive on component receipts
+          // (unit cost falls back to the item's default purchase cost).
+          eventType = "PURCHASE_ORDER_RECEIVED";
         } else if (transactionType === "ADJUST") {
-          updates.currentStock = (item.currentStock ?? 0) + quantity;
+          eventType = "MANUAL_ADJUSTMENT";
         } else if (transactionType === "SHIP") {
-          if ((item.currentStock ?? 0) < quantity) {
-            return {
-              success: false,
-              error: `Insufficient raw material stock to ship. Available: ${item.currentStock ?? 0}, Requested: ${quantity}`,
-            };
-          }
-          updates.currentStock = (item.currentStock ?? 0) - quantity;
+          // Gateway validates sufficiency for component ships itself.
+          eventType = "SALES_ORDER_SHIPPED";
+        } else {
+          return { success: false, error: `Unsupported transaction type: ${transactionType}` };
         }
       }
 
+      const moveResult = await this.movement.apply({
+        eventType,
+        itemId: transaction.itemId,
+        quantity: eventType === "MANUAL_ADJUSTMENT" ? signedQty : quantity,
+        location,
+        source: "SYSTEM",
+        userId: transaction.createdBy ?? undefined,
+        notes: transaction.notes
+          ? `[transaction-service ${transactionType}] ${transaction.notes}`
+          : `[transaction-service ${transactionType}]`,
+      });
+
+      if (!moveResult.success) {
+        return { success: false, error: moveResult.error || "Inventory movement failed" };
+      }
+
+      // History row records only movements that actually landed.
       const createdTransaction = await this.storage.createInventoryTransaction(transaction);
-
-      // Mark forecastDirty=true for finished products when transactions occur
-      // This triggers batch forecast recalculation instead of real-time LLM calls
-      if (normalizedItemType === "FINISHED") {
-        updates.forecastDirty = true;
-      }
-
-      if (Object.keys(updates).length > 0) {
-        await this.storage.updateItem(transaction.itemId, updates);
-      }
 
       return {
         success: true,
@@ -189,15 +190,44 @@ export class TransactionService {
         };
       }
 
-      const stockAtSource = request.fromLocation === "HILDALE" 
-        ? (item.hildaleQty ?? 0) 
-        : (item.pivotQty ?? 0);
+      // Pivot-side truth is availableForSaleQty (pivotQty is Extensiv-owned).
+      const stockAtSource = request.fromLocation === "HILDALE"
+        ? (item.hildaleQty ?? 0)
+        : (item.availableForSaleQty ?? 0);
 
       if (stockAtSource < request.quantity) {
         return {
           success: false,
           error: `Insufficient stock at ${request.fromLocation}. Available: ${stockAtSource}, Requested: ${request.quantity}`,
         };
+      }
+
+      // HILDALE → PIVOT is the gateway's native TRANSFER: one atomic movement
+      // (−hildale, +afs, net zero) instead of a two-write pair that could be
+      // interrupted between out and in.
+      if (request.fromLocation === "HILDALE" && request.toLocation === "PIVOT") {
+        const moveResult = await this.movement.apply({
+          eventType: "TRANSFER",
+          itemId: request.itemId,
+          quantity: request.quantity,
+          location: "PIVOT",
+          source: "SYSTEM",
+          userId: request.createdBy ?? undefined,
+          notes: request.notes || "Transfer from HILDALE to PIVOT",
+        });
+        if (!moveResult.success) {
+          return { success: false, error: moveResult.error || "Transfer failed" };
+        }
+        const record = await this.storage.createInventoryTransaction({
+          itemId: request.itemId,
+          itemType: "FINISHED",
+          type: "TRANSFER_OUT",
+          location: "HILDALE",
+          quantity: request.quantity,
+          notes: request.notes || `Transfer from HILDALE to PIVOT`,
+          createdBy: request.createdBy,
+        });
+        return { success: true, transaction: { transferOut: record, transferIn: record } };
       }
 
       const transferOutResult = await this.applyTransaction({

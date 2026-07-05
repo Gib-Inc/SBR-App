@@ -571,13 +571,29 @@ export class ShopifyInventorySyncService {
       
       if (shopifyQty !== null) {
         result.newAvailableForSaleQty = shopifyQty;
-        
-        // ONLY update availableForSaleQty - pivotQty and hildaleQty are NOT touched
-        // pivotQty is owned by Extensiv, hildaleQty by production
-        await storage.updateItem(item.id, { 
-          availableForSaleQty: shopifyQty 
-        });
-        
+
+        // ONLY availableForSaleQty moves — pivotQty is owned by Extensiv,
+        // hildaleQty by production. The operator-initiated re-anchor routes
+        // through the movement gateway as a MANUAL_COUNT delta (audit MC-2)
+        // so it is atomic, audit-logged, and $-valued in the recon ledger
+        // instead of silently erasing ledgered movements.
+        const pullDelta = shopifyQty - (item.availableForSaleQty ?? 0);
+        if (pullDelta !== 0) {
+          const { InventoryMovement } = await import("./inventory-movement");
+          const pullResult = await new InventoryMovement(storage).apply({
+            eventType: "MANUAL_COUNT",
+            itemId: item.id,
+            quantity: pullDelta,
+            location: "PIVOT",
+            source: "SYSTEM",
+            notes: `Shopify pull re-anchor: afs ${item.availableForSaleQty ?? 0} -> ${shopifyQty}`,
+          });
+          if (!pullResult.success) {
+            result.errors.push(pullResult.error || "Re-anchor movement failed");
+            return result;
+          }
+        }
+
         result.success = true;
         console.log(
           `[ShopifyInventorySync] Pulled inventory for ${item.sku}: ` +

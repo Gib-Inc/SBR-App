@@ -3482,7 +3482,27 @@ TOTAL: $${subtotal.toFixed(2)}
         currentStock: item.currentStock ?? 0,
       };
 
-      // Create inventory transaction
+      // AUDIT RCV-3/MGI-4: this receive used to write stock fields directly —
+      // including the Extensiv-owned pivotQty, so the received units were
+      // erased by the next sync. Route through the movement gateway instead:
+      // finished goods land as a location adjustment (PIVOT credits the
+      // sellable field; Extensiv reconciles physical pivot on its next sync),
+      // components as PURCHASE_ORDER_RECEIVED so WAC stays alive.
+      const inventoryMovement = new InventoryMovement(storage);
+      const moveResult = await inventoryMovement.apply({
+        eventType: item.type === 'finished_product' ? 'MANUAL_ADJUSTMENT' : 'PURCHASE_ORDER_RECEIVED',
+        itemId: itemId,
+        quantity: quantity,
+        location: location,
+        source: 'SYSTEM',
+        userId: req.session.userId ?? undefined,
+        notes: notes || `Manual receive via scan: ${quantity} units`,
+      });
+      if (!moveResult.success) {
+        return res.status(400).json({ error: moveResult.error || 'Failed to apply receive movement' });
+      }
+
+      // History row records only movements that actually landed.
       const transaction = await storage.createInventoryTransaction({
         itemId: itemId,
         itemType: itemType,
@@ -3492,22 +3512,6 @@ TOTAL: $${subtotal.toFixed(2)}
         createdBy: req.session.userId || 'manual',
         notes: notes || `Manual receive via scan: ${quantity} units`,
       });
-
-      // Update item stock
-      const updates: any = {};
-
-      if (item.type === 'finished_product') {
-        if (location === 'PIVOT') {
-          updates.pivotQty = (item.pivotQty ?? 0) + quantity;
-        } else if (location === 'HILDALE') {
-          updates.hildaleQty = (item.hildaleQty ?? 0) + quantity;
-        }
-      } else {
-        // For components, update currentStock regardless of location
-        updates.currentStock = (item.currentStock ?? 0) + quantity;
-      }
-
-      await storage.updateItem(itemId, updates);
 
       // Fetch updated item
       const updatedItem = await storage.getItem(itemId);
@@ -3832,17 +3836,26 @@ TOTAL: $${subtotal.toFixed(2)}
               const qtyToDeduct = bomEntry.quantityRequired * returnItem.qtyApproved;
 
               // Components track stock in currentStock — that is the truth field for
-              // raw materials. hildaleQty/pivotQty on a component is legacy contamination
-              // (see the integrity dashboard's COMPONENT_WAREHOUSE_FIELDS check), and no
-              // component in the catalog holds stock in hildaleQty alone. The prior code
-              // deducted qtyToDeduct from BOTH hildaleQty AND currentStock, writing off
-              // every contaminated component twice over (audit RCV-1). Deduct the single
-              // truth field only. (Routing this write-off through InventoryMovement for a
-              // $-valued shrinkage row is deferred to the Tier B gateway work / MGI-5.)
+              // raw materials (the RCV-1 double-deduction is fixed). Tier B / MGI-5:
+              // the write-off now routes through the movement gateway so it is
+              // atomic, ledgered, and clamped the same way a manual count is.
               const componentStock = componentItem.currentStock ?? 0;
-              await storage.updateItem(componentItem.id, {
-                currentStock: Math.max(0, componentStock - qtyToDeduct),
-              });
+              const writeOffQty = Math.min(qtyToDeduct, componentStock);
+              if (writeOffQty > 0) {
+                const damageMovement = new InventoryMovement(storage);
+                const damageResult = await damageMovement.apply({
+                  eventType: 'MANUAL_ADJUSTMENT',
+                  itemId: componentItem.id,
+                  quantity: -writeOffQty,
+                  location: 'N/A',
+                  source: 'SYSTEM',
+                  userId: req.session.userId ?? undefined,
+                  notes: `Damaged-return write-off: ${qtyToDeduct} × ${componentItem.sku} (clamped to on-hand ${componentStock})`,
+                });
+                if (!damageResult.success) {
+                  console.error(`[DamageAssessment] Component write-off failed for ${componentItem.sku}: ${damageResult.error}`);
+                }
+              }
 
               // Track deduction for logging
               stockDeductions.push({
@@ -3899,8 +3912,15 @@ TOTAL: $${subtotal.toFixed(2)}
                 if (createErr.message?.includes('duplicate') || createErr.code === '23505') {
                   refurbItem = await storage.getItemBySku(refurbSku);
                   if (refurbItem) {
-                    const newHildaleQty = (refurbItem.hildaleQty ?? 0) + returnItem.qtyApproved;
-                    await storage.updateItem(refurbItem.id, { hildaleQty: newHildaleQty });
+                    await new InventoryMovement(storage).apply({
+                      eventType: 'MANUAL_ADJUSTMENT',
+                      itemId: refurbItem.id,
+                      quantity: returnItem.qtyApproved,
+                      location: 'HILDALE',
+                      source: 'SYSTEM',
+                      userId: req.session.userId ?? undefined,
+                      notes: `Refurb intake (duplicate-create race): +${returnItem.qtyApproved} ${refurbSku}`,
+                    });
                     console.log(`[DamageAssessment] Race condition handled - updated REFURB item: ${refurbSku}`);
                   }
                 } else {
@@ -3908,12 +3928,18 @@ TOTAL: $${subtotal.toFixed(2)}
                 }
               }
             } else {
-              // Add to existing REFURB item's hildaleQty
-              const newHildaleQty = (refurbItem.hildaleQty ?? 0) + returnItem.qtyApproved;
-              await storage.updateItem(refurbItem.id, {
-                hildaleQty: newHildaleQty,
+              // Add to existing REFURB item's hildaleQty via the gateway
+              // (atomic + ledgered; audit MGI-5).
+              const refurbResult = await new InventoryMovement(storage).apply({
+                eventType: 'MANUAL_ADJUSTMENT',
+                itemId: refurbItem.id,
+                quantity: returnItem.qtyApproved,
+                location: 'HILDALE',
+                source: 'SYSTEM',
+                userId: req.session.userId ?? undefined,
+                notes: `Refurb intake: +${returnItem.qtyApproved} ${refurbSku}`,
               });
-              console.log(`[DamageAssessment] Updated REFURB item: ${refurbSku} to qty ${newHildaleQty}`);
+              console.log(`[DamageAssessment] Updated REFURB item: ${refurbSku} (+${returnItem.qtyApproved}, now ${refurbResult.afterQty})`);
             }
             
             stockAdditions.push({
@@ -12685,12 +12711,23 @@ Notes: ${po.notes || 'None'}
           continue;
         }
 
-        const newFx = fxAvailable - qty;
-        const newHildale = (item.hildaleQty ?? 0) + qty;
-        await storage.updateItem(itemId, {
-          fxInProcessQty: newFx,
-          hildaleQty: newHildale,
+        // Hildale credit goes through the gateway (atomic + ledgered; audit
+        // MGI-1). fxInProcessQty is WIP bookkeeping, not counted stock — it
+        // stays a plain field update.
+        const fxMoveResult = await new InventoryMovement(storage).apply({
+          eventType: "MANUAL_ADJUSTMENT",
+          itemId,
+          quantity: qty,
+          location: "HILDALE",
+          source: "SYSTEM",
+          userId: req.session.userId ?? undefined,
+          notes: `Received from FX: +${qty} ${item.sku}`,
         });
+        if (!fxMoveResult.success) {
+          results.push({ itemId, sku: item.sku, quantity: qty, success: false, error: fxMoveResult.error || "Movement failed" });
+          continue;
+        }
+        await storage.updateItem(itemId, { fxInProcessQty: fxAvailable - qty });
 
         await storage.createInventoryTransaction({
           itemId,
@@ -12852,7 +12889,23 @@ Notes: ${po.notes || 'None'}
 
           const before = item.currentStock ?? 0;
           const newStock = before + qty;
-          await storage.updateItem(item.id, { currentStock: newStock });
+          // Gateway receive (audit RCV-7): atomic, ledgered, and WAC rolls —
+          // explicit line cost wins, else the item's default purchase cost.
+          const lineUnitCost = Number((line as any)?.unitCost);
+          const receiveResult = await new InventoryMovement(storage).apply({
+            eventType: "PURCHASE_ORDER_RECEIVED",
+            itemId: item.id,
+            quantity: qty,
+            location: "N/A",
+            source: "SYSTEM",
+            unitCost: Number.isFinite(lineUnitCost) && lineUnitCost > 0 ? lineUnitCost : undefined,
+            userId,
+            notes: `Received via /receive-stock`,
+          });
+          if (!receiveResult.success) {
+            results.push({ itemId, itemName: item.name, success: false, quantity: qty, newStock: before, error: receiveResult.error || "Movement failed" });
+            continue;
+          }
           const lotNumber = typeof line?.lotNumber === "string" && line.lotNumber.trim()
             ? line.lotNumber.trim()
             : null;
@@ -13898,12 +13951,23 @@ Notes: ${po.notes || 'None'}
             applied: true,
           });
 
-          // Update item currentStock directly
-          const item = await storage.getItem(entry.itemId);
-          if (item) {
-            await storage.updateItem(entry.itemId, {
-              currentStock: entry.countedQty ?? 0,
-            });
+          // AUDIT COUNT-1 (critical): committing used to OVERWRITE stock with
+          // the counted number against a stale snapshot — a PO received after
+          // the count sheet was filled was silently erased. The count measured
+          // (counted − systemQty-at-count-time); applying that VARIANCE to the
+          // live row via the gateway preserves every intervening movement,
+          // and MANUAL_COUNT values the drift as shrinkage/overage in $.
+          const countResult = await new InventoryMovement(storage).apply({
+            eventType: "MANUAL_COUNT",
+            itemId: entry.itemId,
+            quantity: variance,
+            location: "N/A",
+            source: "SYSTEM",
+            userId: req.session.userId ?? undefined,
+            notes: `Cycle count ${session.sessionNumber}: counted ${entry.countedQty ?? 0} vs snapshot ${entry.systemQty}`,
+          });
+          if (!countResult.success) {
+            console.error(`[CycleCount] Variance apply failed for ${entry.itemSku}: ${countResult.error}`);
           }
           totalVariances++;
         }
@@ -16036,14 +16100,24 @@ Notes: ${po.notes || 'None'}
 
         if (isFx && item.type === "finished_product") {
           const fxBefore = item.fxInProcessQty ?? 0;
-          // Decrement fx_in_process by what was actually received (symmetric with the
-          // hildale credit) so partial receives don't zero out units still in process.
-          const fxAfter = Math.max(0, fxBefore - recv);
-          const hildaleAfter = (item.hildaleQty ?? 0) + recv;
-          await storage.updateItem(item.id, {
-            fxInProcessQty: fxAfter,
-            hildaleQty: hildaleAfter,
+          // Hildale credit through the gateway (audit MGI-1). fxInProcessQty
+          // is WIP bookkeeping, decremented by what was actually received
+          // (symmetric with the hildale credit) so partial receives don't
+          // zero out units still in process.
+          const fxQuickResult = await new InventoryMovement(storage).apply({
+            eventType: "MANUAL_ADJUSTMENT",
+            itemId: item.id,
+            quantity: recv,
+            location: "HILDALE",
+            source: "SYSTEM",
+            userId,
+            notes: noteTag + ` (PO ${po.poNumber})`,
           });
+          if (!fxQuickResult.success) {
+            applied.push({ sku: item.sku, received: 0, effect: `FAILED: ${fxQuickResult.error}` });
+            continue;
+          }
+          await storage.updateItem(item.id, { fxInProcessQty: Math.max(0, fxBefore - recv) });
           await storage.createInventoryTransaction({
             itemId: item.id,
             itemType: "FINISHED",
@@ -16056,8 +16130,22 @@ Notes: ${po.notes || 'None'}
           });
           applied.push({ sku: item.sku, received: recv, effect: "fx→hildale" });
         } else if (item.type === "component") {
-          const newStock = (item.currentStock ?? 0) + recv;
-          await storage.updateItem(item.id, { currentStock: newStock });
+          // Gateway receive with the PO id so WAC rolls from the PO line cost
+          // (audit MGI-1/RCV-2: quick-receive used to freeze cost truth).
+          const quickResult = await new InventoryMovement(storage).apply({
+            eventType: "PURCHASE_ORDER_RECEIVED",
+            itemId: item.id,
+            quantity: recv,
+            location: "N/A",
+            source: "SYSTEM",
+            poId: po.id,
+            userId,
+            notes: noteTag + ` (PO ${po.poNumber})`,
+          });
+          if (!quickResult.success) {
+            applied.push({ sku: item.sku, received: 0, effect: `FAILED: ${quickResult.error}` });
+            continue;
+          }
           await storage.createInventoryTransaction({
             itemId: item.id,
             itemType: "RAW",
@@ -16177,12 +16265,23 @@ Notes: ${po.notes || 'None'}
           const hildaleBefore = item.hildaleQty ?? 0;
 
           if (isReceiving) {
-            const fxAfter = wasContributing ? Math.max(0, fxBefore - qty) : fxBefore;
-            const hildaleAfter = hildaleBefore + qty;
-            await storage.updateItem(item.id, {
-              fxInProcessQty: fxAfter,
-              hildaleQty: hildaleAfter,
+            // Hildale credit through the gateway (audit MGI-1); the WIP
+            // bookkeeping field stays a plain update.
+            const statusMoveResult = await new InventoryMovement(storage).apply({
+              eventType: "MANUAL_ADJUSTMENT",
+              itemId: item.id,
+              quantity: qty,
+              location: "HILDALE",
+              source: "SYSTEM",
+              userId,
+              notes: `[po_status received] PO ${po.poNumber}: +${qty} ${item.sku}`,
             });
+            if (!statusMoveResult.success) {
+              applied.push({ itemId: item.id, sku: item.sku, effect: `receive FAILED: ${statusMoveResult.error}`, qty: 0 });
+              continue;
+            }
+            const fxAfter = wasContributing ? Math.max(0, fxBefore - qty) : fxBefore;
+            await storage.updateItem(item.id, { fxInProcessQty: fxAfter });
             await storage.createInventoryTransaction({
               itemId: item.id,
               itemType: "FINISHED",
@@ -28489,7 +28588,29 @@ Generate only the email body text, no subject line.`;
           const difference = actualQty - before;
 
           if (difference !== 0) {
-            await storage.updateItem(item.id, { [field]: actualQty } as any);
+            if (location === "pyvott") {
+              // Pyvott counts write the operator's observed snapshot only —
+              // pivot_qty stays Extensiv-owned, so no gateway movement.
+              await storage.updateItem(item.id, { [field]: actualQty } as any);
+            } else {
+              // AUDIT COUNT-2/MGI-2: hildale + raw counts used to overwrite
+              // stock directly (no ledger row, shrinkage invisible). The
+              // variance now routes through the gateway: atomic, ledgered,
+              // and $-valued as shrinkage/overage at WAC.
+              const countMoveResult = await new InventoryMovement(storage).apply({
+                eventType: "MANUAL_COUNT",
+                itemId: item.id,
+                quantity: difference,
+                location: adjLocation,
+                source: "SYSTEM",
+                userId,
+                notes: `Count (${location}) by ${submittedBy}: counted ${actualQty} vs system ${before}`,
+              });
+              if (!countMoveResult.success) {
+                results.push({ itemId: item.id, success: false, before, after: before, difference: 0, error: countMoveResult.error || "Count movement failed" });
+                continue;
+              }
+            }
           }
 
           await storage.createInventoryAdjustment({

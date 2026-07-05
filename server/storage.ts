@@ -2900,10 +2900,20 @@ export class MemStorage implements IStorage {
           throw new Error(`Item ${update.itemId} not found`);
         }
 
-        const updatedStock = (item.currentStock ?? 0) + update.qtyReceived;
-        await this.updateItem(update.itemId, {
-          currentStock: updatedStock,
+        // Gateway RETURN_RECEIVED (audit B2): finished → hildaleQty for
+        // inspection, component → currentStock. Mirrors the Postgres path.
+        const { InventoryMovement } = await import("./services/inventory-movement");
+        const returnMove = await new InventoryMovement(this).apply({
+          eventType: "RETURN_RECEIVED",
+          itemId: update.itemId,
+          quantity: update.qtyReceived,
+          source: "SYSTEM",
+          returnId,
+          notes: `Return received: ${returnRequest.externalOrderId}`,
         });
+        if (!returnMove.success) {
+          throw new Error(`Return receive movement failed for ${item.sku}: ${returnMove.error}`);
+        }
 
         await this.createInventoryTransaction({
           itemId: update.itemId,
@@ -6332,11 +6342,23 @@ export class PostgresStorage implements IStorage {
           throw new Error(`Item ${update.itemId} not found`);
         }
 
-        await this.db.update(schema.items)
-          .set({ 
-            currentStock: drizzleSql`${schema.items.currentStock} + ${update.qtyReceived}` 
-          })
-          .where(eq(schema.items.id, update.itemId));
+        // Gateway RETURN_RECEIVED (audit B2): finished products land in
+        // hildaleQty for inspection, components in currentStock. The old
+        // direct increment put finished returns into currentStock — a field
+        // updateItem clamps to 0 for finished products, so those units
+        // simply vanished. Dynamic import avoids a storage↔movement cycle.
+        const { InventoryMovement } = await import("./services/inventory-movement");
+        const returnMove = await new InventoryMovement(this).apply({
+          eventType: "RETURN_RECEIVED",
+          itemId: update.itemId,
+          quantity: update.qtyReceived,
+          source: "SYSTEM",
+          returnId,
+          notes: `Return received: ${returnRequest.externalOrderId}`,
+        });
+        if (!returnMove.success) {
+          throw new Error(`Return receive movement failed for ${item.sku}: ${returnMove.error}`);
+        }
 
         await this.createInventoryTransaction({
           itemId: update.itemId,

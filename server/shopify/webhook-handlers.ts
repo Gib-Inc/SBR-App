@@ -67,7 +67,25 @@ async function syncShopifyInventoryAfterOrder(
       const shopifyLevel = await syncService.getInventoryLevel(item.shopifyInventoryItemId, pivotLocationId);
       
       if (shopifyLevel !== null && shopifyLevel !== item.availableForSaleQty) {
-        await storage.updateItem(item.id, { availableForSaleQty: shopifyLevel });
+        // AUDIT MC-2/MGI-7: this legacy handler used to OVERWRITE afs with
+        // Shopify's number directly — silently erasing Amazon sales, transfers
+        // and counts the gateway had ledgered. Until it is sunset
+        // (shopifyInventorySunsetDate), the re-anchor routes through the
+        // gateway as a MANUAL_COUNT delta so every overwrite is atomic,
+        // audit-logged, and $-valued in the reconciliation ledger.
+        const anchorDelta = shopifyLevel - (item.availableForSaleQty ?? 0);
+        const anchorResult = await new InventoryMovement(storage).apply({
+          eventType: 'MANUAL_COUNT',
+          itemId: item.id,
+          quantity: anchorDelta,
+          location: 'PIVOT',
+          source: 'SYSTEM',
+          notes: `Legacy Shopify re-anchor (order ${orderName}): afs ${item.availableForSaleQty} -> ${shopifyLevel}`,
+        });
+        if (!anchorResult.success) {
+          console.warn(`[Shopify Webhook] Re-anchor movement failed for ${item.sku}: ${anchorResult.error}`);
+          continue;
+        }
         console.log(`[Shopify Webhook] Synced ${item.sku} availableForSaleQty: ${item.availableForSaleQty} -> ${shopifyLevel}`);
         syncedCount++;
       }

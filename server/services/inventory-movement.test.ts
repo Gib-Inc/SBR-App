@@ -408,3 +408,80 @@ describe("weighted-average cost maintenance", () => {
     expect(storage.reconLogs[0].dataType).toBe("inventory_valuation");
   });
 });
+
+// ── Atomic path (audit CONC-1 keystone) ───────────────────────────────────
+// The engine must route the movement math through storage.updateItemAtomic
+// when the storage provides it, and the math must run against the row the
+// lock returns — NOT the pre-read — so a concurrent movement that lands
+// between pre-read and lock is never overwritten.
+describe("atomic movement path", () => {
+  class AtomicFakeStorage extends FakeStorage {
+    atomicCalls = 0;
+    updateItemCalls = 0;
+    // Simulates a concurrent decrement landing before the lock is acquired.
+    mutateBeforeLock?: (item: Item) => Item;
+
+    async updateItemAtomic<T>(
+      id: string,
+      compute: (current: Item) => { updates: Partial<Item> | null; result: T },
+    ): Promise<{ item: Item | undefined; result: T | undefined }> {
+      this.atomicCalls++;
+      let current = this.get(id);
+      if (this.mutateBeforeLock) {
+        current = this.mutateBeforeLock(current);
+        (this as any)["items"].set(id, current);
+      }
+      const { updates, result } = compute(current);
+      if (!updates || Object.keys(updates).length === 0) {
+        return { item: current, result };
+      }
+      const item = await super.updateItem(id, updates);
+      return { item, result };
+    }
+
+    async updateItem(id: string, data: Partial<Item>): Promise<Item | undefined> {
+      this.updateItemCalls++;
+      return super.updateItem(id, data);
+    }
+  }
+
+  it("prefers updateItemAtomic over read-modify-write when available", async () => {
+    const atomic = new AtomicFakeStorage();
+    const eng = new InventoryMovement(atomic as unknown as IStorage);
+    atomic.seed({ id: "FG9", sku: "FG-9", type: "finished_product", availableForSaleQty: 40 });
+    const res = await eng.apply({
+      eventType: "SALES_ORDER_CREATED", itemId: "FG9", quantity: 1, source: "TEST", location: "PIVOT",
+    });
+    expect(res.success).toBe(true);
+    expect(atomic.atomicCalls).toBe(1);
+    expect((atomic.get("FG9") as any).availableForSaleQty).toBe(39);
+  });
+
+  it("computes against the locked row, not the pre-read (no lost decrement)", async () => {
+    const atomic = new AtomicFakeStorage();
+    const eng = new InventoryMovement(atomic as unknown as IStorage);
+    atomic.seed({ id: "FG9", sku: "FG-9", type: "finished_product", availableForSaleQty: 40 });
+    // A concurrent sale decrements afs 40 → 39 after our pre-read but before
+    // our lock. The old read-compute-overwrite would write 39 (losing that
+    // unit); the locked compute must see 39 and write 38.
+    atomic.mutateBeforeLock = (item) => ({ ...item, availableForSaleQty: 39 } as Item);
+    const res = await eng.apply({
+      eventType: "SALES_ORDER_CREATED", itemId: "FG9", quantity: 1, source: "TEST", location: "PIVOT",
+    });
+    expect(res.success).toBe(true);
+    expect((atomic.get("FG9") as any).availableForSaleQty).toBe(38);
+  });
+
+  it("insufficient-stock failures inside the locked compute write nothing", async () => {
+    const atomic = new AtomicFakeStorage();
+    const eng = new InventoryMovement(atomic as unknown as IStorage);
+    atomic.seed({ id: "FG9", sku: "FG-9", type: "finished_product", hildaleQty: 2 });
+    const res = await eng.apply({
+      eventType: "SALES_ORDER_SHIPPED", itemId: "FG9", quantity: 5, source: "TEST", location: "HILDALE",
+    });
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("Insufficient Hildale stock");
+    expect(atomic.updateItemCalls).toBe(0);
+    expect((atomic.get("FG9") as any).hildaleQty).toBe(2);
+  });
+});

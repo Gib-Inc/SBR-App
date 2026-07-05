@@ -145,6 +145,25 @@ interface InventoryState {
   currentStock: number;
 }
 
+// Result of the pure movement math run against the (row-locked) item state.
+interface MovementComputation {
+  beforeState: InventoryState;
+  updates: {
+    hildaleQty?: number;
+    pivotQty?: number;
+    availableForSaleQty?: number;
+    currentStock?: number;
+    wacUnitCost?: number;
+    forecastDirty?: boolean;
+  } | null;
+  quantityDelta: number;
+  error?: string;
+  // Failure branches historically reported the specific field they checked
+  // (hildale, currentStock, onHand) as before/after — preserved here.
+  errorBeforeQty?: number;
+  reconEntry?: { action: "SHRINKAGE" | "OVERAGE"; valueDelta: number; wac: number };
+}
+
 export class InventoryMovement {
   constructor(private storage: IStorage) {}
 
@@ -163,8 +182,12 @@ export class InventoryMovement {
 
   async apply(params: InventoryMovementParams): Promise<InventoryMovementResult> {
     try {
-      const item = await this.storage.getItem(params.itemId);
-      if (!item) {
+      // Pre-read (unlocked): existence check, event routing, and async costing
+      // prefetch. The actual stock math re-runs against the ROW-LOCKED current
+      // item inside updateItemAtomic, so a concurrent movement between this
+      // read and the lock cannot lose a decrement (audit CONC-1).
+      const preItem = await this.storage.getItem(params.itemId);
+      if (!preItem) {
         return {
           success: false,
           itemId: params.itemId,
@@ -176,22 +199,219 @@ export class InventoryMovement {
         };
       }
 
-      const beforeState = this.getInventoryState(item);
-      const isFinished = item.type === "finished_product";
-      const location = params.location || (isFinished ? "PIVOT" : "N/A");
-      const isPivotFulfilled = location === "PIVOT";
-      
-      let updates: {
-        hildaleQty?: number;
-        pivotQty?: number;
-        availableForSaleQty?: number;
-        currentStock?: number;
-        wacUnitCost?: number;
-        forecastDirty?: boolean;
-      } = {};
-      let quantityDelta = 0;
+      const costing = await this.prefetchCosting(preItem, params);
 
-      switch (params.eventType) {
+      let computation: MovementComputation | undefined;
+      let afterItem: Item | undefined;
+
+      if (typeof this.storage.updateItemAtomic === "function") {
+        const outcome = await this.storage.updateItemAtomic(params.itemId, (current) => {
+          const c = this.computeMovement(current, params, costing);
+          return { updates: c.error ? null : c.updates, result: c };
+        });
+        computation = outcome.result;
+        afterItem = outcome.item;
+      } else {
+        // Non-locking fallback for storages without atomic support (tests,
+        // in-memory). Same math, no serialization guarantee.
+        const current = await this.storage.getItem(params.itemId);
+        if (current) {
+          computation = this.computeMovement(current, params, costing);
+          afterItem = !computation.error && computation.updates
+            ? await this.storage.updateItem(params.itemId, computation.updates)
+            : current;
+        }
+      }
+
+      if (!computation) {
+        return {
+          success: false,
+          itemId: params.itemId,
+          sku: preItem.sku,
+          beforeQty: 0,
+          afterQty: 0,
+          quantityChanged: 0,
+          error: `Item ${params.itemId} disappeared during movement`,
+        };
+      }
+
+      const { beforeState, updates, quantityDelta, error, errorBeforeQty, reconEntry } = computation;
+
+      if (error) {
+        const qty = errorBeforeQty ?? beforeState.onHand;
+        return {
+          success: false,
+          itemId: params.itemId,
+          sku: preItem.sku,
+          beforeQty: qty,
+          afterQty: qty,
+          quantityChanged: 0,
+          error,
+        };
+      }
+
+      // Zero-drift audit (MANUAL_COUNT): the $ variance row is written after
+      // the stock write commits so a rolled-back movement never logs shrinkage.
+      if (reconEntry) {
+        await this.storage.createDataReconciliationLog([{
+          dataType: "inventory_valuation",
+          entityKey: preItem.sku,
+          action: reconEntry.action,
+          field: "asset_value",
+          oldValue: null,
+          newValue: String(reconEntry.valueDelta),
+          reason: `Manual count moved ${preItem.sku} by ${quantityDelta} unit(s) × $${reconEntry.wac.toFixed(2)} WAC = $${reconEntry.valueDelta} balance-sheet adjustment.`,
+          source: params.source || "manual-count",
+        }]).catch(() => {});
+      }
+
+      if (updates && Object.keys(updates).length > 0) {
+        // Realtime broadcast: only the fields we actually mutated. forecastDirty
+        // is a bookkeeping flag and not relevant to the UI, so we strip it.
+        const changedFields = Object.keys(updates).filter((f) => f !== "forecastDirty");
+        if (changedFields.length > 0) {
+          wsInventoryService.broadcast({
+            itemIds: [params.itemId],
+            fields: changedFields,
+            reason: params.eventType === "TRANSFER" ? "TRANSFER"
+              : params.eventType === "SALES_ORDER_SHIPPED" ? "SHIP"
+              : "MOVEMENT",
+          });
+        }
+      }
+
+      // Lot traceability: when a build consumes components, draw FIFO from
+      // open inventory_lots so a recall can later trace from a specific lot
+      // back to the production runs (and ultimately customers) it touched.
+      // Only fires when the caller passes productionLogId, so legacy paths
+      // (Shopify webhook BOM consumption etc.) keep working unchanged.
+      if (
+        params.eventType === "BOM_CONSUMPTION" &&
+        params.productionLogId &&
+        params.quantity > 0
+      ) {
+        try {
+          let remaining = params.quantity;
+          const lots = await this.storage.getOpenLotsForItemFIFO(params.itemId);
+          for (const lot of lots) {
+            if (remaining <= 0) break;
+            const draw = Math.min(remaining, lot.remainingQty ?? 0);
+            if (draw <= 0) continue;
+            await this.storage.decrementLotRemaining(lot.id, draw);
+            await this.storage.createLotConsumptionEvent({
+              lotId: lot.id,
+              productionLogId: params.productionLogId,
+              qtyDrawn: draw,
+            });
+            remaining -= draw;
+          }
+          // remaining > 0 here means we consumed more than the lots have on
+          // record (possible when older receives weren't lot-tracked). The
+          // currentStock decrement above already accounted for it; we just
+          // can't attribute the surplus to any lot.
+        } catch (err) {
+          console.warn("[InventoryMovement] FIFO lot draw failed (non-fatal):", err);
+        }
+      }
+
+      const afterState = afterItem ? this.getInventoryState(afterItem) : beforeState;
+
+      await this.logMovement(params, preItem, beforeState, afterState, quantityDelta);
+
+      return {
+        success: true,
+        itemId: params.itemId,
+        sku: preItem.sku,
+        beforeQty: beforeState.onHand,
+        afterQty: afterState.onHand,
+        quantityChanged: quantityDelta,
+      };
+    } catch (error: any) {
+      console.error(`[InventoryMovement] Error applying ${params.eventType}:`, error);
+      return {
+        success: false,
+        itemId: params.itemId,
+        sku: "",
+        beforeQty: 0,
+        afterQty: 0,
+        quantityChanged: 0,
+        error: error.message || "Failed to apply inventory movement",
+      };
+    }
+  }
+
+  // Async costing inputs resolved BEFORE the row lock: PO line cost and BOM
+  // build cost live in other tables and don't race the item row, so reading
+  // them outside the transaction keeps the lock window minimal.
+  private async prefetchCosting(
+    item: Item,
+    params: InventoryMovementParams,
+  ): Promise<{ receiptCost?: number; perUnitBuildCost?: number }> {
+    const costing: { receiptCost?: number; perUnitBuildCost?: number } = {};
+    const isFinished = item.type === "finished_product";
+    try {
+      if (params.eventType === "PURCHASE_ORDER_RECEIVED" && !isFinished && params.quantity > 0) {
+        // Receipt cost: explicit override → PO line unit cost → (compute falls
+        // back to the item's default purchase cost).
+        let receiptCost = params.unitCost;
+        if (receiptCost == null && params.poId) {
+          const lines = await this.storage.getPurchaseOrderLinesByPOId(params.poId).catch(() => []);
+          const line: any = (lines || []).find((l: any) => l.itemId === params.itemId);
+          if (line && Number(line.unitCost) > 0) receiptCost = Number(line.unitCost);
+        }
+        if (receiptCost != null) costing.receiptCost = receiptCost;
+      } else if (params.eventType === "PRODUCTION_COMPLETED" && isFinished && params.quantity > 0) {
+        // Build-order cost transition: per-unit build cost = Σ component WAC ×
+        // qty-per-unit (incl. wastage).
+        let perUnitBuildCost = params.unitCost;
+        if (perUnitBuildCost == null) {
+          const bom = await this.storage.getBillOfMaterialsByProductId(params.itemId).catch(() => []);
+          if (bom && bom.length) {
+            const comps: { qtyPerUnit: number; unitCost: number }[] = [];
+            for (const b of bom as any[]) {
+              const comp: any = await this.storage.getItem(b.componentId).catch(() => undefined);
+              const compCost = comp?.wacUnitCost ?? comp?.defaultPurchaseCost;
+              if (comp && compCost != null) {
+                const qtyPer = Number(b.quantityRequired || 0) * (1 + (Number(b.wastagePercent) || 0) / 100);
+                comps.push({ qtyPerUnit: qtyPer, unitCost: Number(compCost) });
+              }
+            }
+            if (comps.length) perUnitBuildCost = buildUnitCost(comps);
+          }
+        }
+        if (perUnitBuildCost != null) costing.perUnitBuildCost = perUnitBuildCost;
+      }
+    } catch (costingError: any) {
+      console.warn(`[InventoryMovement] Costing prefetch skipped for ${item.sku}: ${costingError?.message ?? costingError}`);
+    }
+    return costing;
+  }
+
+  // The movement math against the CURRENT (row-locked) item state. MUST stay
+  // synchronous and side-effect free: it runs inside the storage transaction
+  // when the storage supports updateItemAtomic. Costing inputs arrive
+  // prefetched; the shrinkage recon row is returned as data and written by
+  // apply() after commit.
+  private computeMovement(
+    item: Item,
+    params: InventoryMovementParams,
+    costing: { receiptCost?: number; perUnitBuildCost?: number },
+  ): MovementComputation {
+    const beforeState = this.getInventoryState(item);
+    const isFinished = item.type === "finished_product";
+    const location = params.location || (isFinished ? "PIVOT" : "N/A");
+
+    let updates: {
+      hildaleQty?: number;
+      pivotQty?: number;
+      availableForSaleQty?: number;
+      currentStock?: number;
+      wacUnitCost?: number;
+      forecastDirty?: boolean;
+    } = {};
+    let quantityDelta = 0;
+
+    switch (params.eventType) {
         case "PURCHASE_ORDER_RECEIVED":
           // INVARIANT: POs are ONLY for raw/components, NOT finished products
           // Finished products are created via PRODUCTION_COMPLETED, not PO receipts
@@ -242,13 +462,11 @@ export class InventoryMovement {
             if (location === "HILDALE") {
               if (beforeState.hildaleQty < params.quantity) {
                 return {
-                  success: false,
-                  itemId: params.itemId,
-                  sku: item.sku,
-                  beforeQty: beforeState.hildaleQty,
-                  afterQty: beforeState.hildaleQty,
-                  quantityChanged: 0,
+                  beforeState,
+                  updates: null,
+                  quantityDelta: 0,
                   error: `Insufficient Hildale stock for ${item.sku}. Available: ${beforeState.hildaleQty}, Requested: ${params.quantity}`,
+                  errorBeforeQty: beforeState.hildaleQty,
                 };
               }
               quantityDelta = -params.quantity;
@@ -262,13 +480,11 @@ export class InventoryMovement {
               updates.currentStock = beforeState.currentStock - params.quantity;
             } else {
               return {
-                success: false,
-                itemId: params.itemId,
-                sku: item.sku,
-                beforeQty: beforeState.currentStock,
-                afterQty: beforeState.currentStock,
-                quantityChanged: 0,
+                beforeState,
+                updates: null,
+                quantityDelta: 0,
                 error: `Insufficient stock for ${item.sku}. Available: ${beforeState.currentStock}, Requested: ${params.quantity}`,
+                errorBeforeQty: beforeState.currentStock,
               };
             }
           }
@@ -342,13 +558,11 @@ export class InventoryMovement {
               quantityDelta = 0; // Net change is zero (moving between locations)
             } else {
               return {
-                success: false,
-                itemId: params.itemId,
-                sku: item.sku,
-                beforeQty: beforeState.onHand,
-                afterQty: beforeState.onHand,
-                quantityChanged: 0,
+                beforeState,
+                updates: null,
+                quantityDelta: 0,
                 error: `Insufficient Hildale stock for transfer of ${item.sku}. Available: ${beforeState.hildaleQty}, Requested: ${params.quantity}`,
+                errorBeforeQty: beforeState.onHand,
               };
             }
           }
@@ -383,153 +597,61 @@ export class InventoryMovement {
           break;
       }
 
-      // ── Weighted-average cost maintenance (FinOps Pillar 2) ──────────────
-      // Costing is additive metadata: it augments the SAME single-row update
-      // as the quantity change (atomic per item) and a costing failure must
-      // never block the stock movement itself — hence the isolated try/catch.
-      try {
-        if (params.eventType === "PURCHASE_ORDER_RECEIVED" && !isFinished && params.quantity > 0) {
-          // Receipt cost: explicit override → PO line unit cost → default cost.
-          let receiptCost = params.unitCost;
-          if (receiptCost == null && params.poId) {
-            const lines = await this.storage.getPurchaseOrderLinesByPOId(params.poId).catch(() => []);
-            const line: any = (lines || []).find((l: any) => l.itemId === params.itemId);
-            if (line && Number(line.unitCost) > 0) receiptCost = Number(line.unitCost);
-          }
-          if (receiptCost == null && (item as any).defaultPurchaseCost != null) {
-            receiptCost = Number((item as any).defaultPurchaseCost);
-          }
-          if (receiptCost != null && receiptCost >= 0) {
-            const priorWac = (item as any).wacUnitCost ?? (item as any).defaultPurchaseCost ?? receiptCost;
-            updates.wacUnitCost = weightedAverageCost(
-              beforeState.currentStock, Number(priorWac) || 0, params.quantity, receiptCost,
-            );
-          }
-        } else if (params.eventType === "PRODUCTION_COMPLETED" && isFinished && params.quantity > 0) {
-          // Build-order cost transition: per-unit build cost = Σ component WAC ×
-          // qty-per-unit (incl. wastage), rolled into the finished good's WAC
-          // against its physical on-hand (hildale + pivot).
-          let perUnitBuildCost = params.unitCost;
-          if (perUnitBuildCost == null) {
-            const bom = await this.storage.getBillOfMaterialsByProductId(params.itemId).catch(() => []);
-            if (bom && bom.length) {
-              const comps: { qtyPerUnit: number; unitCost: number }[] = [];
-              for (const b of bom as any[]) {
-                const comp: any = await this.storage.getItem(b.componentId).catch(() => undefined);
-                const compCost = comp?.wacUnitCost ?? comp?.defaultPurchaseCost;
-                if (comp && compCost != null) {
-                  const qtyPer = Number(b.quantityRequired || 0) * (1 + (Number(b.wastagePercent) || 0) / 100);
-                  comps.push({ qtyPerUnit: qtyPer, unitCost: Number(compCost) });
-                }
-              }
-              if (comps.length) perUnitBuildCost = buildUnitCost(comps);
-            }
-          }
-          if (perUnitBuildCost != null && perUnitBuildCost > 0) {
-            const physicalOnHand = beforeState.hildaleQty + beforeState.pivotQty;
-            const priorWac = (item as any).wacUnitCost ?? 0;
-            updates.wacUnitCost = weightedAverageCost(
-              physicalOnHand, Number(priorWac) || 0, params.quantity, perUnitBuildCost,
-            );
-          }
-        } else if (params.eventType === "MANUAL_COUNT" && quantityDelta !== 0) {
-          // Zero-drift audit: a manual recount moves the inventory asset value
-          // by qtyDelta × WAC. Flag the $ variance in the reconciliation ledger.
-          const wac = (item as any).wacUnitCost ?? (item as any).defaultPurchaseCost;
-          if (wac != null && Number(wac) > 0) {
-            const valueDelta = Math.round(quantityDelta * Number(wac) * 100) / 100;
-            await this.storage.createDataReconciliationLog([{
-              dataType: "inventory_valuation",
-              entityKey: item.sku,
-              action: quantityDelta < 0 ? "SHRINKAGE" : "OVERAGE",
-              field: "asset_value",
-              oldValue: null,
-              newValue: String(valueDelta),
-              reason: `Manual count moved ${item.sku} by ${quantityDelta} unit(s) × $${Number(wac).toFixed(2)} WAC = $${valueDelta} balance-sheet adjustment.`,
-              source: params.source || "manual-count",
-            }]).catch(() => {});
-          }
-        }
-      } catch (costingError: any) {
-        console.warn(`[InventoryMovement] WAC maintenance skipped for ${item.sku}: ${costingError?.message ?? costingError}`);
+    // ── Weighted-average cost maintenance (FinOps Pillar 2) ──────────────
+    // Costing is additive metadata: it augments the SAME single-row update
+    // as the quantity change (atomic per item, inside the row lock). Costs
+    // were prefetched; a missing cost must never block the movement itself.
+    if (params.eventType === "PURCHASE_ORDER_RECEIVED" && !isFinished && params.quantity > 0) {
+      // Receipt cost: prefetched (explicit override → PO line) → default cost.
+      let receiptCost = costing.receiptCost;
+      if (receiptCost == null && (item as any).defaultPurchaseCost != null) {
+        receiptCost = Number((item as any).defaultPurchaseCost);
       }
-
-      if (Object.keys(updates).length > 0) {
-        updates.forecastDirty = true;
-        await this.storage.updateItem(params.itemId, updates);
-        // Realtime broadcast: only the fields we actually mutated. forecastDirty
-        // is a bookkeeping flag and not relevant to the UI, so we strip it.
-        const changedFields = Object.keys(updates).filter((f) => f !== "forecastDirty");
-        if (changedFields.length > 0) {
-          wsInventoryService.broadcast({
-            itemIds: [params.itemId],
-            fields: changedFields,
-            reason: params.eventType === "TRANSFER" ? "TRANSFER"
-              : params.eventType === "SALES_ORDER_SHIPPED" ? "SHIP"
-              : "MOVEMENT",
-          });
-        }
+      if (receiptCost != null && receiptCost >= 0) {
+        const priorWac = (item as any).wacUnitCost ?? (item as any).defaultPurchaseCost ?? receiptCost;
+        updates.wacUnitCost = weightedAverageCost(
+          beforeState.currentStock, Number(priorWac) || 0, params.quantity, receiptCost,
+        );
       }
-
-      // Lot traceability: when a build consumes components, draw FIFO from
-      // open inventory_lots so a recall can later trace from a specific lot
-      // back to the production runs (and ultimately customers) it touched.
-      // Only fires when the caller passes productionLogId, so legacy paths
-      // (Shopify webhook BOM consumption etc.) keep working unchanged.
-      if (
-        params.eventType === "BOM_CONSUMPTION" &&
-        params.productionLogId &&
-        params.quantity > 0
-      ) {
-        try {
-          let remaining = params.quantity;
-          const lots = await this.storage.getOpenLotsForItemFIFO(params.itemId);
-          for (const lot of lots) {
-            if (remaining <= 0) break;
-            const draw = Math.min(remaining, lot.remainingQty ?? 0);
-            if (draw <= 0) continue;
-            await this.storage.decrementLotRemaining(lot.id, draw);
-            await this.storage.createLotConsumptionEvent({
-              lotId: lot.id,
-              productionLogId: params.productionLogId,
-              qtyDrawn: draw,
-            });
-            remaining -= draw;
-          }
-          // remaining > 0 here means we consumed more than the lots have on
-          // record (possible when older receives weren't lot-tracked). The
-          // currentStock decrement above already accounted for it; we just
-          // can't attribute the surplus to any lot.
-        } catch (err) {
-          console.warn("[InventoryMovement] FIFO lot draw failed (non-fatal):", err);
-        }
+    } else if (params.eventType === "PRODUCTION_COMPLETED" && isFinished && params.quantity > 0) {
+      // Build-order cost transition: per-unit build cost (prefetched from the
+      // BOM components' WAC) rolled into the finished good's WAC against its
+      // physical on-hand (hildale + pivot).
+      const perUnitBuildCost = costing.perUnitBuildCost;
+      if (perUnitBuildCost != null && perUnitBuildCost > 0) {
+        const physicalOnHand = beforeState.hildaleQty + beforeState.pivotQty;
+        const priorWac = (item as any).wacUnitCost ?? 0;
+        updates.wacUnitCost = weightedAverageCost(
+          physicalOnHand, Number(priorWac) || 0, params.quantity, perUnitBuildCost,
+        );
       }
-
-      const afterItem = await this.storage.getItem(params.itemId);
-      const afterState = afterItem ? this.getInventoryState(afterItem) : beforeState;
-
-      await this.logMovement(params, item, beforeState, afterState, quantityDelta);
-
-      return {
-        success: true,
-        itemId: params.itemId,
-        sku: item.sku,
-        beforeQty: beforeState.onHand,
-        afterQty: afterState.onHand,
-        quantityChanged: quantityDelta,
-      };
-    } catch (error: any) {
-      console.error(`[InventoryMovement] Error applying ${params.eventType}:`, error);
-      return {
-        success: false,
-        itemId: params.itemId,
-        sku: "",
-        beforeQty: 0,
-        afterQty: 0,
-        quantityChanged: 0,
-        error: error.message || "Failed to apply inventory movement",
-      };
     }
+
+    // Zero-drift audit data (MANUAL_COUNT): a recount moves the inventory
+    // asset value by qtyDelta × WAC. Returned as data; apply() writes the
+    // reconciliation row after the movement commits.
+    let reconEntry: MovementComputation["reconEntry"];
+    if (params.eventType === "MANUAL_COUNT" && quantityDelta !== 0) {
+      const wac = (item as any).wacUnitCost ?? (item as any).defaultPurchaseCost;
+      if (wac != null && Number(wac) > 0) {
+        reconEntry = {
+          action: quantityDelta < 0 ? "SHRINKAGE" : "OVERAGE",
+          valueDelta: Math.round(quantityDelta * Number(wac) * 100) / 100,
+          wac: Number(wac),
+        };
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      updates.forecastDirty = true;
+    }
+
+    return {
+      beforeState,
+      updates: Object.keys(updates).length > 0 ? updates : null,
+      quantityDelta,
+      reconEntry,
+    };
   }
 
   private async logMovement(

@@ -243,6 +243,17 @@ export interface IStorage {
   getItemBySku(sku: string): Promise<Item | undefined>;
   createItem(item: InsertItem): Promise<Item>;
   updateItem(id: string, item: Partial<InsertItem>): Promise<Item | undefined>;
+  // Atomic read-compute-write for inventory movements (audit CONC-1). The
+  // Postgres implementation locks the item row (SELECT ... FOR UPDATE) inside
+  // a transaction so concurrent movements serialize instead of losing writes.
+  // `compute` MUST be pure/synchronous: it receives the locked current row and
+  // returns the field updates (null/empty = no write) plus a caller-defined
+  // result passed back verbatim. Optional so lightweight storages (tests)
+  // fall back to the non-locking path in InventoryMovement.
+  updateItemAtomic?<T>(
+    id: string,
+    compute: (current: Item) => { updates: Partial<InsertItem> | null; result: T },
+  ): Promise<{ item: Item | undefined; result: T | undefined }>;
   deleteItem(id: string): Promise<boolean>;
   // Channel SKU lookups (for integration mapping)
   findProductByShopifySku(shopifySku: string): Promise<Item | undefined>;
@@ -1543,6 +1554,22 @@ export class MemStorage implements IStorage {
     
     this.items.set(id, mergedItem);
     return mergedItem;
+  }
+
+  async updateItemAtomic<T>(
+    id: string,
+    compute: (current: Item) => { updates: Partial<InsertItem> | null; result: T },
+  ): Promise<{ item: Item | undefined; result: T | undefined }> {
+    // In-memory storage is single-process: read+compute+write inside one
+    // synchronous block is already atomic per the event loop.
+    const current = this.items.get(id);
+    if (!current) return { item: undefined, result: undefined };
+    const { updates, result } = compute(current);
+    if (!updates || Object.keys(updates).length === 0) {
+      return { item: current, result };
+    }
+    const item = await this.updateItem(id, updates);
+    return { item, result };
   }
 
   async deleteItem(id: string): Promise<boolean> {
@@ -4906,6 +4933,33 @@ export class PostgresStorage implements IStorage {
 
     const results = await this.db.update(schema.items).set(finalUpdateData).where(eq(schema.items.id, id)).returning();
     return results[0];
+  }
+
+  async updateItemAtomic<T>(
+    id: string,
+    compute: (current: Item) => { updates: Partial<InsertItem> | null; result: T },
+  ): Promise<{ item: Item | undefined; result: T | undefined }> {
+    return await this.db.transaction(async (tx) => {
+      const rows = await tx.select().from(schema.items).where(eq(schema.items.id, id)).for("update");
+      const current = rows[0];
+      if (!current) return { item: undefined, result: undefined };
+      const { updates, result } = compute(current);
+      if (!updates || Object.keys(updates).length === 0) {
+        return { item: current, result };
+      }
+      // Same architectural invariant updateItem enforces: finished products
+      // must never carry currentStock (pivot/hildale are their truth fields).
+      const finalUpdates = { ...updates };
+      if (current.type === "finished_product" && "currentStock" in finalUpdates) {
+        finalUpdates.currentStock = 0;
+      }
+      const updated = await tx
+        .update(schema.items)
+        .set(finalUpdates)
+        .where(eq(schema.items.id, id))
+        .returning();
+      return { item: updated[0], result };
+    });
   }
 
   async deleteItem(id: string): Promise<boolean> {

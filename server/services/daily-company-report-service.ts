@@ -191,6 +191,19 @@ export async function runDailyCompanyReport(opts?: { skipRefresh?: boolean }): P
         );
       }
     } catch { /* credit lines unavailable — runway/DSCR gaps already surface elsewhere */ }
+    // G #26 TRIPWIRE: bank-confirmed cash gone stale. Every cash surface prefers the
+    // operator-entered bank balance; when it ages past the trust window during daily
+    // MCA debits, the app's cash silently drifts from the real bank. Find Matt.
+    try {
+      const { getBankConfirmedOverride } = await import("./cash-flow-service");
+      const ov: any = await getBankConfirmedOverride(db);
+      report.financials.bankCashStaleHours = ov?.staleHours ?? null;
+      if (!ov) {
+        anomalies.push("BANK CASH: no fresh bank-confirmed balance on file — cash surfaces are running on the lagging QB ledger. Enter today's bank balance.");
+      } else if (ov.stale) {
+        anomalies.push(`BANK CASH STALE: last confirmed ${ov.staleHours}h ago — with daily MCA debits the real balance has moved. Re-enter today's bank balance.`);
+      }
+    } catch { /* cash-flow service unavailable — runway gaps surface elsewhere */ }
     // G #15 TRIPWIRE: a breached covenant is a standing solvency alarm, not a footnote —
     // the Fresh Funding anti-stacking breach (~$175K accelerable) went unmonitored for weeks.
     try {

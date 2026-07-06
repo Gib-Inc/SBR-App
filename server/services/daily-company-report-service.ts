@@ -218,6 +218,26 @@ export async function runDailyCompanyReport(opts?: { skipRefresh?: boolean }): P
         );
       }
     } catch { /* covenants table not yet migrated — nothing to alarm on */ }
+    // P2#24 follow-up: the standing reconciliation guards (feed continuity, revenue-vs-QB,
+    // A/P, debt) used to run ONLY when someone opened GET /api/finances/reconciliation — a
+    // dead feed or a 2x re-backfill sat red on a page nobody opens. Now every UNEXPECTED
+    // drift lands in the morning anomalies, where the operator actually looks.
+    try {
+      const { computeFinancialReconciliation } = await import("./financial-reconciliation-service");
+      const recon = await computeFinancialReconciliation(db);
+      report.financials.reconDriftCount = recon.driftCount;
+      const money = (v: number | null) => (v == null ? "n/a" : `$${Math.round(v).toLocaleString()}`);
+      for (const c of recon.checks) {
+        if (c.status === "drift" && !c.expected) {
+          anomalies.push(
+            `RECON DRIFT — ${c.label}: app ${money(c.appValue)} vs ${c.bookSource} ${money(c.bookValue)}` +
+            `${c.diffPct != null ? ` (${c.diffPct > 0 ? "+" : ""}${c.diffPct}%)` : ""}. ${c.note}`,
+          );
+        }
+      }
+    } catch (e: any) {
+      anomalies.push(`financial reconciliation failed: ${e?.message ?? e}`);
+    }
   } catch (e: any) {
     anomalies.push(`financials snapshot failed: ${e?.message ?? e}`);
   }

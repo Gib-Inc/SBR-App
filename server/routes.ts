@@ -18408,7 +18408,7 @@ Generate only the email body text, no subject line.`;
       // Create the return request
       const returnRequest = await storage.createReturnRequest({
         salesOrderId,
-        orderNumber: salesOrder.orderNumber || salesOrder.externalOrderId,
+        orderNumber: salesOrder.orderName || salesOrder.externalOrderId,
         externalOrderId: salesOrder.externalOrderId,
         salesChannel: salesOrder.channel,
         source: 'Manual',
@@ -18568,7 +18568,7 @@ Generate only the email body text, no subject line.`;
           returnId: returnRequest.id,
           returnNumber: returnRequest.rmaNumber || returnRequest.id,
           orderId: salesOrderId,
-          orderNumber: salesOrder.orderNumber || salesOrder.externalOrderId || 'N/A',
+          orderNumber: salesOrder.orderName || salesOrder.externalOrderId || 'N/A',
           reason: overallReason,
           userId: req.session.userId!,
           userName: user?.email,
@@ -19948,8 +19948,8 @@ Generate only the email body text, no subject line.`;
         // Escalate to allow for manual exception handling
         await createNeedsAttentionOpportunity(
           ghlClient,
-          `Return Request - Outside Window - ${salesOrder.orderNumber}`,
-          `Customer requested a return outside the ${RETURN_WINDOW_DAYS}-day return window.\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nDays since order: ${daysSinceOrder}\nContact ID: ${contactId}\n\nAction required: Review for possible exception.`,
+          `Return Request - Outside Window - ${salesOrder.orderName || salesOrder.externalOrderId}`,
+          `Customer requested a return outside the ${RETURN_WINDOW_DAYS}-day return window.\n\nOrder: ${salesOrder.orderName || salesOrder.externalOrderId}\nCustomer: ${salesOrder.customerName}\nDays since order: ${daysSinceOrder}\nContact ID: ${contactId}\n\nAction required: Review for possible exception.`,
           contactId
         );
         
@@ -19965,8 +19965,8 @@ Generate only the email body text, no subject line.`;
       if (orderLines.length === 0) {
         await createNeedsAttentionOpportunity(
           ghlClient,
-          `Return Request - No Items - ${salesOrder.orderNumber}`,
-          `Customer requested a return but no items found on order.\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\n\nAction required: Investigate order data.`,
+          `Return Request - No Items - ${salesOrder.orderName || salesOrder.externalOrderId}`,
+          `Customer requested a return but no items found on order.\n\nOrder: ${salesOrder.orderName || salesOrder.externalOrderId}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\n\nAction required: Investigate order data.`,
           contactId
         );
         return res.status(400).json({
@@ -20043,7 +20043,10 @@ Generate only the email body text, no subject line.`;
         returnRequest = await storage.createReturnRequest({
           salesOrderId: salesOrder.id,
           externalOrderId: salesOrder.externalOrderId,
-          orderNumber: salesOrder.orderNumber,
+          // salesOrders has no orderNumber field (phantom, always undefined) — mirror the
+          // fixed sibling path: denormalize the customer-facing name so return_requests
+          // stops persisting a BLANK order_number from the GHL AI-agent path.
+          orderNumber: salesOrder.orderName || salesOrder.externalOrderId,
           salesChannel: salesOrder.channel,
           customerName: salesOrder.customerName,
           customerEmail: salesOrder.customerEmail || undefined,
@@ -20084,7 +20087,7 @@ Generate only the email body text, no subject line.`;
             source: 'GHL_AI_AGENT',
             contactId,
             channel: channel || 'unknown',
-            orderNumber: salesOrder.orderNumber 
+            orderNumber: salesOrder.orderName || salesOrder.externalOrderId
           },
         });
       }
@@ -20099,8 +20102,8 @@ Generate only the email body text, no subject line.`;
         
         await createNeedsAttentionOpportunity(
           ghlClient,
-          `Return Label Failed - ${salesOrder.orderNumber}`,
-          `Failed to create Shippo return label.\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\nError: ${labelResult.error}\n\nAction required: Manually create label and contact customer.`,
+          `Return Label Failed - ${salesOrder.orderName || salesOrder.externalOrderId}`,
+          `Failed to create Shippo return label.\n\nOrder: ${salesOrder.orderName || salesOrder.externalOrderId}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\nError: ${labelResult.error}\n\nAction required: Manually create label and contact customer.`,
           contactId
         );
         
@@ -20212,8 +20215,8 @@ Generate only the email body text, no subject line.`;
           // SMS failure - escalate but don't fail the whole request
           await createNeedsAttentionOpportunity(
             ghlClient,
-            `Return SMS Failed - ${salesOrder.orderNumber}`,
-            `Failed to send return label SMS to customer.\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\nTracking: ${labelResult.trackingNumber}\nLabel URL: ${labelResult.labelUrl}\nError: ${smsResult.error}\n\nAction required: Manually send label link to customer.`,
+            `Return SMS Failed - ${salesOrder.orderName || salesOrder.externalOrderId}`,
+            `Failed to send return label SMS to customer.\n\nOrder: ${salesOrder.orderName || salesOrder.externalOrderId}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\nTracking: ${labelResult.trackingNumber}\nLabel URL: ${labelResult.labelUrl}\nError: ${smsResult.error}\n\nAction required: Manually send label link to customer.`,
             contactId
           );
         }

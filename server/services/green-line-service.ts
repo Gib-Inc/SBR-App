@@ -201,9 +201,11 @@ export async function computeDebtAvalanche(db: DB): Promise<{
     .map((b) => ({ ...b, total: r0(b.total) }))
     .sort((a, b) => TIER_COST_RANK[a.tier] - TIER_COST_RANK[b.tier]);
 
+  // Same two-account set as dscr-service computeDscr — the single-account form dropped the
+  // whole 'Interest Expense' account ($13.9K in Jun 2026), understating the trend chart ~53%.
   const trendRows = rows(await db.execute(sql`
     select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, coalesce(sum(amount),0) as interest
-    from qb_pl_detail where account_name = 'Interest, Bank Fees & Service Charges'
+    from qb_pl_detail where account_name in ('Interest, Bank Fees & Service Charges', 'Interest Expense')
       and txn_date >= (current_date - interval '6 months')
     group by 1 order by 1`));
   const interestTrend = trendRows.map((rr: any) => ({ month: String(rr.ym), interest: r0(num(rr.interest)) }));

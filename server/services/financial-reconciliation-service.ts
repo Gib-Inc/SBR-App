@@ -157,10 +157,15 @@ export async function computeFinancialReconciliation(db: DB): Promise<{ checks: 
       (select revenue from historical_monthly_sales
         where year = extract(year from current_date - interval '1 month')::int
           and month = extract(month from current_date - interval '1 month')::int)::float8 as qb_rev`))[0];
+  // expected=false with a WIDE tolerance: the benign gross-vs-net gap (~10-15%: tax + timing)
+  // sits inside 35%, so day-to-day it reconciles — but the two failure modes this check exists
+  // for (a backfill re-run reading ~2x QB; a dead order sync reading far UNDER QB) blow through
+  // it and now COUNT toward driftCount + the daily-report alarm. (It shipped expected=true,
+  // which excluded exactly those failures from driftCount — a red row on a page nobody opens.)
   add("monthly_revenue", "Prior-month revenue (orders vs QuickBooks)",
     num(rev?.app_rev), "sales_orders (orderDate month sum)",
-    num(rev?.qb_rev), "historical_monthly_sales (QB recognized)", 20, 30000, true,
-    "Order-ledger gross (tax-inclusive) vs QB recognized revenue — EXPECTED to differ ~10-15% (tax + timing). What this catches: a backfill re-run (order side ~2x QB, the Feb/Mar failure) or a dead order sync (order side far UNDER QB).");
+    num(rev?.qb_rev), "historical_monthly_sales (QB recognized)", 35, 50000, false,
+    "Order-ledger gross (tax-inclusive) vs QB recognized revenue — a ~10-15% gap (tax + timing) is normal and stays inside tolerance. Drift = a backfill re-run (order side ~2x QB, the Feb/Mar failure) or a dead order sync (order side far UNDER QB).");
 
   // Only UNEXPECTED drift counts as a health problem — the expected/by-design gaps (cash lag,
   // WAC over-valuation) are tracked but shouldn't read as a regression.

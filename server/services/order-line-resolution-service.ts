@@ -43,7 +43,9 @@ export async function resolveUnmappedOrderLines(db: any): Promise<OrderLineResol
           UNION ALL SELECT i.id, 6 FROM items i WHERE i.sku = regexp_replace(l.sku, '^#', '')
           UNION ALL SELECT i.id, 7 FROM sku_mappings m JOIN items i ON i.sku = m.canonical_sku
                      WHERE m.external_sku = l.sku
-        ) x ORDER BY pri LIMIT 1
+        -- item_id tiebreak: same-priority ties (e.g. one ASIN on two catalog items) must
+        -- resolve DETERMINISTICALLY, not to whichever row the planner emits first.
+        ) x ORDER BY pri, item_id LIMIT 1
       ) r
       WHERE l.product_id IS NULL
     )

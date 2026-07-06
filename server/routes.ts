@@ -25701,6 +25701,20 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Marketing Truth — the hero-tile payload: blended MER + contribution MER vs
+  // breakevens, with the feed-confidence layer. Composes the canonical engines
+  // (governor / contribution-margin / reconciliation); no math of its own.
+  app.get("/api/marketing-truth", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getMarketingTruth } = await import("./services/marketing-truth-service");
+      res.json({ success: true, truth: await getMarketingTruth(db) });
+    } catch (error: any) {
+      console.error("[Marketing Truth] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to compute marketing truth" });
+    }
+  });
+
   app.get("/api/finances/inventory-reconciliation", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");

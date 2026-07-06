@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FinancialPositionCard } from "@/components/financial-position-card";
 import { CashRunwayCard } from "@/components/cash-runway-card";
+import { MarketingTruthCard } from "@/components/marketing-truth-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -192,6 +193,9 @@ function SystemOverview() {
           <RefreshCw className="h-4 w-4" />
         </Button>
       </div>
+      {/* Marketing Truth hero — the ONE marketing number the business steers by,
+          above the fold on the home route (finance audit §3/§5). */}
+      <MarketingTruthCard />
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {kpis.map((kpi) => (
           <Card key={kpi.title} data-testid={`kpi-card-${kpi.title.toLowerCase().replace(/\s+/g, '-')}`}>

@@ -348,15 +348,23 @@ export async function scanForProposals(
 
     // [DETERMINISTIC] mark pending proposals stale when their line left the
     // uncategorized pile (someone fixed it in QBO directly). Window-scoped.
+    // NOTE: a bare JS array bound to `= ANY(${arr})` serializes to a malformed
+    // array literal on this pg driver — build an explicit ARRAY[...]::text[]
+    // from individually-bound params (the same idiom as the ALL() hotfix). When
+    // nothing was found, there's nothing to compare against — skip the sweep
+    // rather than fabricate a sentinel that stales every in-window pending row.
     const seenKeys = found.map((l) => `${l.txnType}:${l.qbTxnId}:${l.qbLineId}`);
-    const staleRes: any = await db.execute(sql`
-      UPDATE qb_categorization_proposals
-      SET status = 'stale'
-      WHERE realm_id = ${realmId} AND status = 'pending'
-        AND txn_date BETWEEN ${startStr} AND ${endStr}
-        AND NOT (txn_type || ':' || qb_txn_id || ':' || qb_line_id = ANY(${seenKeys.length ? seenKeys : ["__none__"]}))
-    `);
-    const staled = (staleRes.rowCount as number) ?? 0;
+    let staled = 0;
+    if (seenKeys.length) {
+      const staleRes: any = await db.execute(sql`
+        UPDATE qb_categorization_proposals
+        SET status = 'stale'
+        WHERE realm_id = ${realmId} AND status = 'pending'
+          AND txn_date BETWEEN ${startStr} AND ${endStr}
+          AND (txn_type || ':' || qb_txn_id || ':' || qb_line_id) <> ALL(ARRAY[${sql.join(seenKeys.map((k) => sql`${k}`), sql`, `)}]::text[])
+      `);
+      staled = (staleRes.rowCount as number) ?? 0;
+    }
 
     // [DETERMINISTIC] drop lines that already have a proposal (any status).
     const existing: any = await db.execute(sql`

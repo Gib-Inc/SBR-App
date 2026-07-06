@@ -100,6 +100,37 @@ interface QBBill {
   }>;
 }
 
+// BOOK.E — expense transactions swept by the bookkeeping agent
+interface QBExpenseLine {
+  Id?: string;
+  Amount?: number;
+  Description?: string;
+  DetailType?: string;
+  AccountBasedExpenseLineDetail?: {
+    AccountRef?: { value: string; name?: string };
+  };
+}
+
+export interface QBPurchaseTxn {
+  Id: string;
+  TxnDate?: string;
+  DocNumber?: string;
+  PaymentType?: string;
+  EntityRef?: { value: string; name?: string; type?: string };
+  AccountRef?: { value: string; name?: string }; // bank/CC account paid from
+  TotalAmt?: number;
+  Line?: QBExpenseLine[];
+}
+
+export interface QBBillTxn {
+  Id: string;
+  TxnDate?: string;
+  DocNumber?: string;
+  VendorRef?: { value: string; name?: string };
+  TotalAmt?: number;
+  Line?: QBExpenseLine[];
+}
+
 // CreditMemo and RefundReceipt for tracking returns
 interface QBCreditMemo {
   Id: string;
@@ -650,6 +681,113 @@ export class QuickBooksClient {
       );
     } catch {
       return null;
+    }
+  }
+
+  // ── BOOK.E bookkeeping agent support ────────────────────────────────────
+  // Reads Purchases/Bills and recategorizes EXPENSE lines only. This never
+  // touches sales documents (Invoices/SalesReceipts/Payments), consistent with
+  // the safety rules in this file's header.
+
+  /** Query all pages of an entity. QBO caps MAXRESULTS at 1000; we page at 200. */
+  private async queryAllPaged<T>(entity: string, where: string): Promise<T[]> {
+    const out: T[] = [];
+    const page = 200;
+    let startPos = 1;
+    for (;;) {
+      const q = encodeURIComponent(
+        `SELECT * FROM ${entity} ${where} STARTPOSITION ${startPos} MAXRESULTS ${page}`,
+      );
+      const r = await this.apiRequest<{ QueryResponse: Record<string, T[] | undefined> }>(
+        `/query?query=${q}`,
+      );
+      const rows = (r.QueryResponse as any)?.[entity] ?? [];
+      out.push(...rows);
+      if (rows.length < page) break;
+      startPos += page;
+      await this.sleep(120); // be gentle on the QBO query API
+    }
+    return out;
+  }
+
+  /** Active chart of accounts (id, name, type, subType, classification). Read-only. */
+  async fetchChartOfAccounts(): Promise<Array<{ id: string; name: string; type: string; subType: string; classification: string }>> {
+    const accounts = await this.queryAllPaged<{
+      Id: string; Name?: string; AccountType?: string; AccountSubType?: string; Classification?: string;
+    }>("Account", "WHERE Active = true");
+    return accounts.map((a) => ({
+      id: String(a.Id),
+      name: a.Name ?? String(a.Id),
+      type: a.AccountType ?? "",
+      subType: a.AccountSubType ?? "",
+      classification: a.Classification ?? "",
+    }));
+  }
+
+  /** Purchases (checks/card charges/cash expenses) in a date range. Read-only. */
+  async fetchPurchasesInRange(startDate: string, endDate: string): Promise<QBPurchaseTxn[]> {
+    return this.queryAllPaged<QBPurchaseTxn>(
+      "Purchase",
+      `WHERE TxnDate >= '${startDate}' AND TxnDate <= '${endDate}'`,
+    );
+  }
+
+  /** Bills in a date range. Read-only. */
+  async fetchBillsInRange(startDate: string, endDate: string): Promise<QBBillTxn[]> {
+    return this.queryAllPaged<QBBillTxn>(
+      "Bill",
+      `WHERE TxnDate >= '${startDate}' AND TxnDate <= '${endDate}'`,
+    );
+  }
+
+  /**
+   * Recategorize ONE expense line of a Purchase or Bill: re-fetch the entity
+   * fresh (current SyncToken), verify the target line still points at the
+   * account we scanned (staleness guard — refuse if a human already moved it),
+   * swap the AccountRef, and write the entity back. QBO line updates require
+   * the full entity payload, so everything else round-trips untouched.
+   */
+  async updateTxnLineAccount(
+    txnType: "Purchase" | "Bill",
+    txnId: string,
+    lineId: string,
+    expectedCurrentAccountId: string,
+    newAccountId: string,
+    newAccountName: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const endpoint = txnType === "Purchase" ? "purchase" : "bill";
+      const fresh = await this.apiRequest<any>(`/${endpoint}/${txnId}`);
+      const entity = fresh?.[txnType];
+      if (!entity) return { ok: false, error: `${txnType} ${txnId} not found in QuickBooks` };
+
+      const line = (entity.Line ?? []).find((l: any) => String(l.Id) === String(lineId));
+      if (!line) return { ok: false, error: `Line ${lineId} no longer exists on ${txnType} ${txnId}` };
+      const det = line.AccountBasedExpenseLineDetail;
+      if (!det?.AccountRef) return { ok: false, error: `Line ${lineId} is not an account-based expense line` };
+      if (String(det.AccountRef.value) !== String(expectedCurrentAccountId)) {
+        return {
+          ok: false,
+          error: `Stale: line was already recategorized in QuickBooks (now "${det.AccountRef.name ?? det.AccountRef.value}")`,
+        };
+      }
+
+      det.AccountRef = { value: newAccountId, name: newAccountName };
+      await this.apiRequest<any>(`/${endpoint}`, {
+        method: "POST",
+        body: JSON.stringify({ ...entity, sparse: false }),
+      });
+
+      await AuditLogger.logEvent({
+        source: "QUICKBOOKS",
+        eventType: "TXN_LINE_RECATEGORIZED",
+        status: "INFO",
+        description: `${txnType} ${txnId} line ${lineId} moved to "${newAccountName}"`,
+        details: { txnType, txnId, lineId, from: expectedCurrentAccountId, to: newAccountId },
+      });
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message ?? "QuickBooks update failed" };
     }
   }
 

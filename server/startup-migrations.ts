@@ -374,6 +374,43 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
             updated_at timestamptz NOT NULL DEFAULT now()
           )`,
   },
+
+  // BOOK.E bookkeeping agent — Claude-proposed recategorizations of QBO
+  // transactions parked in Uncategorized Expense / Ask My Accountant. Rows are
+  // written by the scan; QuickBooks is only written when a human approves
+  // (status pending → applied). Natural key = one proposal per QBO txn line.
+  {
+    name: "qb_categorization_proposals.table",
+    sql: `CREATE TABLE IF NOT EXISTS qb_categorization_proposals (
+            id serial PRIMARY KEY,
+            realm_id text NOT NULL,
+            txn_type text NOT NULL,
+            qb_txn_id text NOT NULL,
+            qb_line_id text NOT NULL,
+            txn_date date,
+            doc_number text,
+            vendor_name text,
+            description text,
+            amount numeric NOT NULL DEFAULT 0,
+            current_account_id text NOT NULL,
+            current_account_name text NOT NULL,
+            proposed_account_id text NOT NULL,
+            proposed_account_name text NOT NULL,
+            confidence real NOT NULL,
+            reasoning text,
+            vendor_history jsonb,
+            status text NOT NULL DEFAULT 'pending',
+            decided_by text,
+            decided_at timestamptz,
+            apply_error text,
+            created_at timestamptz NOT NULL DEFAULT now(),
+            UNIQUE (realm_id, txn_type, qb_txn_id, qb_line_id)
+          )`,
+  },
+  {
+    name: "qb_categorization_proposals.status_idx",
+    sql: `CREATE INDEX IF NOT EXISTS qb_cat_proposals_status_idx ON qb_categorization_proposals (status, confidence DESC)`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

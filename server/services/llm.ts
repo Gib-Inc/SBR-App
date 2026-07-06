@@ -3,13 +3,13 @@ import Anthropic from "@anthropic-ai/sdk";
 
 // Default model for most tasks (fast + smart). Use opus for complex multi-step reasoning.
 const CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
-const CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001";
+export const CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001";
 
 /**
  * Get Anthropic client with API key from database (via Settings UI)
  * No env var fallback - Settings UI is the single source of truth
  */
-function getAnthropicClient(apiKeyOverride?: string): Anthropic {
+export function getAnthropicClient(apiKeyOverride?: string): Anthropic {
   // Fall back to the ANTHROPIC_API_KEY env so a single Railway variable unlocks
   // every AI path, even when the Settings table has no row.
   const apiKey = apiKeyOverride?.trim() || process.env.ANTHROPIC_API_KEY?.trim();

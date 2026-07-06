@@ -22729,6 +22729,86 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── BOOK.E — bookkeeping agent ──────────────────────────────────────────
+  // Scan proposes recategorizations (writes proposals only); QuickBooks is
+  // written exclusively by the approve endpoints below, i.e. on a human click.
+  const bookE = await import('./services/qb-bookkeeping-agent');
+
+  // GET /api/bookkeeping/summary - counts + scan state for the review page header
+  app.get("/api/bookkeeping/summary", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const summary = await bookE.proposalSummary();
+      res.json({ ...summary, highConfidence: bookE.HIGH_CONFIDENCE, scan: bookE.getScanState() });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to load bookkeeping summary" });
+    }
+  });
+
+  // GET /api/bookkeeping/proposals?status=pending
+  app.get("/api/bookkeeping/proposals", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const status = typeof req.query.status === "string" ? req.query.status : undefined;
+      res.json({ proposals: await bookE.listProposals(status) });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to load proposals" });
+    }
+  });
+
+  // POST /api/bookkeeping/scan - fire-and-forget; UI polls /summary for scan state
+  app.post("/api/bookkeeping/scan", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      if (bookE.getScanState().running) {
+        return res.status(409).json({ error: "A scan is already running" });
+      }
+      const days = Number(req.body?.days) || 90;
+      void bookE.scanForProposals(userId, { days }).catch((e: any) =>
+        console.error("[BOOK.E] background scan error:", e?.message ?? e));
+      res.json({ started: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to start scan" });
+    }
+  });
+
+  // POST /api/bookkeeping/proposals/:id/approve - writes the recategorization to QuickBooks
+  app.post("/api/bookkeeping/proposals/:id/approve", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const result = await bookE.applyProposal(Number(req.params.id), req.session.userId!);
+      if (!result.ok) return res.status(422).json({ error: result.error });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to apply proposal" });
+    }
+  });
+
+  // POST /api/bookkeeping/proposals/:id/reject
+  app.post("/api/bookkeeping/proposals/:id/reject", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const ok = await bookE.rejectProposal(Number(req.params.id), req.session.userId!);
+      if (!ok) return res.status(422).json({ error: "Proposal not found or already decided" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to reject proposal" });
+    }
+  });
+
+  // POST /api/bookkeeping/approve-batch { ids: number[] } - sequential, per-id results
+  app.post("/api/bookkeeping/approve-batch", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const ids: number[] = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isFinite) : [];
+      if (!ids.length) return res.status(400).json({ error: "ids required" });
+      if (ids.length > 100) return res.status(400).json({ error: "Max 100 per batch" });
+      const results: Array<{ id: number; ok: boolean; error?: string }> = [];
+      for (const id of ids) {
+        const r = await bookE.applyProposal(id, req.session.userId!);
+        results.push({ id, ok: r.ok, error: r.error });
+      }
+      res.json({ applied: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Batch approve failed" });
+    }
+  });
+
   // GET /api/quickbooks/webhook-config - Get webhook configuration (masked token)
   app.get("/api/quickbooks/webhook-config", requireAuth, async (req: Request, res: Response) => {
     try {

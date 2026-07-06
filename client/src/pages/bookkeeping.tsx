@@ -117,6 +117,22 @@ export default function Bookkeeping() {
         </p>
       )}
 
+      {lastScan?.ok && !scanRunning && (summary?.pending ?? 0) === 0 && high.length === 0 && review.length === 0 && failed.length === 0 && (
+        <Card className="border-green-200 bg-green-50/50 dark:border-green-900/40 dark:bg-green-950/20">
+          <CardContent className="flex items-start gap-3 py-4">
+            <ShieldCheck className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-green-800 dark:text-green-300">Connected and watching — your books are clean.</p>
+              <p className="text-muted-foreground mt-0.5">
+                The last scan checked QuickBooks and found <b>0</b> transactions parked in Uncategorized. That is the
+                healthy state, not a malfunction: your books code everything to a real account, so there is nothing to
+                recategorize. BOOK.E runs on every scan and will surface anything that ever lands in a holding account.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Tile label="Awaiting review" value={String(summary?.pending ?? "—")} sub={summary ? `${money(summary.pendingAmount)} in limbo` : ""} />
         <Tile label={`High confidence (≥${Math.round(threshold * 100)}%)`} value={String(summary?.pendingHigh ?? "—")} sub="eligible for one-click bulk approve" />
@@ -157,7 +173,7 @@ export default function Bookkeeping() {
         </CardHeader>
         <CardContent className="space-y-1.5">
           {isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> :
-           high.length === 0 ? <p className="text-sm text-muted-foreground">Nothing here. Run a scan, or everything high-confidence has been handled.</p> :
+           high.length === 0 ? <p className="text-sm text-muted-foreground">No high-confidence proposals waiting. A zero here is normal for your books — it means nothing is parked in Uncategorized to recategorize.</p> :
            high.map((p) => <ProposalRow key={p.id} p={p} threshold={threshold} decide={decide} busy={decide.isPending || approveBatch.isPending} />)}
         </CardContent>
       </Card>
@@ -171,7 +187,7 @@ export default function Bookkeeping() {
           </p>
         </CardHeader>
         <CardContent className="space-y-1.5">
-          {review.length === 0 ? <p className="text-sm text-muted-foreground">Empty — no uncertain proposals outstanding.</p> :
+          {review.length === 0 ? <p className="text-sm text-muted-foreground">Nothing flagged for your judgment right now.</p> :
            review.map((p) => <ProposalRow key={p.id} p={p} threshold={threshold} decide={decide} busy={decide.isPending || approveBatch.isPending} />)}
         </CardContent>
       </Card>

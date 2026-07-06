@@ -579,6 +579,9 @@ export function relatedPartyReason(payee: string, accountName: string, accountCl
   if (!acctRp && !payeeRp) return null;
   if (/owner'?s?\s*draw|member\s*draw/i.test(accountName || "")) return "Owner draw";
   if (/heloc/i.test(accountName || "")) return "HELOC / member loan";
+  // A family member paid through a labor/contractor account is a worker-classification
+  // review (W-2 vs 1099), NOT a personal expense — call it what it is.
+  if (payeeRp && accountClass === "Expense" && /contract labor|\bwages?\b|payroll|\blabor\b|salary|commission/i.test(accountName || "")) return "Family member paid as contractor";
   if (payeeRp && accountClass === "Expense") return "Personal expense on company books";
   if (payeeRp) return "Related-party payment";
   return "Related-party account";

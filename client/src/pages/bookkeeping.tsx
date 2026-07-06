@@ -106,6 +106,19 @@ export default function Bookkeeping() {
   const review = pending.filter((p) => p.confidence < threshold);
   const decided = all.filter((p) => ["applied", "rejected", "stale"].includes(p.status));
   const lastScan = summary?.scan?.lastResult;
+  const rpItems = rp?.items ?? [];
+  // Collapse recurring same-payee+reason clusters (owner draws, weekly family pay) into one
+  // summary line each; show genuinely distinct one-offs individually so they don't get buried.
+  const rpGroups = Array.from(
+    rpItems.reduce((m, it) => {
+      const k = `${it.payee}||${it.reason}`;
+      const g = m.get(k) ?? { key: k, payee: it.payee, reason: it.reason, items: [] as RpItem[], total: 0 };
+      g.items.push(it); g.total += it.amount; m.set(k, g);
+      return m;
+    }, new Map<string, { key: string; payee: string; reason: string; items: RpItem[]; total: number }>()).values(),
+  ).sort((a, b) => b.total - a.total);
+  const rpRecurring = rpGroups.filter((g) => g.items.length >= 3);
+  const rpSingles = rpGroups.filter((g) => g.items.length < 3).flatMap((g) => g.items).sort((a, b) => b.amount - a.amount);
 
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-6xl mx-auto">
@@ -158,24 +171,28 @@ export default function Bookkeeping() {
         <Card className="border-amber-200 dark:border-amber-900/40">
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-600" /> Related-party &amp; owner transactions to review ({rp.count})
+              <AlertTriangle className="h-4 w-4 text-amber-600" /> Owner &amp; related-party review ({rpRecurring.length + rpSingles.length})
             </CardTitle>
             <p className="text-xs text-muted-foreground">
-              The real review pile for your books — owner draws, family, HELOC/member loans, and personal expenses run
-              through the company ({money(rp.totalAmount)} across the last {rp.windowDays} days). These are correctly
-              recorded; they're flagged for you and your CPA to eyeball for reasonable-comp and personal-expense
-              exposure. Nothing here is changed automatically.
+              What a bookkeeper pulls from your books for the reasonable-comp and personal-expense review. Recurring
+              patterns (your draws, weekly family pay) are rolled up; one-off items are listed so they don't get buried.
+              Correctly recorded — flagged for you and your CPA, never changed here.
             </p>
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {Object.entries(rp.byReason).map(([reason, v]) => (
-                <Badge key={reason} variant="secondary" className="text-[10px] font-medium tabular-nums">
-                  {reason}: {v.count} · {money(v.amount)}
-                </Badge>
-              ))}
-            </div>
           </CardHeader>
           <CardContent className="space-y-0">
-            {rp.items.slice(0, 40).map((it) => (
+            {rpRecurring.map((g) => (
+              <div key={g.key} className="flex items-center justify-between gap-3 py-2 mb-1.5 rounded-md bg-muted/50 px-3 text-sm">
+                <div className="min-w-0">
+                  <span className="font-medium">{g.payee}</span>
+                  <span className="text-xs text-muted-foreground"> · {g.items.length}× · {g.reason} — reviewed in aggregate, not line by line</span>
+                </div>
+                <div className="tabular-nums font-semibold whitespace-nowrap">{money(g.total)}</div>
+              </div>
+            ))}
+            {rpSingles.length > 0 && rpRecurring.length > 0 && (
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground pt-1 pb-0.5">One-off items to eyeball</div>
+            )}
+            {rpSingles.slice(0, 40).map((it) => (
               <div key={`${it.qbTxnId}:${it.qbLineId}`} className="flex items-center justify-between gap-3 py-1.5 border-b last:border-0 text-sm">
                 <div className="min-w-0">
                   <div className="font-medium truncate">{it.payee} <span className="text-xs font-normal text-muted-foreground">· {it.reason}</span></div>
@@ -184,7 +201,7 @@ export default function Bookkeeping() {
                 <div className="tabular-nums font-semibold whitespace-nowrap">{money(it.amount)}</div>
               </div>
             ))}
-            {rp.count > 40 && <p className="text-xs text-muted-foreground pt-2">+ {rp.count - 40} more…</p>}
+            {rpSingles.length > 40 && <p className="text-xs text-muted-foreground pt-2">+ {rpSingles.length - 40} more…</p>}
           </CardContent>
         </Card>
       )}

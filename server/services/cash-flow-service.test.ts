@@ -131,17 +131,19 @@ describe("countUnfunded (FLAG-DON'T-FABRICATE: runway can't see estimated-$0 out
 });
 
 describe("rankAndProject", () => {
-  it("ranks tier-first and projects the running cash balance", () => {
+  it("ranks trust-fund tax FIRST (tier1 ahead of mca), then projects running cash", () => {
+    // Invariant guard: collected/withheld tax is the state's/IRS's money (§6672 personal
+    // liability) and MUST be recommended first-dollar-out, ahead of MCA auto-debits.
     const obls = [
       obl({ id: "card", tier: "tier3", amount: 100, dueDate: "2026-07-01" }),
       obl({ id: "tax", tier: "tier1", amount: 200, dueDate: "2026-07-15" }),
       obl({ id: "mca", tier: "mca", amount: 50, dueDate: "2026-07-10" }),
     ];
     const r = rankAndProject(obls, 1000, "2026-06-26");
-    expect(r.map((o) => o.id)).toEqual(["mca", "tax", "card"]);
-    expect(r[0].runningCashAfter).toBe(950);
-    expect(r[1].runningCashAfter).toBe(750);
-    expect(r[2].runningCashAfter).toBe(650);
+    expect(r.map((o) => o.id)).toEqual(["tax", "mca", "card"]);
+    expect(r[0].runningCashAfter).toBe(800); // tax 200 first
+    expect(r[1].runningCashAfter).toBe(750); // then mca 50
+    expect(r[2].runningCashAfter).toBe(650); // then card 100
   });
   it("does not draw cash for deferred items", () => {
     const obls = [

@@ -7,8 +7,10 @@
  *
  * Model aligned to the Weekly Cash Command spec: obligations carry a TIER
  * (mca | tier1 | tier2 | tier3 | tier4 | hold) and the ranked list is tier-first.
- *   - mca   = merchant cash advances / auto-debits (pull whether you like it or not)
- *   - tier1 = tax & payroll (penalties + trust-fund exposure; OpenAccountants-verified cadences)
+ *   - tier1 = tax & payroll — FIRST dollar out (trust-fund money held for the state/IRS,
+ *             §6672 personal liability; OpenAccountants-verified cadences)
+ *   - mca   = merchant cash advances / auto-debits (pull whether you like it or not — but
+ *             the app never RECOMMENDS them ahead of the trust-fund tax)
  *   - tier2 = must-pay (critical vendors, secured/SBA debt)
  *   - tier3 = important, tier4 = flexible, hold = defer
  *
@@ -32,7 +34,13 @@ export type OblCategory = "vendor_bill" | "debt" | "tax" | "payroll" | "recurrin
 // installment is the pay-now item). Set only by the sync, never by the operator status route.
 export type OblStatus = "pending" | "approved" | "deferred" | "paid" | "covered_by_plan";
 
-const TIER_RANK: Record<Tier, number> = { mca: 0, tier1: 1, tier2: 2, tier3: 3, tier4: 4, hold: 9 };
+// Trust-fund tax & payroll (tier1) rank FIRST — ahead of MCA auto-debits. This money
+// (collected sales tax, withheld payroll tax) was never the company's; it is held in trust
+// for the state/IRS and carries §6672 personal responsible-person liability for the signatory
+// that survives the LLC and bankruptcy. It is first-dollar-out, before the MCAs. (The MCAs
+// still auto-pull in reality — the auto-draw calendar shows that — but the app must never
+// RECOMMEND paying an MCA ahead of the trust-fund tax it would otherwise fund.)
+const TIER_RANK: Record<Tier, number> = { tier1: 0, mca: 1, tier2: 2, tier3: 3, tier4: 4, hold: 9 };
 
 export interface Obligation {
   id: string;
@@ -302,7 +310,7 @@ export function countUnfunded(
 }
 
 /**
- * Rank tier-first (mca → tier1 → ...), then most-overdue, then largest, and
+ * Rank tier-first (tier1 trust-fund → mca → tier2 → ...), then most-overdue, then largest, and
  * project the running cash balance if paid in that order. Pure. No DB.
  */
 export function rankAndProject(obls: Obligation[], cashAvailable: number, asOf: string): Obligation[] {

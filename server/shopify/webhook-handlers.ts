@@ -73,11 +73,15 @@ async function syncShopifyInventoryAfterOrder(
         // (shopifyInventorySunsetDate), the re-anchor routes through the
         // gateway as a MANUAL_COUNT delta so every overwrite is atomic,
         // audit-logged, and $-valued in the reconciliation ledger.
-        const anchorDelta = shopifyLevel - (item.availableForSaleQty ?? 0);
+        // absolute: the TARGET goes in and the delta derives from the
+        // row-locked value, so a stale pre-read cannot double-count a sale
+        // (review F1) and a negative Shopify level converges at 0 instead of
+        // booking phantom shrinkage on every order (review F2).
         const anchorResult = await new InventoryMovement(storage).apply({
           eventType: 'MANUAL_COUNT',
           itemId: item.id,
-          quantity: anchorDelta,
+          quantity: shopifyLevel,
+          absolute: true,
           location: 'PIVOT',
           source: 'SYSTEM',
           notes: `Legacy Shopify re-anchor (order ${orderName}): afs ${item.availableForSaleQty} -> ${shopifyLevel}`,

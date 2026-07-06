@@ -577,21 +577,24 @@ export class ShopifyInventorySyncService {
         // through the movement gateway as a MANUAL_COUNT delta (audit MC-2)
         // so it is atomic, audit-logged, and $-valued in the recon ledger
         // instead of silently erasing ledgered movements.
-        const pullDelta = shopifyQty - (item.availableForSaleQty ?? 0);
-        if (pullDelta !== 0) {
-          const { InventoryMovement } = await import("./inventory-movement");
-          const pullResult = await new InventoryMovement(storage).apply({
-            eventType: "MANUAL_COUNT",
-            itemId: item.id,
-            quantity: pullDelta,
-            location: "PIVOT",
-            source: "SYSTEM",
-            notes: `Shopify pull re-anchor: afs ${item.availableForSaleQty ?? 0} -> ${shopifyQty}`,
-          });
-          if (!pullResult.success) {
-            result.errors.push(pullResult.error || "Re-anchor movement failed");
-            return result;
-          }
+        // absolute: bulk pulls iterate a snapshot that can be minutes stale
+        // by the time an item's turn comes (review F1). The TARGET goes in
+        // and the delta derives from the row-locked live value, so sales that
+        // landed mid-sync are never double-counted and a delta of zero writes
+        // nothing (no phantom shrinkage rows).
+        const { InventoryMovement } = await import("./inventory-movement");
+        const pullResult = await new InventoryMovement(storage).apply({
+          eventType: "MANUAL_COUNT",
+          itemId: item.id,
+          quantity: shopifyQty,
+          absolute: true,
+          location: "PIVOT",
+          source: "SYSTEM",
+          notes: `Shopify pull re-anchor: afs ${item.availableForSaleQty ?? 0} -> ${shopifyQty}`,
+        });
+        if (!pullResult.success) {
+          result.errors.push(pullResult.error || "Re-anchor movement failed");
+          return result;
         }
 
         result.success = true;

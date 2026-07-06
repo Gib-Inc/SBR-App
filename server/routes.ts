@@ -452,6 +452,24 @@ async function calculateWidgetTrend(widget: any, storage: any): Promise<{ direct
   }
 }
 
+// Race-free adjust of the fxInProcessQty WIP bookkeeping field (review F6):
+// the old absolute writes from a pre-read could lose a concurrent update and
+// later double-receive. Not a stock field, so it doesn't go through the
+// movement gateway — but it uses the same row-lock capability when available.
+async function adjustFxInProcess(itemId: string, delta: number): Promise<void> {
+  if (typeof storage.updateItemAtomic === "function") {
+    await storage.updateItemAtomic(itemId, (cur) => ({
+      updates: { fxInProcessQty: Math.max(0, (cur.fxInProcessQty ?? 0) + delta) },
+      result: null,
+    }));
+  } else {
+    const cur = await storage.getItem(itemId);
+    if (cur) {
+      await storage.updateItem(itemId, { fxInProcessQty: Math.max(0, (cur.fxInProcessQty ?? 0) + delta) });
+    }
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // GHL AGENT API (External API for GoHighLevel Agent access)
@@ -3185,29 +3203,21 @@ TOTAL: $${subtotal.toFixed(2)}
           delete validated.hildaleQty;
         }
         
-        // Handle pivotQty changes via ADJUST transaction
+        // pivotQty is READ-ONLY from Extensiv (review F3): the old path wrote
+        // it directly (and the next sync erased the edit); rerouting it into
+        // afs silently would corrupt sellable and compound on retries. Reject
+        // loudly instead and point the operator at the right levers.
         if ('pivotQty' in validated) {
           const newQty = Number(validated.pivotQty);
           const oldQty = existingItem.pivotQty ?? 0;
-          const delta = newQty - oldQty;
-          
-          if (delta !== 0) {
-            const result = await transactionService.applyTransaction({
-              itemId: req.params.id,
-              itemType: "FINISHED",
-              type: "ADJUST",
-              location: "PIVOT",
-              quantity: delta,
-              notes: `Manual adjustment via inline edit`,
-              createdBy: userId,
+          if (newQty !== oldQty) {
+            return res.status(400).json({
+              error: `Pyvott quantity is owned by Extensiv and cannot be edited here. ` +
+                `To correct sellable stock, use "Set AFS to target" on /inventory-integrity; ` +
+                `to record a physical Pyvott count, use the Count Inventory flow.`,
             });
-            
-            if (!result.success) {
-              return res.status(400).json({ error: result.error || "Failed to adjust Pivot quantity" });
-            }
-            shouldRefetch = true;
           }
-          // Remove from updates - transaction service handles the change
+          // Unchanged value — drop it from the update silently.
           delete validated.pivotQty;
         }
         
@@ -3502,16 +3512,23 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(400).json({ error: moveResult.error || 'Failed to apply receive movement' });
       }
 
-      // History row records only movements that actually landed.
-      const transaction = await storage.createInventoryTransaction({
-        itemId: itemId,
-        itemType: itemType,
-        type: 'RECEIVE',
-        location: location,
-        quantity: quantity,
-        createdBy: req.session.userId || 'manual',
-        notes: notes || `Manual receive via scan: ${quantity} units`,
-      });
+      // History row records only movements that actually landed. Insert
+      // failures log but don't fail the call — the stock already moved and a
+      // retry would double-receive (review F6).
+      let transaction: any = null;
+      try {
+        transaction = await storage.createInventoryTransaction({
+          itemId: itemId,
+          itemType: itemType,
+          type: 'RECEIVE',
+          location: location,
+          quantity: quantity,
+          createdBy: req.session.userId || 'manual',
+          notes: notes || `Manual receive via scan: ${quantity} units`,
+        });
+      } catch (historyErr: any) {
+        console.error(`[InventoryReceive] Movement applied but history insert failed for ${item.sku}: ${historyErr?.message ?? historyErr}`);
+      }
 
       // Fetch updated item
       const updatedItem = await storage.getItem(itemId);
@@ -3854,29 +3871,28 @@ TOTAL: $${subtotal.toFixed(2)}
                 });
                 if (!damageResult.success) {
                   console.error(`[DamageAssessment] Component write-off failed for ${componentItem.sku}: ${damageResult.error}`);
+                } else {
+                  // Ledger records what was APPLIED (clamped), and only when
+                  // the movement landed (review F8).
+                  stockDeductions.push({
+                    itemId: componentItem.id,
+                    sku: componentItem.sku,
+                    qty: writeOffQty,
+                  });
+                  try {
+                    await storage.createInventoryTransaction({
+                      itemId: componentItem.id,
+                      type: 'DAMAGED_WRITE_OFF',
+                      quantity: -writeOffQty,
+                      itemType: 'RAW',
+                      location: 'HILDALE',
+                      notes: `Damaged return component write-off: RMA ${returnRequest.rmaNumber || id} - Parent: ${inventoryItem.sku}`,
+                      createdBy: `user:${req.session.userId || 'unknown'}`,
+                    });
+                  } catch (txErr) {
+                    console.warn('[DamageAssessment] Failed to create component write-off transaction:', txErr);
+                  }
                 }
-              }
-
-              // Track deduction for logging
-              stockDeductions.push({
-                itemId: componentItem.id,
-                sku: componentItem.sku,
-                qty: qtyToDeduct,
-              });
-              
-              // Create inventory transaction for the component write-off
-              try {
-                await storage.createInventoryTransaction({
-                  itemId: componentItem.id,
-                  type: 'DAMAGED_WRITE_OFF',
-                  quantity: -qtyToDeduct,
-                  itemType: 'RAW',
-                  location: 'HILDALE',
-                  notes: `Damaged return component write-off: RMA ${returnRequest.rmaNumber || id} - Parent: ${inventoryItem.sku}`,
-                  createdBy: `user:${req.session.userId || 'unknown'}`,
-                });
-              } catch (txErr) {
-                console.warn('[DamageAssessment] Failed to create component write-off transaction:', txErr);
               }
             }
           }
@@ -12727,7 +12743,7 @@ Notes: ${po.notes || 'None'}
           results.push({ itemId, sku: item.sku, quantity: qty, success: false, error: fxMoveResult.error || "Movement failed" });
           continue;
         }
-        await storage.updateItem(itemId, { fxInProcessQty: fxAvailable - qty });
+        await adjustFxInProcess(itemId, -qty);
 
         await storage.createInventoryTransaction({
           itemId,
@@ -12909,29 +12925,36 @@ Notes: ${po.notes || 'None'}
           const lotNumber = typeof line?.lotNumber === "string" && line.lotNumber.trim()
             ? line.lotNumber.trim()
             : null;
-          const tx = await storage.createInventoryTransaction({
-            itemId: item.id,
-            itemType: "RAW",
-            type: "RECEIVE",
-            location: "N/A",
-            quantity: qty,
-            supplierId,
-            lotNumber,
-            createdBy: userId,
-            createdByName: receiveUserName,
-            notes: supplierId ? `Received via /receive-stock` : `Received via /receive-stock (no supplier)`,
-          });
-          // When a lot number is provided, also write to inventory_lots so
-          // BOM_CONSUMPTION can do FIFO draws against it later.
-          if (lotNumber) {
-            await storage.createInventoryLot({
+          // History + lot rows record a movement that already landed. If they
+          // fail, log loudly but report the line as received — failing it
+          // would invite a retry that double-receives (review F6).
+          try {
+            const tx = await storage.createInventoryTransaction({
               itemId: item.id,
-              lotNumber,
-              originalQty: qty,
-              remainingQty: qty,
-              sourceTransactionId: tx.id,
+              itemType: "RAW",
+              type: "RECEIVE",
+              location: "N/A",
+              quantity: qty,
               supplierId,
+              lotNumber,
+              createdBy: userId,
+              createdByName: receiveUserName,
+              notes: supplierId ? `Received via /receive-stock` : `Received via /receive-stock (no supplier)`,
             });
+            // When a lot number is provided, also write to inventory_lots so
+            // BOM_CONSUMPTION can do FIFO draws against it later.
+            if (lotNumber) {
+              await storage.createInventoryLot({
+                itemId: item.id,
+                lotNumber,
+                originalQty: qty,
+                remainingQty: qty,
+                sourceTransactionId: tx.id,
+                supplierId,
+              });
+            }
+          } catch (historyErr: any) {
+            console.error(`[ReceiveStock] Movement applied but history/lot insert failed for ${item.sku}: ${historyErr?.message ?? historyErr}`);
           }
 
           results.push({ itemId: item.id, itemName: item.name, success: true, quantity: qty, newStock });
@@ -13926,6 +13949,21 @@ Notes: ${po.notes || 'None'}
       const session = await storage.getCycleCountSession(req.params.id);
       if (!session) return res.status(404).json({ error: "Session not found" });
       if (session.status !== "OPEN") return res.status(400).json({ error: "Session is already committed or cancelled" });
+
+      // Atomic claim (review F4): variances are gateway movements now, so a
+      // double-click or concurrent commit would apply every variance TWICE.
+      // Conditionally flip OPEN → COMMITTING; exactly one caller wins. A
+      // mid-loop crash leaves COMMITTING (blocked from re-commit) rather than
+      // silently double-applying on retry.
+      const claim = await db.execute(sql`
+        UPDATE cycle_count_sessions SET status = 'COMMITTING'
+        WHERE id = ${req.params.id} AND status = 'OPEN'
+        RETURNING id
+      `);
+      const claimedRows = (claim as any).rows ?? claim;
+      if (!claimedRows || claimedRows.length === 0) {
+        return res.status(409).json({ error: "Session is already being committed" });
+      }
 
       const entries = await storage.getCycleCountEntries(req.params.id);
       const counted = entries.filter(e => e.countedQty !== null);
@@ -16117,7 +16155,7 @@ Notes: ${po.notes || 'None'}
             applied.push({ sku: item.sku, received: 0, effect: `FAILED: ${fxQuickResult.error}` });
             continue;
           }
-          await storage.updateItem(item.id, { fxInProcessQty: Math.max(0, fxBefore - recv) });
+          await adjustFxInProcess(item.id, -recv);
           await storage.createInventoryTransaction({
             itemId: item.id,
             itemType: "FINISHED",
@@ -16280,8 +16318,9 @@ Notes: ${po.notes || 'None'}
               applied.push({ itemId: item.id, sku: item.sku, effect: `receive FAILED: ${statusMoveResult.error}`, qty: 0 });
               continue;
             }
-            const fxAfter = wasContributing ? Math.max(0, fxBefore - qty) : fxBefore;
-            await storage.updateItem(item.id, { fxInProcessQty: fxAfter });
+            if (wasContributing) {
+              await adjustFxInProcess(item.id, -qty);
+            }
             await storage.createInventoryTransaction({
               itemId: item.id,
               itemType: "FINISHED",

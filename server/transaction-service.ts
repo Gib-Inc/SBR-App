@@ -151,8 +151,16 @@ export class TransactionService {
         return { success: false, error: moveResult.error || "Inventory movement failed" };
       }
 
-      // History row records only movements that actually landed.
-      const createdTransaction = await this.storage.createInventoryTransaction(transaction);
+      // History row records only movements that actually landed. The stock
+      // write is the truth — if the history insert fails we log loudly but do
+      // NOT fail the call, otherwise a retry would re-apply the movement
+      // (review F6). The gateway's audit log still has the movement.
+      let createdTransaction: any = null;
+      try {
+        createdTransaction = await this.storage.createInventoryTransaction(transaction);
+      } catch (historyError: any) {
+        console.error(`[TransactionService] Movement applied but history insert failed for ${transaction.itemId} (${transactionType}): ${historyError?.message ?? historyError}`);
+      }
 
       return {
         success: true,
@@ -218,16 +226,34 @@ export class TransactionService {
         if (!moveResult.success) {
           return { success: false, error: moveResult.error || "Transfer failed" };
         }
-        const record = await this.storage.createInventoryTransaction({
-          itemId: request.itemId,
-          itemType: "FINISHED",
-          type: "TRANSFER_OUT",
-          location: "HILDALE",
-          quantity: request.quantity,
-          notes: request.notes || `Transfer from HILDALE to PIVOT`,
-          createdBy: request.createdBy,
-        });
-        return { success: true, transaction: { transferOut: record, transferIn: record } };
+        // Both history rows (OUT + IN) so consumers see the same shape as the
+        // legacy two-write path (review F9); failures log but never fail the
+        // call — the movement already landed (review F6).
+        let outRecord: any = null;
+        let inRecord: any = null;
+        try {
+          outRecord = await this.storage.createInventoryTransaction({
+            itemId: request.itemId,
+            itemType: "FINISHED",
+            type: "TRANSFER_OUT",
+            location: "HILDALE",
+            quantity: request.quantity,
+            notes: request.notes || `Transfer from HILDALE to PIVOT`,
+            createdBy: request.createdBy,
+          });
+          inRecord = await this.storage.createInventoryTransaction({
+            itemId: request.itemId,
+            itemType: "FINISHED",
+            type: "TRANSFER_IN",
+            location: "PIVOT",
+            quantity: request.quantity,
+            notes: request.notes || `Transfer from HILDALE to PIVOT`,
+            createdBy: request.createdBy,
+          });
+        } catch (historyError: any) {
+          console.error(`[TransactionService] Transfer applied but history insert failed for ${request.itemId}: ${historyError?.message ?? historyError}`);
+        }
+        return { success: true, transaction: { transferOut: outRecord, transferIn: inRecord } };
       }
 
       const transferOutResult = await this.applyTransaction({

@@ -485,3 +485,54 @@ describe("atomic movement path", () => {
     expect((atomic.get("FG9") as any).hildaleQty).toBe(2);
   });
 });
+
+// ── Review-fix regressions (F1/F2/F5) ─────────────────────────────────────
+describe("absolute MANUAL_COUNT and adjustment guard", () => {
+  it("absolute count derives the delta from the current row, not the caller's baseline", async () => {
+    // Caller thinks afs is 50 (stale), live row says 48, Shopify target 48:
+    // absolute semantics make this a no-op instead of double-counting sales.
+    const item = finished({ availableForSaleQty: 48 });
+    const res = await engine.apply({
+      eventType: "MANUAL_COUNT", itemId: item.id, quantity: 48, absolute: true,
+      source: "TEST", location: "PIVOT",
+    });
+    expect(res.success).toBe(true);
+    expect(res.quantityChanged).toBe(0);
+    expect((storage.get(item.id) as any).availableForSaleQty).toBe(48);
+    expect(storage.reconLogs).toHaveLength(0); // no phantom shrinkage row
+  });
+
+  it("negative absolute target clamps to 0 and converges (no shrinkage spam)", async () => {
+    const item = finished({ availableForSaleQty: 0 });
+    (storage.get(item.id) as any).wacUnitCost = 5;
+    const res = await engine.apply({
+      eventType: "MANUAL_COUNT", itemId: item.id, quantity: -3, absolute: true,
+      source: "TEST", location: "PIVOT",
+    });
+    expect(res.success).toBe(true);
+    expect(res.quantityChanged).toBe(0);
+    expect((storage.get(item.id) as any).availableForSaleQty).toBe(0);
+    expect(storage.reconLogs).toHaveLength(0); // converged: no row, forever
+  });
+
+  it("relative count clamped at zero values the APPLIED delta, not the requested one", async () => {
+    storage.seed({ id: "C9", sku: "COMP-9", type: "component", currentStock: 2, wacUnitCost: 10 } as any);
+    const res = await engine.apply({
+      eventType: "MANUAL_COUNT", itemId: "C9", quantity: -5, source: "TEST", location: "N/A",
+    });
+    expect(res.success).toBe(true);
+    expect((storage.get("C9") as any).currentStock).toBe(0);
+    expect(res.quantityChanged).toBe(-2); // applied, post-clamp
+    expect(storage.reconLogs[0].newValue).toBe("-20"); // -2 × $10, not -50
+  });
+
+  it("MANUAL_ADJUSTMENT refuses to drive a field negative", async () => {
+    const item = finished({ availableForSaleQty: 3 });
+    const res = await engine.apply({
+      eventType: "MANUAL_ADJUSTMENT", itemId: item.id, quantity: -5, source: "TEST", location: "PIVOT",
+    });
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("Insufficient stock for adjustment");
+    expect((storage.get(item.id) as any).availableForSaleQty).toBe(3);
+  });
+});

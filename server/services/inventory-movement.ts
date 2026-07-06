@@ -120,6 +120,12 @@ export interface InventoryMovementParams {
   userId?: string | number;
   userName?: string;
   notes?: string;
+  // MANUAL_COUNT only: when true, `quantity` is the ABSOLUTE observed level
+  // (a count / external re-anchor target), not a delta. The delta is derived
+  // from the ROW-LOCKED current value inside the transaction, so callers with
+  // stale pre-reads (bulk syncs, webhooks) cannot inject phantom units.
+  // Negative targets clamp to 0 and converge (no-op once the field is 0).
+  absolute?: boolean;
   // For BOM_CONSUMPTION: when present, the apply() call will FIFO-draw from
   // open inventory_lots and record per-lot draws in lot_consumption_events
   // linked to this production_logs row. Optional so legacy callers still
@@ -501,9 +507,24 @@ export class InventoryMovement {
           }
           break;
 
-        case "MANUAL_ADJUSTMENT":
+        case "MANUAL_ADJUSTMENT": {
           // INVARIANT: Manual adjustments NEVER touch pivotQty (read-only from Extensiv)
-          // Location determines which field is adjusted for finished products
+          // Location determines which field is adjusted for finished products.
+          // A decrement below zero is refused INSIDE the row lock (review F5):
+          // two concurrent ships can no longer both pass an unlocked pre-check
+          // and drive the field negative. Use MANUAL_COUNT to force a level.
+          const adjCurrent = isFinished
+            ? (location === "HILDALE" ? beforeState.hildaleQty : beforeState.availableForSaleQty)
+            : beforeState.currentStock;
+          if (adjCurrent + params.quantity < 0) {
+            return {
+              beforeState,
+              updates: null,
+              quantityDelta: 0,
+              error: `Insufficient stock for adjustment of ${item.sku}: ${adjCurrent} available, adjustment ${params.quantity}. Use a MANUAL_COUNT to set an absolute level.`,
+              errorBeforeQty: adjCurrent,
+            };
+          }
           quantityDelta = params.quantity;
           if (isFinished) {
             if (location === "HILDALE") {
@@ -518,6 +539,7 @@ export class InventoryMovement {
             updates.currentStock = beforeState.currentStock + params.quantity;
           }
           break;
+        }
 
         case "PRODUCTION_COMPLETED":
           quantityDelta = params.quantity;
@@ -581,20 +603,33 @@ export class InventoryMovement {
           }
           break;
 
-        case "MANUAL_COUNT":
-          // Physical count adjustment — quantity is the DIFFERENCE (actual - expected)
-          // Can be positive (found more than expected) or negative (found less)
-          quantityDelta = params.quantity;
-          if (isFinished) {
-            if (location === "HILDALE") {
-              updates.hildaleQty = Math.max(0, beforeState.hildaleQty + params.quantity);
+        case "MANUAL_COUNT": {
+          // Physical count adjustment. Default: quantity is the DIFFERENCE
+          // (actual − expected). With params.absolute: quantity is the TARGET
+          // level, and the delta derives from the locked current value.
+          // quantityDelta is the APPLIED change (post-clamp), so the shrinkage
+          // recon row values what actually moved — a clamped-at-zero field
+          // never books phantom shrinkage (review F2).
+          const currentLevel = isFinished
+            ? (location === "HILDALE" ? beforeState.hildaleQty : beforeState.availableForSaleQty)
+            : beforeState.currentStock;
+          const target = params.absolute
+            ? Math.max(0, Math.trunc(params.quantity))
+            : Math.max(0, currentLevel + params.quantity);
+          quantityDelta = target - currentLevel;
+          if (quantityDelta !== 0) {
+            if (isFinished) {
+              if (location === "HILDALE") {
+                updates.hildaleQty = target;
+              } else {
+                updates.availableForSaleQty = target;
+              }
             } else {
-              updates.availableForSaleQty = Math.max(0, beforeState.availableForSaleQty + params.quantity);
+              updates.currentStock = target;
             }
-          } else {
-            updates.currentStock = Math.max(0, beforeState.currentStock + params.quantity);
           }
           break;
+        }
       }
 
     // ── Weighted-average cost maintenance (FinOps Pillar 2) ──────────────

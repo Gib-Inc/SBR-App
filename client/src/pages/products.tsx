@@ -859,37 +859,19 @@ function ItemTableRow({
         </td>
       )}
 
-      {/* Extensiv Column (only for finished products) - Extensiv mirror */}
+      {/* Extensiv Column (only for finished products) - Extensiv mirror.
+          Read-only: pivotQty is owned by Extensiv (the server rejects edits).
+          Sellable corrections go through /inventory-integrity; physical
+          Pyvott counts through the Count Inventory flow. */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle whitespace-nowrap">
-          {editingField === "pivotQty" ? (
-            <div className="flex items-center gap-2">
-              <Input
-                type="number"
-                min="0"
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="h-8 w-24"
-                autoFocus
-                data-testid={`input-edit-pivot-qty-${item.id}`}
-              />
-              <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-pivot-qty-${item.id}`}>
-                <Check className="h-4 w-4" />
-              </Button>
-              <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-pivot-qty-${item.id}`}>
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          ) : (
-            <div 
-              className="cursor-pointer rounded px-2 py-1 hover-elevate text-right" 
-              onClick={() => startEdit("pivotQty", item.pivotQty ?? 0)}
-              data-testid={`text-item-pivot-qty-${item.id}`}
-            >
-              {item.pivotQty ?? 0}
-            </div>
-          )}
+          <div
+            className="rounded px-2 py-1 text-right text-muted-foreground"
+            title="Synced from Extensiv (read-only). Use Set AFS to target on Inventory Integrity, or a Pyvott count, to correct stock."
+            data-testid={`text-item-pivot-qty-${item.id}`}
+          >
+            {item.pivotQty ?? 0}
+          </div>
         </td>
       )}
 

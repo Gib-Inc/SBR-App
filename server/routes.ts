@@ -13035,45 +13035,63 @@ Notes: ${po.notes || 'None'}
 
       const field = location === "HILDALE" ? "hildaleQty" : "currentStock";
       const before = ((item as any)[field] as number | null | undefined) ?? 0;
-      const after = before - qty;
-      const FLOOR = -10;
-      if (after < FLOOR) {
+      // Gateway write-off (review scope-gap): atomic, ledgered, broadcast by
+      // the gateway. The old direct write allowed balances down to −10;
+      // negative stock is a critical integrity finding, so write-offs are now
+      // capped at on-hand — if MORE is physically gone than the system shows,
+      // that is a count discrepancy, not a write-off.
+      if (before <= 0) {
         return res.status(400).json({
-          error: `Result would be ${after} (below floor of ${FLOOR}). Current stock is ${before}; max write-off is ${before - FLOOR}.`,
+          error: `Nothing to write off: system shows ${before} on hand. Record a physical count instead.`,
         });
       }
-
-      await storage.updateItem(item.id, { [field]: after } as any);
+      if (qty > before) {
+        return res.status(400).json({
+          error: `Write-off of ${qty} exceeds the ${before} on hand. Write off up to ${before}, or record a physical count if more is missing.`,
+        });
+      }
 
       const userId = req.session.userId!;
       const writeoffUser = await storage.getUser(userId);
       const cleanNotes = typeof notes === "string" ? notes.trim() : "";
-      await storage.createInventoryTransaction({
-        itemId: item.id,
-        itemType: item.type === "finished_product" ? "FINISHED" : "RAW",
-        type: "WRITEOFF",
-        location: location === "HILDALE" ? "HILDALE" : "N/A",
-        quantity: -qty, // stored negative so SUM(quantity) gives net stock change
-        reason,
-        createdBy: userId,
-        createdByName: writeoffUser?.email ?? null,
-        notes: cleanNotes || null,
-      });
 
-      // Realtime broadcast so any open Inventory / Raw Materials page sees
-      // the new balance without a manual refresh.
-      wsInventoryService.broadcast({
-        itemIds: [item.id],
-        fields: [field],
-        reason: "WRITEOFF",
+      const writeoffMove = await new InventoryMovement(storage).apply({
+        eventType: "MANUAL_ADJUSTMENT",
+        itemId: item.id,
+        quantity: -qty,
+        location: location === "HILDALE" ? "HILDALE" : "N/A",
+        source: "SYSTEM",
+        userId,
+        userName: writeoffUser?.email ?? undefined,
+        notes: `Write-off (${reason})${cleanNotes ? `: ${cleanNotes}` : ""}`,
       });
+      if (!writeoffMove.success) {
+        return res.status(400).json({ error: writeoffMove.error || "Write-off movement failed" });
+      }
+
+      // History row records a movement that already landed (never fails the call).
+      try {
+        await storage.createInventoryTransaction({
+          itemId: item.id,
+          itemType: item.type === "finished_product" ? "FINISHED" : "RAW",
+          type: "WRITEOFF",
+          location: location === "HILDALE" ? "HILDALE" : "N/A",
+          quantity: -qty, // stored negative so SUM(quantity) gives net stock change
+          reason,
+          createdBy: userId,
+          createdByName: writeoffUser?.email ?? null,
+          notes: cleanNotes || null,
+        });
+      } catch (historyErr: any) {
+        console.error(`[Writeoff] Movement applied but history insert failed for ${item.sku}: ${historyErr?.message ?? historyErr}`);
+      }
 
       res.status(201).json({
         success: true,
         itemId: item.id,
         itemName: item.name,
         before,
-        after,
+        after: before - qty,
         quantity: qty,
       });
     } catch (error: any) {
@@ -13948,7 +13966,17 @@ Notes: ${po.notes || 'None'}
     try {
       const session = await storage.getCycleCountSession(req.params.id);
       if (!session) return res.status(404).json({ error: "Session not found" });
-      if (session.status !== "OPEN") return res.status(400).json({ error: "Session is already committed or cancelled" });
+      if (session.status !== "OPEN") {
+        // Honest per-state messages (review NEW-1): a crashed commit is not
+        // "already committed", and the recovery path is a fresh count.
+        const statusMessages: Record<string, string> = {
+          COMMITTING: "A commit for this session is already in progress. If it crashed, start a new count session — applied variances are ledgered and a re-count picks up the true remaining drift.",
+          COMMIT_FAILED: "A previous commit failed partway; some variances were applied and ledgered. Start a NEW count session to true up the remainder — recommitting this one would double-apply.",
+          COMMITTED: "Session is already committed",
+          CANCELLED: "Session is cancelled",
+        };
+        return res.status(409).json({ error: statusMessages[session.status] ?? `Session is ${session.status}` });
+      }
 
       // Atomic claim (review F4): variances are gateway movements now, so a
       // double-click or concurrent commit would apply every variance TWICE.
@@ -13972,6 +14000,7 @@ Notes: ${po.notes || 'None'}
       let adjustmentsApplied = 0;
       let totalVariances = 0;
 
+      try {
       for (const entry of counted) {
         const variance = (entry.countedQty ?? 0) - entry.systemQty;
         if (variance !== 0) {
@@ -14019,6 +14048,17 @@ Notes: ${po.notes || 'None'}
         committedBy: req.session.userId || "system",
         totalVariances,
       });
+      } catch (commitError: any) {
+        // Review NEW-1: a mid-loop failure must not strand the session in
+        // COMMITTING with no recovery. Mark COMMIT_FAILED (blocked from
+        // re-commit — variances already applied are gateway-ledgered) and
+        // tell the operator the honest state.
+        await storage.updateCycleCountSession(req.params.id, { status: "COMMIT_FAILED" }).catch(() => {});
+        return res.status(500).json({
+          error: `Commit failed after applying ${totalVariances} variance(s): ${commitError?.message ?? commitError}. ` +
+            `Session marked COMMIT_FAILED. Applied variances are ledgered; start a new count session to true up the remainder.`,
+        });
+      }
 
       res.json({ success: true, adjustmentsApplied, totalVariances });
     } catch (error: any) {

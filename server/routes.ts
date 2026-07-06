@@ -22744,6 +22744,17 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // GET /api/bookkeeping/related-party-review - the real review pile for SBR's books:
+  // owner draws / family / HELOC / personal expenses on company books. Read-only.
+  app.get("/api/bookkeeping/related-party-review", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const review = await bookE.scanRelatedPartyReview(req.session.userId!, { days: 90 });
+      res.json(review);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message || "Failed to load related-party review" });
+    }
+  });
+
   // GET /api/bookkeeping/proposals?status=pending
   app.get("/api/bookkeeping/proposals", requireAuth, async (req: Request, res: Response) => {
     try {

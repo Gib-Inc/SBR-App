@@ -536,3 +536,102 @@ export async function proposalSummary(): Promise<{
     pendingAmount: row.pending_amount ?? 0,
   };
 }
+
+// ── Related-party / owner-transaction review ────────────────────────────────
+// BOOK.E's Uncategorized sweep is empty for SBR (the books code everything to a
+// real account). The genuinely review-worthy pile is the RELATED-PARTY set —
+// owner draws, the Stubbs family, HELOC/member loans, and personal expenses run
+// through the company — the reasonable-comp / personal-expense exposure the AFCU
+// review + tax memo flagged. This scan SURFACES those for human review. It is
+// READ-ONLY: no proposals, no QuickBooks writes, nothing auto-changed. (Flagging
+// "expense line in a non-expense account" was rejected — on SBR's books that's
+// 391 mostly-CORRECT debt payments & owner draws, i.e. noise.)
+const RP_PAYEE = /\bstubbs\b|owner'?s?\s*draw|member\s*draw|\bheloc\b|related[-\s]?party|due (to|from) member|shareholder/i;
+const RP_ACCOUNT = /owner'?s?\s*draw|member\s*draw|\bheloc\b|shareholder|due (to|from) member|related[-\s]?party/i;
+
+export interface RelatedPartyItem {
+  txnType: "Purchase" | "Bill";
+  qbTxnId: string;
+  qbLineId: string;
+  date: string | null;
+  payee: string;
+  description: string | null;
+  amount: number;
+  account: string;
+  accountClass: string;
+  reason: string;
+}
+export interface RelatedPartyReview {
+  ok: boolean;
+  error?: string;
+  count: number;
+  totalAmount: number;
+  windowDays: number;
+  byReason: Record<string, { count: number; amount: number }>;
+  items: RelatedPartyItem[];
+  generatedAt: string;
+}
+
+/** Pure: why (if at all) a line is related-party review-worthy. */
+export function relatedPartyReason(payee: string, accountName: string, accountClass: string): string | null {
+  const acctRp = RP_ACCOUNT.test(accountName || "");
+  const payeeRp = RP_PAYEE.test(payee || "");
+  if (!acctRp && !payeeRp) return null;
+  if (/owner'?s?\s*draw|member\s*draw/i.test(accountName || "")) return "Owner draw";
+  if (/heloc/i.test(accountName || "")) return "HELOC / member loan";
+  if (payeeRp && accountClass === "Expense") return "Personal expense on company books";
+  if (payeeRp) return "Related-party payment";
+  return "Related-party account";
+}
+
+export async function scanRelatedPartyReview(
+  userId: string,
+  opts?: { days?: number },
+): Promise<RelatedPartyReview> {
+  const days = Math.min(Math.max(opts?.days ?? 90, 7), 400);
+  const base = (): RelatedPartyReview => ({
+    ok: true, count: 0, totalAmount: 0, windowDays: days, byReason: {}, items: [],
+    generatedAt: new Date().toISOString(),
+  });
+  const client = new QuickBooksClient(storage, userId);
+  if (!(await client.initialize())) return { ...base(), ok: false, error: "QuickBooks not connected" };
+
+  const coa = await client.fetchChartOfAccounts();
+  const acctById = new Map(coa.map((a) => [String(a.id), a]));
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 86400000);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const purchases = await client.fetchPurchasesInRange(fmt(start), fmt(end));
+  const bills = await client.fetchBillsInRange(fmt(start), fmt(end));
+
+  const items: RelatedPartyItem[] = [];
+  const consider = (txnType: "Purchase" | "Bill", t: any, payee: string) => {
+    for (const ln of t.Line ?? []) {
+      const det = ln.AccountBasedExpenseLineDetail;
+      if (!det?.AccountRef || ln.Id == null) continue;
+      const acct: any = acctById.get(String(det.AccountRef.value));
+      const acctName = acct?.name ?? det.AccountRef.name ?? "";
+      const acctClass = acct?.classification ?? "?";
+      const reason = relatedPartyReason(payee, acctName, acctClass);
+      if (!reason) continue;
+      items.push({
+        txnType, qbTxnId: String(t.Id), qbLineId: String(ln.Id), date: t.TxnDate ?? null,
+        payee: payee || "(unknown)", description: ln.Description ?? null,
+        amount: Number(ln.Amount) || 0, account: acctName, accountClass: acctClass, reason,
+      });
+    }
+  };
+  for (const p of purchases) consider("Purchase", p, p.EntityRef?.name ?? "");
+  for (const b of bills) consider("Bill", b, b.VendorRef?.name ?? "");
+
+  items.sort((a, b) => b.amount - a.amount);
+  const byReason: Record<string, { count: number; amount: number }> = {};
+  let totalAmount = 0;
+  for (const it of items) {
+    totalAmount += it.amount;
+    const r = (byReason[it.reason] ??= { count: 0, amount: 0 });
+    r.count++;
+    r.amount = Math.round((r.amount + it.amount) * 100) / 100;
+  }
+  return { ...base(), count: items.length, totalAmount: Math.round(totalAmount * 100) / 100, byReason, items };
+}

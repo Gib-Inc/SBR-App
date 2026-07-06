@@ -25,6 +25,15 @@ interface Summary {
   pending: number; pendingHigh: number; applied: number; rejected: number;
   appliedAmount: number; pendingAmount: number; highConfidence: number; scan: ScanState;
 }
+interface RpItem {
+  txnType: string; qbTxnId: string; qbLineId: string; date: string | null;
+  payee: string; description: string | null; amount: number; account: string;
+  accountClass: string; reason: string;
+}
+interface RpReview {
+  ok: boolean; error?: string; count: number; totalAmount: number; windowDays: number;
+  byReason: Record<string, { count: number; amount: number }>; items: RpItem[];
+}
 
 const money = (n: number | null | undefined) =>
   n == null ? "—" : `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
@@ -54,6 +63,11 @@ export default function Bookkeeping() {
     queryKey: ["/api/bookkeeping/proposals"],
     queryFn: async () => (await apiRequest("GET", "/api/bookkeeping/proposals")).json(),
     refetchInterval: scanRunning ? 5000 : false,
+  });
+
+  const { data: rp } = useQuery<RpReview>({
+    queryKey: ["/api/bookkeeping/related-party-review"],
+    queryFn: async () => (await apiRequest("GET", "/api/bookkeeping/related-party-review")).json(),
   });
 
   const invalidate = () => {
@@ -117,7 +131,7 @@ export default function Bookkeeping() {
         </p>
       )}
 
-      {lastScan?.ok && !scanRunning && (summary?.pending ?? 0) === 0 && high.length === 0 && review.length === 0 && failed.length === 0 && (
+      {lastScan?.ok && !scanRunning && (summary?.pending ?? 0) === 0 && high.length === 0 && review.length === 0 && failed.length === 0 && !(rp && rp.count > 0) && (
         <Card className="border-green-200 bg-green-50/50 dark:border-green-900/40 dark:bg-green-950/20">
           <CardContent className="flex items-start gap-3 py-4">
             <ShieldCheck className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
@@ -139,6 +153,41 @@ export default function Bookkeeping() {
         <Tile label="Applied to QuickBooks" value={String(summary?.applied ?? "—")} sub={summary ? `${money(summary.appliedAmount)} recategorized` : ""} accent="green" />
         <Tile label="Rejected" value={String(summary?.rejected ?? "—")} sub="the agent learns nothing is auto-applied" />
       </div>
+
+      {rp && rp.count > 0 && (
+        <Card className="border-amber-200 dark:border-amber-900/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600" /> Related-party &amp; owner transactions to review ({rp.count})
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              The real review pile for your books — owner draws, family, HELOC/member loans, and personal expenses run
+              through the company ({money(rp.totalAmount)} across the last {rp.windowDays} days). These are correctly
+              recorded; they're flagged for you and your CPA to eyeball for reasonable-comp and personal-expense
+              exposure. Nothing here is changed automatically.
+            </p>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {Object.entries(rp.byReason).map(([reason, v]) => (
+                <Badge key={reason} variant="secondary" className="text-[10px] font-medium tabular-nums">
+                  {reason}: {v.count} · {money(v.amount)}
+                </Badge>
+              ))}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-0">
+            {rp.items.slice(0, 40).map((it) => (
+              <div key={`${it.qbTxnId}:${it.qbLineId}`} className="flex items-center justify-between gap-3 py-1.5 border-b last:border-0 text-sm">
+                <div className="min-w-0">
+                  <div className="font-medium truncate">{it.payee} <span className="text-xs font-normal text-muted-foreground">· {it.reason}</span></div>
+                  <div className="text-xs text-muted-foreground truncate">{it.date ?? "—"} · {it.account}{it.description ? ` · ${it.description}` : ""}</div>
+                </div>
+                <div className="tabular-nums font-semibold whitespace-nowrap">{money(it.amount)}</div>
+              </div>
+            ))}
+            {rp.count > 40 && <p className="text-xs text-muted-foreground pt-2">+ {rp.count - 40} more…</p>}
+          </CardContent>
+        </Card>
+      )}
 
       {failed.length > 0 && (
         <Card className="border-red-200 dark:border-red-900/40">

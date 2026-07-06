@@ -812,21 +812,27 @@ export async function queryMultiYearComparison(db: DB) {
 // for months before the platforms were connected — so the series is continuous.
 export async function queryLtvCac(db: DB, months: number = 18) {
   // 1. First-order month per customer + their full lifetime value.
+  // G #18 IDENTITY: cohorts are IDENTIFIED customers only (real email, case-normalized).
+  // The old COALESCE(email, external_customer_id, id) minted a "customer" from every
+  // Amazon pseudo-identity and — via the id fallback — from EVERY anonymous order,
+  // inflating new_customers (deflating CAC) and crushing avgLtv with one-order ghosts.
   const cohorts = await db.execute(sql`
     WITH customer_first AS (
-      SELECT COALESCE(customer_email, external_customer_id, id) as cust_id,
+      SELECT lower(customer_email) as cust_id,
              MIN(order_date) as first_order
       FROM sales_orders
       WHERE status NOT IN ('CANCELLED', 'REFUNDED')
-      GROUP BY cust_id
+        AND customer_email IS NOT NULL AND customer_email <> ''
+      GROUP BY lower(customer_email)
     ),
     customer_ltv AS (
-      SELECT COALESCE(o.customer_email, o.external_customer_id, o.id) as cust_id,
+      SELECT lower(o.customer_email) as cust_id,
              SUM(o.total_amount)::real as lifetime_value,
              COUNT(*)::int as lifetime_orders
       FROM sales_orders o
       WHERE o.status NOT IN ('CANCELLED', 'REFUNDED')
-      GROUP BY cust_id
+        AND o.customer_email IS NOT NULL AND o.customer_email <> ''
+      GROUP BY lower(o.customer_email)
     )
     SELECT EXTRACT(YEAR FROM cf.first_order)::int as year,
            EXTRACT(MONTH FROM cf.first_order)::int as month,
@@ -844,6 +850,28 @@ export async function queryLtvCac(db: DB, months: number = 18) {
   // 2. Corrected ad spend per month from the snapshot source (Windsor > upload),
   //    NOT the inflated ad_metrics_daily — so CAC is accurate.
   const monthly = await getCorrectedMonthlyAdSpend();
+
+  // G #18 BASIS: LTV was gross tax-inclusive revenue — comparing it to ad DOLLARS
+  // answers nothing (a 3x "healthy" gross ratio can be red on contribution). Convert
+  // through the MEASURED contribution margin (C6 keystone) so LTV:CAC is money-vs-money.
+  // Failure → gross-only with contribution fields null (labeled, never guessed).
+  let cmPct: number | null = null;
+  try {
+    const { getBlendedContributionMargin } = await import('../services/contribution-margin-service');
+    cmPct = (await getBlendedContributionMargin(db, 90)).contributionMarginPct;
+  } catch { /* contribution engine unavailable */ }
+
+  // Honesty note: how much of the window's order volume has NO identity at all
+  // (excluded from cohorts — mostly Amazon; these can't be attributed to acquisition).
+  let anonymousOrderShare: number | null = null;
+  try {
+    const anon = rows(await db.execute(sql`
+      SELECT count(*) FILTER (WHERE customer_email IS NULL OR customer_email = '')::float8 / nullif(count(*), 0) AS share
+      FROM sales_orders
+      WHERE status NOT IN ('CANCELLED', 'REFUNDED')
+        AND order_date >= date_trunc('month', current_date) - make_interval(months => ${months})`))[0];
+    anonymousOrderShare = anon?.share != null ? r2(Number(anon.share) * 100) / 100 : null;
+  } catch { /* note only */ }
 
   // 3. Historical ad spend fallback (pre-platform-connection months).
   const histSpend = await db.execute(sql`
@@ -867,19 +895,25 @@ export async function queryLtvCac(db: DB, months: number = 18) {
     const adSpend = liveMap.get(key) ?? histMap.get(key) ?? 0;
     const spendSource = liveMap.has(key) ? 'live' : (histMap.has(key) ? 'historical' : 'none');
     const cac = c.new_customers > 0 && adSpend > 0 ? adSpend / c.new_customers : null;
-    const ltvCacRatio = cac && cac > 0 ? c.avg_ltv / cac : null;
+    // Contribution LTV = gross LTV × measured margin. The RATIO now compares
+    // contribution dollars to acquisition dollars; the gross ratio stays visible.
+    const avgLtvContribution = cmPct != null ? r2(c.avg_ltv * cmPct) : null;
+    const ltvCacRatioGross = cac && cac > 0 ? c.avg_ltv / cac : null;
+    const ltvCacRatio = cac && cac > 0 && avgLtvContribution != null ? r2(avgLtvContribution / cac) : null;
     return {
       year: c.year,
       month: c.month,
       label: `${MONTH_NAMES[c.month]} ${String(c.year).slice(2)}`,
       newCustomers: c.new_customers,
-      avgLtv: c.avg_ltv,
+      avgLtv: c.avg_ltv,               // gross, tax-inclusive (reference)
+      avgLtvContribution,              // × measured contribution margin (decision basis)
       avgOrders: c.avg_orders,
       cohortRevenue: c.cohort_revenue,
       adSpend,
       spendSource,
       cac,
-      ltvCacRatio,
+      ltvCacRatio,                     // CONTRIBUTION-based (was gross — flattered ~2x)
+      ltvCacRatioGross,
     };
   });
 
@@ -889,7 +923,10 @@ export async function queryLtvCac(db: DB, months: number = 18) {
   const totalLtv = series.reduce((s: number, r: any) => s + r.cohortRevenue, 0);
   const blendedCac = totalNew > 0 && totalSpend > 0 ? totalSpend / totalNew : null;
   const blendedLtv = totalNew > 0 ? totalLtv / totalNew : null;
-  const blendedRatio = blendedCac && blendedLtv ? blendedLtv / blendedCac : null;
+  const blendedLtvContribution = blendedLtv != null && cmPct != null ? r2(blendedLtv * cmPct) : null;
+  const blendedRatioGross = blendedCac && blendedLtv ? blendedLtv / blendedCac : null;
+  // G #18: the DECISION ratio is contribution-vs-CAC (money-vs-money), not gross-vs-CAC.
+  const blendedRatio = blendedCac && blendedLtvContribution != null ? r2(blendedLtvContribution / blendedCac) : null;
 
   return {
     series,
@@ -897,9 +934,14 @@ export async function queryLtvCac(db: DB, months: number = 18) {
       totalNewCustomers: totalNew,
       totalAdSpend: totalSpend,
       blendedCac,
-      blendedLtv,
-      blendedRatio,
-      // Healthy DTC benchmark is 3x. Flag below 3.
+      blendedLtv,                    // gross (reference)
+      blendedLtvContribution,        // × measured contribution margin (decision basis)
+      blendedRatio,                  // CONTRIBUTION LTV:CAC (was gross — flattered ~2x)
+      blendedRatioGross,
+      contributionMarginPct: cmPct,
+      identifiedOnly: true,          // cohorts = real-email customers; pseudo/anonymous excluded
+      anonymousOrderShare,           // share of window orders with NO identity (unattributable)
+      // Healthy DTC benchmark is 3x — judged on the CONTRIBUTION ratio now.
       healthy: blendedRatio != null ? blendedRatio >= 3 : null,
     },
   };

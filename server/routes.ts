@@ -456,18 +456,43 @@ async function calculateWidgetTrend(widget: any, storage: any): Promise<{ direct
 // the old absolute writes from a pre-read could lose a concurrent update and
 // later double-receive. Not a stock field, so it doesn't go through the
 // movement gateway — but it uses the same row-lock capability when available.
-async function adjustFxInProcess(itemId: string, delta: number): Promise<void> {
+async function adjustFxInProcess(itemId: string, delta: number): Promise<{ before: number; after: number; delta: number }> {
   if (typeof storage.updateItemAtomic === "function") {
-    await storage.updateItemAtomic(itemId, (cur) => ({
-      updates: { fxInProcessQty: Math.max(0, (cur.fxInProcessQty ?? 0) + delta) },
-      result: null,
-    }));
-  } else {
-    const cur = await storage.getItem(itemId);
-    if (cur) {
-      await storage.updateItem(itemId, { fxInProcessQty: Math.max(0, (cur.fxInProcessQty ?? 0) + delta) });
-    }
+    const outcome = await storage.updateItemAtomic(itemId, (cur) => {
+      const before = cur.fxInProcessQty ?? 0;
+      const after = Math.max(0, before + delta);
+      return {
+        updates: { fxInProcessQty: after },
+        result: { before, after, delta: after - before },
+      };
+    });
+    return outcome.result ?? { before: 0, after: 0, delta: 0 };
   }
+  const cur = await storage.getItem(itemId);
+  if (!cur) return { before: 0, after: 0, delta: 0 };
+  const before = cur.fxInProcessQty ?? 0;
+  const after = Math.max(0, before + delta);
+  await storage.updateItem(itemId, { fxInProcessQty: after });
+  return { before, after, delta: after - before };
+}
+
+async function setFxInProcess(itemId: string, target: number): Promise<{ before: number; after: number; delta: number }> {
+  const safeTarget = Math.max(0, Math.trunc(target));
+  if (typeof storage.updateItemAtomic === "function") {
+    const outcome = await storage.updateItemAtomic(itemId, (cur) => {
+      const before = cur.fxInProcessQty ?? 0;
+      return {
+        updates: { fxInProcessQty: safeTarget },
+        result: { before, after: safeTarget, delta: safeTarget - before },
+      };
+    });
+    return outcome.result ?? { before: 0, after: safeTarget, delta: 0 };
+  }
+  const cur = await storage.getItem(itemId);
+  if (!cur) return { before: 0, after: safeTarget, delta: 0 };
+  const before = cur.fxInProcessQty ?? 0;
+  await storage.updateItem(itemId, { fxInProcessQty: safeTarget });
+  return { before, after: safeTarget, delta: safeTarget - before };
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -3177,21 +3202,24 @@ TOTAL: $${subtotal.toFixed(2)}
         const userId = req.session.userId || "system";
         let shouldRefetch = false;
         
-        // Handle hildaleQty changes via ADJUST transaction
+        // Handle signed hildaleQty changes via the movement gateway. The
+        // transaction API only accepts positive history quantities, but inline
+        // edits need to support decreases too (new absolute target < current).
+        // InventoryMovement validates/clamps under the item row lock.
         if ('hildaleQty' in validated) {
           const newQty = Number(validated.hildaleQty);
           const oldQty = existingItem.hildaleQty ?? 0;
           const delta = newQty - oldQty;
           
           if (delta !== 0) {
-            const result = await transactionService.applyTransaction({
+            const result = await new InventoryMovement(storage).apply({
+              eventType: "MANUAL_ADJUSTMENT",
               itemId: req.params.id,
-              itemType: "FINISHED",
-              type: "ADJUST",
               location: "HILDALE",
               quantity: delta,
+              source: "USER",
+              userId,
               notes: `Manual adjustment via inline edit`,
-              createdBy: userId,
             });
             
             if (!result.success) {
@@ -3339,21 +3367,23 @@ TOTAL: $${subtotal.toFixed(2)}
           return res.status(404).json({ error: "Item not found" });
         }
         
-        let updates: any;
-        
-        // For finished products, update pivotQty (ready-to-ship warehouse)
-        // For components, update currentStock
-        if (item.type === 'finished_product') {
-          updates = {
-            pivotQty: (item.pivotQty ?? 0) + 1,
-          };
-        } else {
-          updates = {
-            currentStock: item.currentStock + 1,
-          };
+        // Barcode scan receive/adjust must use the gateway. The legacy path
+        // wrote pivotQty directly for finished goods, but pivotQty is owned by
+        // Extensiv; a manual scan adjusts the working sellable AFS field.
+        const scanResult = await new InventoryMovement(storage).apply({
+          eventType: "MANUAL_ADJUSTMENT",
+          itemId: barcode.referenceId,
+          quantity: 1,
+          location: item.type === "finished_product" ? "PIVOT" : "N/A",
+          source: "USER",
+          userId: req.session.userId ?? undefined,
+          notes: `Barcode inventory scan: ${barcodeValue}`,
+        });
+        if (!scanResult.success) {
+          return res.status(400).json({ error: scanResult.error || "Failed to update inventory from barcode scan" });
         }
-        
-        const updatedItem = await storage.updateItem(barcode.referenceId, updates);
+
+        const updatedItem = await storage.getItem(barcode.referenceId);
         
         return res.json({
           success: true,
@@ -12634,23 +12664,24 @@ Notes: ${po.notes || 'None'}
         return res.status(400).json({ error: "FX in-production tracking applies only to finished products" });
       }
 
-      const previous = item.fxInProcessQty ?? 0;
-      const delta = qty - previous;
-
-      if (delta === 0) {
-        return res.json({ item, delta: 0 });
-      }
-
       const userId = req.session.userId!;
       const user = await storage.getUser(userId);
       const userName = user?.email ?? "unknown";
 
-      const updated = await storage.updateItem(id, { fxInProcessQty: qty });
+      const fxAdjustment = await setFxInProcess(id, qty);
+      const delta = fxAdjustment.delta;
+
+      if (delta === 0) {
+        const unchanged = await storage.getItem(id);
+        return res.json({ item: unchanged ?? item, delta: 0 });
+      }
+
+      const updated = await storage.getItem(id);
 
       const cleanNotes = typeof notes === "string" ? notes.trim() : "";
       const noteTag = cleanNotes
-        ? `[fx_adjustment ${previous}→${qty}] ${cleanNotes}`
-        : `[fx_adjustment ${previous}→${qty}]`;
+        ? `[fx_adjustment ${fxAdjustment.before}→${fxAdjustment.after}] ${cleanNotes}`
+        : `[fx_adjustment ${fxAdjustment.before}→${fxAdjustment.after}]`;
 
       await storage.createInventoryTransaction({
         itemId: id,
@@ -15936,8 +15967,7 @@ Notes: ${po.notes || 'None'}
       // the auto-update threshold by design (confirmed = not yet building).
       // The user spec explicitly says "Increment fx_in_process_qty on the
       // item" for FX anticipated entries, so we override the rule here.
-      const fxBefore = item.fxInProcessQty ?? 0;
-      await storage.updateItem(item.id, { fxInProcessQty: fxBefore + qty });
+      await adjustFxInProcess(item.id, qty);
       await storage.createInventoryTransaction({
         itemId: item.id,
         itemType: "FINISHED",
@@ -16373,7 +16403,7 @@ Notes: ${po.notes || 'None'}
             });
             applied.push({ itemId: item.id, sku: item.sku, effect: "received", qty });
           } else if (!wasContributing && isContributingNow) {
-            await storage.updateItem(item.id, { fxInProcessQty: fxBefore + qty });
+            await adjustFxInProcess(item.id, qty);
             await storage.createInventoryTransaction({
               itemId: item.id,
               itemType: "FINISHED",
@@ -16386,9 +16416,8 @@ Notes: ${po.notes || 'None'}
             });
             applied.push({ itemId: item.id, sku: item.sku, effect: "fx+=", qty });
           } else if (wasContributing && !isContributingNow) {
-            const fxAfter = Math.max(0, fxBefore - qty);
-            const actualDelta = fxBefore - fxAfter;
-            await storage.updateItem(item.id, { fxInProcessQty: fxAfter });
+            const fxAdjustment = await adjustFxInProcess(item.id, -qty);
+            const actualDelta = Math.abs(fxAdjustment.delta);
             if (actualDelta > 0) {
               await storage.createInventoryTransaction({
                 itemId: item.id,

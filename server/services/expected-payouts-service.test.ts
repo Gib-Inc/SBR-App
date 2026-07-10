@@ -30,9 +30,9 @@ describe("buildExpectedPayouts", () => {
     const p = buildExpectedPayouts({ amazonGross: 55_080, shopifyGross: 10_000, asOf: "2026-06-28" });
     expect(p.amazon.netExpected).toBe(46_818); // 55080 × 0.85
     expect(p.amazon.settlementDays).toBe(14);
-    expect(p.shopify.netExpected).toBe(9_710); // 10000 × 0.971
+    expect(p.shopify.netExpected).toBe(8_010); // 10000 × (1 − 0.029 fee − 0.17 Shopify Capital skim)
     expect(p.shopify.settlementDays).toBe(3);
-    expect(p.totalNetExpected).toBe(56_528);
+    expect(p.totalNetExpected).toBe(54_828); // 46,818 + 8,010
     expect(p.basis).toBe("sales-estimate");
     expect(p.asOf).toBe("2026-06-28");
   });
@@ -49,19 +49,19 @@ describe("buildExpectedPayouts", () => {
 
 describe("inboundWithinDays (window proration)", () => {
   const p = buildExpectedPayouts({ amazonGross: 56_000, shopifyGross: 10_000, asOf: "2026-06-28" });
-  // amazon net = 56000×0.85 = 47,600 over 14d; shopify net = 10000×0.971 = 9,710 over 3d
+  // amazon net = 56000×0.85 = 47,600 over 14d; shopify net = 10000×0.801 = 8,010 over 3d (fee + Capital skim)
   it("a 14-day+ window captures the full pipeline", () => {
-    expect(inboundWithinDays(p, 14)).toBe(57_310); // 47,600 + 9,710
-    expect(inboundWithinDays(p, 30)).toBe(57_310); // capped at 1×, never more
-    expect(inboundWithinDays(p, 60)).toBe(57_310);
+    expect(inboundWithinDays(p, 14)).toBe(55_610); // 47,600 + 8,010
+    expect(inboundWithinDays(p, 30)).toBe(55_610); // capped at 1×, never more
+    expect(inboundWithinDays(p, 60)).toBe(55_610);
   });
   it("a 7-day window captures all Shopify + ~half of Amazon", () => {
-    // amazon 47,600 × (7/14)=23,800 ; shopify full 9,710 → 33,510
-    expect(inboundWithinDays(p, 7)).toBe(33_510);
+    // amazon 47,600 × (7/14)=23,800 ; shopify full 8,010 → 31,810
+    expect(inboundWithinDays(p, 7)).toBe(31_810);
   });
   it("a 3-day window captures all Shopify + ~3/14 of Amazon", () => {
-    // amazon 47,600 × (3/14)=10,200 ; shopify full 9,710 → 19,910
-    expect(inboundWithinDays(p, 3)).toBe(19_910);
+    // amazon 47,600 × (3/14)=10,200 ; shopify full 8,010 → 18,210
+    expect(inboundWithinDays(p, 3)).toBe(18_210);
   });
   it("zero / negative window is zero (no fabrication)", () => {
     expect(inboundWithinDays(p, 0)).toBe(0);

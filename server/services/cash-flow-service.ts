@@ -330,6 +330,23 @@ export function rankAndProject(obls: Obligation[], cashAvailable: number, asOf: 
   return ranked;
 }
 
+/** Pure: the next two semimonthly paydates (15th + last day of month) strictly
+ *  after asOf. Default wage cadence until the operator sets the real one. */
+export function payrollWageSeedDates(asOf: string): string[] {
+  const now = parseYmd(asOf);
+  const out: string[] = [];
+  let y = now.getUTCFullYear(), m = now.getUTCMonth();
+  for (let i = 0; out.length < 2 && i < 4; i++) {
+    const mm = m + Math.floor(i / 2);
+    const yy = y + Math.floor(mm / 12);
+    const mIdx = ((mm % 12) + 12) % 12;
+    const day = i % 2 === 0 ? 15 : new Date(Date.UTC(yy, mIdx + 1, 0)).getUTCDate();
+    const d = `${yy}-${String(mIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    if (d > asOf) out.push(d);
+  }
+  return out;
+}
+
 // ── tax & payroll cadences (OpenAccountants-verified) ───────────────────────
 export function taxObligationSeeds(asOf: string): Array<{
   label: string; payee: string; category: OblCategory; tier: Tier; dueDate: string;
@@ -496,6 +513,22 @@ export async function syncGeneratedObligations(db: any, asOf: string): Promise<{
         tier = excluded.tier, updated_at = now()
       where cash_obligations.status = 'pending' and not coalesce(cash_obligations.manually_edited, false)`);
     tax++;
+  }
+
+  // PAYROLL WAGES (CFO truth layer): the tax seeds above cover 941 deposits, but the
+  // NET PAYCHECKS themselves — the most predictable outflow in the business (7 W-2
+  // employees) — were never seeded, so every cash forecast silently omitted payroll.
+  // Seed the next two semimonthly paydates (15th + last day; default until the real
+  // cadence is set) at $0/estimated with an "enter the amount" rationale — visible and
+  // demanding a number, never silently guessed. Operator edits are preserved by the
+  // manually_edited guard on conflict (same pattern as the debt seeds).
+  for (const pd of payrollWageSeedDates(asOf)) {
+    await db.execute(sql`
+      insert into cash_obligations (label, payee, category, tier, amount, amount_estimated, due_date, cadence, criticality, status, source, external_key, rationale)
+      values ('Payroll — net wages', 'Employees (W-2)', 'payroll', 'tier1', 0, true, ${pd}::date, 'semimonthly', 'must', 'pending', 'payroll', ${`payroll:wages:${pd}`}, 'Net paychecks for the pay period. Enter the actual payroll amount (and correct the paydate if the real cadence is not semimonthly) — the cash forecast counts this line.')
+      on conflict (external_key) where external_key is not null do update set
+        due_date = excluded.due_date, updated_at = now()
+      where cash_obligations.status = 'pending' and not coalesce(cash_obligations.manually_edited, false)`);
   }
 
   let debt = 0;

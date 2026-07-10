@@ -54,16 +54,24 @@ export interface ExpectedPayouts {
 // Tunable. Amazon referral ~15% (lawn/garden; FBM rollers carry no FBA fee);
 // biweekly disbursement so ~14-day hold. Shopify Payments ~2.9% + 30¢ ≈ 3%;
 // rolling ~3 business-day payout. Kept consistent with shopify-payouts-service.
-export const PAYOUT_CONFIG: Record<PayoutChannel, { feePct: number; settlementDays: number }> = {
-  amazon: { feePct: 0.15, settlementDays: 14 },
-  shopify: { feePct: 0.029, settlementDays: 3 },
+// skimPct = Shopify Capital's merchant-loan daily remittance withheld from every
+// payout BEFORE cash reaches the operating account (17% per the Dec 2025 Merchant
+// Loan Agreements; SBR's Apr 2026 reduction request was not confirmed granted).
+// Cash truth: deposits arrive net of this skim, so payout estimates must net it
+// too — and the Shopify Capital facility is then EXCLUDED from debt outflows by
+// consumers (cash-forecast-service) so the same skim is never counted twice.
+export const PAYOUT_CONFIG: Record<PayoutChannel, { feePct: number; settlementDays: number; skimPct: number }> = {
+  amazon: { feePct: 0.15, settlementDays: 14, skimPct: 0 },
+  shopify: { feePct: 0.029, settlementDays: 3, skimPct: 0.17 },
 };
 
-/** Pure: net payout from a gross window + fee. Non-positive/NaN gross → 0. */
-export function estimateNetPayout(grossWindow: number, feePct: number): number {
+/** Pure: net payout from a gross window, fee, and payout-withheld skim (MCA
+ *  remittance taken off the top). Non-positive/NaN gross → 0. */
+export function estimateNetPayout(grossWindow: number, feePct: number, skimPct = 0): number {
   if (!isNum(grossWindow) || grossWindow <= 0) return 0;
   const f = isNum(feePct) ? Math.min(Math.max(feePct, 0), 1) : 0;
-  return r2(grossWindow * (1 - f));
+  const k = isNum(skimPct) ? Math.min(Math.max(skimPct, 0), 1) : 0;
+  return r2(grossWindow * Math.max(0, 1 - f - k));
 }
 
 /** Pure: assemble ExpectedPayouts from the two channel gross windows. */
@@ -79,14 +87,14 @@ export function buildExpectedPayouts(input: {
     grossWindow: r2(Math.max(0, num(input.amazonGross))),
     feePct: a.feePct,
     settlementDays: a.settlementDays,
-    netExpected: estimateNetPayout(input.amazonGross, a.feePct),
+    netExpected: estimateNetPayout(input.amazonGross, a.feePct, a.skimPct),
   };
   const shopify: ChannelPayout = {
     channel: "shopify",
     grossWindow: r2(Math.max(0, num(input.shopifyGross))),
     feePct: s.feePct,
     settlementDays: s.settlementDays,
-    netExpected: estimateNetPayout(input.shopifyGross, s.feePct),
+    netExpected: estimateNetPayout(input.shopifyGross, s.feePct, s.skimPct),
   };
   return {
     amazon,

@@ -325,6 +325,11 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     // only when none exists. Append-only history (one row per entry) for the audit trail.
     `CREATE TABLE IF NOT EXISTS bank_balance_entries (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), available_balance numeric(14,2) NOT NULL, as_of timestamptz NOT NULL DEFAULT now(), in_transit jsonb NOT NULL DEFAULT '[]'::jsonb, source text NOT NULL DEFAULT 'manual', entered_by text, note text, created_at timestamptz NOT NULL DEFAULT now())`,
     `CREATE INDEX IF NOT EXISTS bank_balance_entries_as_of_idx ON bank_balance_entries(as_of DESC)`,
+    // CFO truth layer: each morning's cash forecast is persisted (one row per asOf date,
+    // latest run wins) so the Friday variance review can compare what we PREDICTED against
+    // what actually happened — the discipline that turns a forecast into an instrument.
+    `CREATE TABLE IF NOT EXISTS forecast_snapshots (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), as_of date NOT NULL UNIQUE, payload jsonb NOT NULL, generated_at timestamptz NOT NULL DEFAULT now())`,
+    `CREATE INDEX IF NOT EXISTS forecast_snapshots_as_of_idx ON forecast_snapshots(as_of DESC)`,
     // DROP + CREATE (not CREATE OR REPLACE): the view does `select o.*`, so adding ANY column
     // to cash_obligations shifts the column order and makes CREATE OR REPLACE fail with
     // "cannot change name of view column" — which silently froze this view at an old definition.

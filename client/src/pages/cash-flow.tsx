@@ -31,7 +31,7 @@ interface CashForecastAssumption {
   label: string; source: string; asOf: string | null; status: ForecastStatus; detail: string;
 }
 interface CashForecastHorizon {
-  horizonDays: number; projectedCash: number; confidence: ForecastConfidence;
+  horizonDays: number; projectedCash: number | null; netFlows: number; confidence: ForecastConfidence;
   inflows: Array<{ amount: number; status: ForecastStatus }>;
   outflows: Array<{ amount: number; status: ForecastStatus }>;
   assumptions: CashForecastAssumption[];
@@ -118,17 +118,19 @@ export default function CashFlow() {
             {forecast?.startingCash?.asOf && <span className="text-muted-foreground">as of {new Date(forecast.startingCash.asOf).toLocaleString()}</span>}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {(forecast?.horizons ?? [7, 14, 30, 60].map((horizonDays) => ({ horizonDays, projectedCash: 0, confidence: "low" as const, inflows: [], outflows: [], assumptions: [] }))).map((h) => (
+            {(forecast?.horizons ?? [7, 14, 30, 60].map((horizonDays) => ({ horizonDays, projectedCash: null, netFlows: 0, confidence: "low" as const, inflows: [], outflows: [], assumptions: [] }))).map((h) => (
               <div key={h.horizonDays} className="rounded border bg-background p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[11px] text-muted-foreground">{h.horizonDays} days</div>
                   <ConfidenceBadge value={h.confidence} />
                 </div>
-                <div className={`text-xl font-bold tabular-nums ${h.projectedCash < 0 ? "text-red-600 dark:text-red-400" : "text-blue-700 dark:text-blue-300"}`}>
-                  {forecast ? money(h.projectedCash) : "—"}
+                <div className={`text-xl font-bold tabular-nums ${(h.projectedCash ?? 0) < 0 ? "text-red-600 dark:text-red-400" : "text-blue-700 dark:text-blue-300"}`}>
+                  {forecast ? (h.projectedCash == null ? "—" : money(h.projectedCash)) : "—"}
                 </div>
                 <div className="text-[10px] text-muted-foreground">
-                  +{money(h.inflows.reduce((sum, line) => sum + line.amount, 0))} / −{money(h.outflows.reduce((sum, line) => sum + line.amount, 0))}
+                  {forecast && h.projectedCash == null
+                    ? <>starting cash unknown · net flows {h.netFlows < 0 ? "−" : "+"}{money(Math.abs(h.netFlows))}</>
+                    : <>+{money(h.inflows.reduce((sum, line) => sum + line.amount, 0))} / −{money(h.outflows.reduce((sum, line) => sum + line.amount, 0))}</>}
                 </div>
               </div>
             ))}

@@ -26432,6 +26432,17 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  app.get("/api/finances/cash-forecast", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getCashForecast } = await import("./services/cash-forecast-service");
+      res.json(await getCashForecast(db));
+    } catch (error: any) {
+      console.error("[CashForecast] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build cash forecast" });
+    }
+  });
+
   // ── Cash Out: rolling multi-day disbursement view (Stacy's dashboard; recommends + tracks only) ──
   app.get("/api/finances/cash-out", requireAuth, async (req: Request, res: Response) => {
     try {

@@ -5,7 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Wallet, AlertTriangle, ShieldCheck, ArrowDownToLine } from "lucide-react";
+import { Wallet, AlertTriangle, ShieldCheck, ArrowDownToLine, Gauge } from "lucide-react";
 
 interface Obligation {
   id: string; label: string; payee: string | null; category: string; tier: string;
@@ -25,6 +25,23 @@ interface Position {
   totalDue: number; tier1Due: number; projectedLow: number;
 }
 interface CashFlow { success: boolean; position: Position; obligations: Obligation[]; generatedAt: string; }
+type ForecastConfidence = "high" | "medium" | "low";
+type ForecastStatus = "ok" | "estimate" | "stale" | "unknown" | "plug";
+interface CashForecastAssumption {
+  label: string; source: string; asOf: string | null; status: ForecastStatus; detail: string;
+}
+interface CashForecastHorizon {
+  horizonDays: number; projectedCash: number; confidence: ForecastConfidence;
+  inflows: Array<{ amount: number; status: ForecastStatus }>;
+  outflows: Array<{ amount: number; status: ForecastStatus }>;
+  assumptions: CashForecastAssumption[];
+}
+interface CashForecast {
+  success: boolean;
+  generatedAt: string;
+  startingCash: { amount: number | null; source: "bank_confirmed" | "missing"; asOf: string | null; status: ForecastStatus; staleHours: number | null };
+  horizons: CashForecastHorizon[];
+}
 
 const money = (n: number | null | undefined) =>
   n == null ? "—" : `${n < 0 ? "-" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
@@ -59,11 +76,18 @@ export default function CashFlow() {
     queryKey: ["/api/finances/cash-flow", windowDays],
     queryFn: async () => (await apiRequest("GET", `/api/finances/cash-flow?windowDays=${windowDays}`)).json(),
   });
+  const { data: forecast } = useQuery<CashForecast>({
+    queryKey: ["/api/finances/cash-forecast"],
+    queryFn: async () => (await apiRequest("GET", "/api/finances/cash-forecast")).json(),
+  });
 
   const setStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) =>
       apiRequest("PUT", `/api/finances/cash-obligation/${id}/status`, { status }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/finances/cash-flow"] }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/finances/cash-flow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finances/cash-forecast"] });
+    },
     onError: (e: any) => toast({ title: "Error", description: e?.message, variant: "destructive" }),
   });
 
@@ -76,6 +100,51 @@ export default function CashFlow() {
         <h1 className="text-2xl font-bold flex items-center gap-2"><Wallet className="h-6 w-6" /> Cash Flow Command</h1>
         <p className="text-sm text-muted-foreground">What to pay, in what order, before cash runs out. Tax and payroll rank above vendor bills. This view <b>recommends and tracks</b> — it never moves money.</p>
       </div>
+
+      <Card className="border-blue-200 dark:border-blue-900/40 bg-blue-50/40 dark:bg-blue-950/10">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Gauge className="h-4 w-4 text-blue-600 dark:text-blue-400" /> Morning Cash Forecast
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Bank-confirmed cash + expected payouts − due obligations, open POs, and canonical ad-spend run-rate. Unknown or stale inputs are labeled instead of filled with guesses.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge variant={forecast?.startingCash?.source === "bank_confirmed" ? "default" : "destructive"}>
+              Cash: {forecast?.startingCash?.source === "bank_confirmed" ? "bank confirmed" : "missing"}
+            </Badge>
+            {forecast?.startingCash?.asOf && <span className="text-muted-foreground">as of {new Date(forecast.startingCash.asOf).toLocaleString()}</span>}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {(forecast?.horizons ?? [7, 14, 30, 60].map((horizonDays) => ({ horizonDays, projectedCash: 0, confidence: "low" as const, inflows: [], outflows: [], assumptions: [] }))).map((h) => (
+              <div key={h.horizonDays} className="rounded border bg-background p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[11px] text-muted-foreground">{h.horizonDays} days</div>
+                  <ConfidenceBadge value={h.confidence} />
+                </div>
+                <div className={`text-xl font-bold tabular-nums ${h.projectedCash < 0 ? "text-red-600 dark:text-red-400" : "text-blue-700 dark:text-blue-300"}`}>
+                  {forecast ? money(h.projectedCash) : "—"}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  +{money(h.inflows.reduce((sum, line) => sum + line.amount, 0))} / −{money(h.outflows.reduce((sum, line) => sum + line.amount, 0))}
+                </div>
+              </div>
+            ))}
+          </div>
+          {!!forecast?.horizons?.[0]?.assumptions?.length && (
+            <div className="rounded border bg-background/70 p-2 space-y-1">
+              {forecast.horizons[0].assumptions.slice(0, 3).map((a) => (
+                <div key={`${a.label}-${a.source}`} className="flex items-start gap-2 text-[11px]">
+                  <StatusBadge value={a.status} />
+                  <span className="text-muted-foreground"><b className="text-foreground">{a.label}:</b> {a.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Money on its way — front and center, broken down by channel. This is the
           sales-derived expected payout (net of fees), counted in the runway. */}
@@ -163,11 +232,29 @@ export default function CashFlow() {
               })}
             </div>
           )}
-          <p className="text-[11px] text-muted-foreground pt-3">Every Approve / Defer / Mark-paid is recorded with who and when (audit trail). The app never pays a bill — approval is the signal for a person to pay it in the bank or QuickBooks. Tax figures are working estimates; Roger confirms.</p>
+          <p className="text-[11px] text-muted-foreground pt-3">Every Approve / Defer / Mark-paid is recorded with who and when (audit trail). The app never pays a bill — approval is the signal for a person to pay it in the bank or QuickBooks. Tax figures are working estimates; Matt/Stacy confirm.</p>
         </CardContent>
       </Card>
     </div>
   );
+}
+
+function ConfidenceBadge({ value }: { value: ForecastConfidence }) {
+  const cls = value === "high"
+    ? "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300"
+    : value === "medium"
+      ? "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+      : "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300";
+  return <Badge className={`${cls} text-[10px]`}>{value}</Badge>;
+}
+
+function StatusBadge({ value }: { value: ForecastStatus }) {
+  const cls = value === "ok"
+    ? "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300"
+    : value === "estimate"
+      ? "bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+      : "bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300";
+  return <Badge className={`${cls} text-[10px] shrink-0`}>{value}</Badge>;
 }
 
 function ChannelPill({ name, value, sub }: { name: string; value: string; sub: string }) {

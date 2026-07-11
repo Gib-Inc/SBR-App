@@ -16,6 +16,7 @@
  */
 import { sql } from "drizzle-orm";
 import { classifyAccount, type AcctGroup } from "./finance-pnl-service";
+import { getDedupedMonthlyGl } from "./gl-reader";
 
 type DB = any;
 const rows = (r: any) => r.rows || r;
@@ -156,25 +157,16 @@ export async function getProjection(db: DB, opts: {
   const months = opts.months ?? 12;
   const monthsBack = opts.monthsBack ?? 12;
 
-  // 1) trailing monthly net sales — classified per account via classifyAccount so the
-  //    Match-Shopify duplicate income tree is EXCLUDED. The old raw name-pattern match
-  //    ("%gross sales%"/"%discount%"/...) summed BOTH trees and inflated the revenue
-  //    base ~1.7x — the phantom-profit bug class, on the one surface whose job is the
-  //    path to breakeven. The cost side below already classifies; this keeps both sides
-  //    on the ONE classifier (and in exact parity with the Budget Scorecard's rollup).
-  const nsRaw = rows(await db.execute(sql`
-    SELECT to_char(date_trunc('month', txn_date), 'YYYY-MM') AS month,
-           account_name AS account,
-           round(sum(amount)::numeric, 2) AS amount
-    FROM qb_pl_detail
-    WHERE txn_date >= (date_trunc('month', now()) - (${monthsBack} || ' months')::interval)
-      AND txn_date <  date_trunc('month', now())
-    GROUP BY 1, 2 ORDER BY 1`)) as Array<{ month: string; account: string; amount: any }>;
+  // 1) trailing monthly net sales — via the shared mirror-deduped reader, classified per
+  //    account via classifyAccount (income + contra only). The reader pairs the Match-
+  //    Shopify mirror tree with the primary accounts so one-sided corrections count and
+  //    mirrored pairs count once — same revenue base as the Budget Scorecard, exactly.
+  const nsRaw = await getDedupedMonthlyGl(db, { monthsBack, cutoff: "completeMonths" });
   const nsByMonth = new Map<string, number>();
   for (const r of nsRaw) {
     const g = classifyAccount(r.account);
     if (g !== "income" && g !== "contra") continue; // contra (discounts/returns) is already negative in QB
-    nsByMonth.set(r.month, r2((nsByMonth.get(r.month) ?? 0) + num(r.amount)));
+    nsByMonth.set(r.month, r2((nsByMonth.get(r.month) ?? 0) + r.amount));
   }
   const salesMonths = Array.from(nsByMonth.keys()).sort();
   const trailingNetSales = r2(Array.from(nsByMonth.values()).reduce((s, x) => s + x, 0));
@@ -183,8 +175,8 @@ export async function getProjection(db: DB, opts: {
   const acctRows = rows(await db.execute(sql`
     SELECT account_name AS account, round(sum(amount)::numeric, 2) AS amount
     FROM qb_pl_detail
-    WHERE txn_date >= (date_trunc('month', now()) - (${monthsBack} || ' months')::interval)
-      AND txn_date <  date_trunc('month', now())
+    WHERE txn_date >= (date_trunc('month', (now() AT TIME ZONE 'America/Denver')) - (${monthsBack} || ' months')::interval)
+      AND txn_date <  date_trunc('month', (now() AT TIME ZONE 'America/Denver'))
       AND account_name NOT ILIKE '%gross sales%' AND account_name NOT ILIKE '%discount%'
       AND account_name NOT ILIKE '%return%' AND account_name NOT ILIKE '%refund%'
     GROUP BY 1`)) as Array<{ account: string; amount: any }>;
@@ -194,8 +186,8 @@ export async function getProjection(db: DB, opts: {
     SELECT account_name AS account, COALESCE(vendor_or_payee,'') AS vendor,
            round(sum(amount)::numeric, 2) AS amount
     FROM qb_pl_detail
-    WHERE txn_date >= (date_trunc('month', now()) - (${monthsBack} || ' months')::interval)
-      AND txn_date <  date_trunc('month', now())
+    WHERE txn_date >= (date_trunc('month', (now() AT TIME ZONE 'America/Denver')) - (${monthsBack} || ' months')::interval)
+      AND txn_date <  date_trunc('month', (now() AT TIME ZONE 'America/Denver'))
       AND (vendor_or_payee ILIKE '%lucid%' OR vendor_or_payee ILIKE '%gamerz%' OR vendor_or_payee ILIKE '%dojo%')
     GROUP BY 1, 2`)) as Array<{ account: string; vendor: string; amount: any }>;
 

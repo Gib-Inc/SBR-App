@@ -25967,22 +25967,17 @@ Generate only the email body text, no subject line.`;
     try {
       const { db } = await import("./db");
       const { sql } = await import("drizzle-orm");
-      // Use the CANONICAL classifier so this matches monthly_financials. The old inline rule
-      // classified BOTH the real Gross Sales AND the "1 - Gross Sales (Match Shopify...)"
-      // duplicate as income → net sales double-counted ~70-100% (phantom profit). It also
-      // wrongly treated discounts/returns as positive income; classifyAccount makes them contra.
+      // Shared mirror-deduped reader + the CANONICAL classifier so this matches
+      // monthly_financials: mirror pairs count once, one-sided Match-Shopify corrections
+      // count in full, and discounts/returns are contra (not positive income).
       const { classifyAccount, rollup } = await import("./services/finance-pnl-service");
+      const { getDedupedMonthlyGl } = await import("./services/gl-reader");
       const r0 = (n: number) => Math.round(n * 100) / 100;
-      const rawMonths = ((await db.execute(sql`
-        select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, account_name, sum(amount) as amt
-        from qb_pl_detail
-        where txn_date >= (date_trunc('month', current_date) - interval '3 months') and txn_date < date_trunc('month', current_date)
-        group by 1, 2`)).rows ?? []) as any[];
+      const rawMonths = await getDedupedMonthlyGl(db, { monthsBack: 3, cutoff: "completeMonths" });
       const monthItems = new Map<string, Array<{ account: string; amount: number }>>();
       for (const r of rawMonths) {
-        const ym = String(r.ym);
-        if (!monthItems.has(ym)) monthItems.set(ym, []);
-        monthItems.get(ym)!.push({ account: String(r.account_name), amount: Number(r.amt) || 0 });
+        if (!monthItems.has(r.month)) monthItems.set(r.month, []);
+        monthItems.get(r.month)!.push({ account: r.account, amount: r.amount });
       }
       const monthsAgg = Array.from(monthItems.entries())
         .sort((a, b) => (a[0] < b[0] ? 1 : -1)) // most-recent first
@@ -25997,7 +25992,7 @@ Generate only the email body text, no subject line.`;
           select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym,
             coalesce(nullif(trim(vendor_or_payee),''),'(unspecified)') as vendor, account_name, sum(amount) as amt
           from qb_pl_detail
-          where txn_date >= ${prior.month + '-01'}::date and txn_date < date_trunc('month', current_date)
+          where txn_date >= ${prior.month + '-01'}::date and txn_date < date_trunc('month', (now() AT TIME ZONE 'America/Denver'))
           group by 1, 2, 3`)).rows ?? []) as any[];
         const moverMap = new Map<string, { curr: number; prior: number }>();
         for (const r of rawMovers) {

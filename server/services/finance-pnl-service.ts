@@ -9,6 +9,7 @@
  * trend is returned alongside for context.
  */
 import { sql } from "drizzle-orm";
+import { getDedupedMonthlyGl, mirrorTreeExcludedSql, PRIMARY_TO_TREE } from "./gl-reader";
 
 type DB = any;
 const rows = (r: any) => r.rows || r;
@@ -83,22 +84,15 @@ export function rollup(items: Array<{ account: string; amount: number }>) {
 }
 
 export async function getBudgetScorecard(db: DB, monthsBack = 6, basisMonths = 3): Promise<BudgetScorecard> {
-  // Per-month, per-account totals for the last `monthsBack` complete months.
-  const data = rows(await db.execute(sql`
-    SELECT to_char(date_trunc('month', txn_date), 'YYYY-MM') AS month,
-           account_name AS account,
-           round(sum(amount)::numeric, 2) AS amount
-    FROM qb_pl_detail
-    WHERE txn_date >= (date_trunc('month', now()) - (${monthsBack} || ' months')::interval)
-      AND txn_date <  date_trunc('month', now())
-    GROUP BY 1, 2
-    ORDER BY 1`)) as Array<{ month: string; account: string; amount: any }>;
+  // Per-month, per-account totals for the last `monthsBack` complete months, via the
+  // shared mirror-deduped reader (one-sided Match-Shopify corrections count; pairs once).
+  const data = await getDedupedMonthlyGl(db, { monthsBack, cutoff: "completeMonths" });
 
   // group by month
   const byMonth = new Map<string, Array<{ account: string; amount: number }>>();
   for (const d of data) {
     const arr = byMonth.get(d.month) ?? [];
-    arr.push({ account: d.account, amount: num(d.amount) });
+    arr.push({ account: d.account, amount: d.amount });
     byMonth.set(d.month, arr);
   }
   const months = Array.from(byMonth.keys()).sort();
@@ -135,8 +129,8 @@ export async function getBudgetScorecard(db: DB, monthsBack = 6, basisMonths = 3
   const reclass = rows(await db.execute(sql`
     SELECT account_name AS account, round(sum(amount)::numeric, 2) AS amount
     FROM qb_pl_detail
-    WHERE txn_date >= (date_trunc('month', now()) - (${basisMonths} || ' months')::interval)
-      AND txn_date <  date_trunc('month', now())
+    WHERE txn_date >= (date_trunc('month', (now() AT TIME ZONE 'America/Denver')) - (${basisMonths} || ' months')::interval)
+      AND txn_date <  date_trunc('month', (now() AT TIME ZONE 'America/Denver'))
       AND (vendor_or_payee ILIKE '%lucid%' OR vendor_or_payee ILIKE '%gamerz%' OR vendor_or_payee ILIKE '%dojo%')
     GROUP BY 1`)) as Array<{ account: string; amount: any }>;
   let ownerComp = 0;
@@ -209,8 +203,8 @@ export async function getCategoryVendors(db: DB, account: string, monthsBack = 3
            round(sum(amount)::numeric, 2) AS amount, count(*) AS lines
     FROM qb_pl_detail
     WHERE account_name = ${account}
-      AND txn_date >= (date_trunc('month', now()) - (${monthsBack} || ' months')::interval)
-      AND txn_date <  date_trunc('month', now())
+      AND txn_date >= (date_trunc('month', (now() AT TIME ZONE 'America/Denver')) - (${monthsBack} || ' months')::interval)
+      AND txn_date <  date_trunc('month', (now() AT TIME ZONE 'America/Denver'))
     GROUP BY 1 ORDER BY abs(sum(amount)) DESC`)) as any[];
   return r.map((x: any) => ({ vendor: x.vendor, amount: r2(num(x.amount)), lines: num(x.lines) }));
 }
@@ -239,7 +233,7 @@ export async function getCategoryVendorTransactions(
   source: string;
   authoritative: string;
 }> {
-  const window = sql`txn_date >= (date_trunc('month', now()) - (${monthsBack} || ' months')::interval) AND txn_date < date_trunc('month', now())`;
+  const window = sql`txn_date >= (date_trunc('month', (now() AT TIME ZONE 'America/Denver')) - (${monthsBack} || ' months')::interval) AND txn_date < date_trunc('month', (now() AT TIME ZONE 'America/Denver'))`;
   // vendor '(unlabeled)' is the surface label for a NULL vendor_or_payee (see getCategoryVendors).
   const vendorFilter =
     vendor == null || vendor === ""
@@ -248,24 +242,64 @@ export async function getCategoryVendorTransactions(
         ? sql` AND vendor_or_payee IS NULL`
         : sql` AND vendor_or_payee = ${vendor}`;
 
-  const agg = (rows(await db.execute(sql`
-    SELECT count(*) AS n, round(coalesce(sum(amount), 0)::numeric, 2) AS total
-    FROM qb_pl_detail
-    WHERE account_name = ${account} AND ${window}${vendorFilter}`)) as any[])[0];
+  // Income-family primary accounts get the SAME mirror dedup at line grain so the
+  // drill-down total reconciles with the deduped rollup (one-sided tree corrections
+  // like the 5/31 -63,200.11 appear as flagged lines instead of silently missing).
+  // Vendor-filtered reads keep the raw path (vendor surfaces are expense-only).
+  const treeAlias = vendor == null || vendor === "" ? PRIMARY_TO_TREE[account] : undefined;
+  const dedupCte = treeAlias
+    ? sql`
+    WITH gl AS (
+      SELECT realm_id, txn_date, amount, (account_name = ${treeAlias}) AS is_tree,
+             txn_type, doc_number, memo
+      FROM qb_pl_detail
+      WHERE account_name IN (${account}, ${treeAlias}) AND ${window}
+    ), keyed AS (
+      SELECT realm_id, txn_date, amount,
+             count(*) FILTER (WHERE NOT is_tree) AS parent_n,
+             count(*) FILTER (WHERE is_tree)     AS tree_n,
+             max(txn_type)   FILTER (WHERE NOT is_tree) AS p_type,
+             max(doc_number) FILTER (WHERE NOT is_tree) AS p_doc,
+             max(memo)       FILTER (WHERE NOT is_tree) AS p_memo,
+             max(txn_type)   FILTER (WHERE is_tree) AS t_type,
+             max(doc_number) FILTER (WHERE is_tree) AS t_doc,
+             max(memo)       FILTER (WHERE is_tree) AS t_memo
+      FROM gl GROUP BY 1, 2, 3
+    )`
+    : null;
 
-  const r = rows(await db.execute(sql`
-    SELECT txn_date::text AS date, txn_type AS type, doc_number AS doc, memo,
-           round(amount::numeric, 2) AS amount
-    FROM qb_pl_detail
-    WHERE account_name = ${account} AND ${window}${vendorFilter}
-    ORDER BY txn_date DESC, abs(amount) DESC
-    LIMIT ${limit}`)) as any[];
+  const agg = dedupCte
+    ? (rows(await db.execute(sql`${dedupCte}
+        SELECT count(*) AS n, round(coalesce(sum(amount * greatest(parent_n, tree_n)), 0)::numeric, 2) AS total
+        FROM keyed`)) as any[])[0]
+    : (rows(await db.execute(sql`
+        SELECT count(*) AS n, round(coalesce(sum(amount), 0)::numeric, 2) AS total
+        FROM qb_pl_detail
+        WHERE account_name = ${account} AND ${window}${vendorFilter}`)) as any[])[0];
+
+  const r = dedupCte
+    ? rows(await db.execute(sql`${dedupCte}
+        SELECT txn_date::text AS date,
+               coalesce(p_type, t_type) AS type, coalesce(p_doc, t_doc) AS doc,
+               coalesce(p_memo, t_memo) AS memo,
+               round((amount * greatest(parent_n, tree_n))::numeric, 2) AS amount,
+               (parent_n = 0) AS tree_only
+        FROM keyed
+        ORDER BY txn_date DESC, abs(amount) DESC
+        LIMIT ${limit}`)) as any[]
+    : rows(await db.execute(sql`
+        SELECT txn_date::text AS date, txn_type AS type, doc_number AS doc, memo,
+               round(amount::numeric, 2) AS amount
+        FROM qb_pl_detail
+        WHERE account_name = ${account} AND ${window}${vendorFilter}
+        ORDER BY txn_date DESC, abs(amount) DESC
+        LIMIT ${limit}`)) as any[];
 
   const lines = r.map((x: any) => ({
     date: x.date,
     type: x.type ?? null,
     doc: x.doc ?? null,
-    memo: x.memo ?? null,
+    memo: x.tree_only ? `[one-sided mirror-tree line] ${x.memo ?? ""}`.trim() : (x.memo ?? null),
     amount: r2(num(x.amount)),
   }));
   const count = num(agg?.n);
@@ -291,9 +325,11 @@ export interface VendorView {
 
 /** Top spend vendors over the trailing window + a Pyvott fulfillment spotlight (cost/order). */
 export async function getTopVendors(db: DB, monthsBack = 3, limit = 15): Promise<VendorView> {
-  const since = sql`(date_trunc('month', now()) - (${monthsBack} || ' months')::interval)`;
-  const until = sql`date_trunc('month', now())`;
-  const notIncome = sql`account_name NOT ILIKE '%gross sales%' AND account_name NOT ILIKE '%discount%' AND account_name NOT ILIKE '%return%' AND account_name NOT ILIKE '%refund%' AND account_name NOT ILIKE '%match shopify total sales breakdown%'`;
+  const since = sql`(date_trunc('month', (now() AT TIME ZONE 'America/Denver')) - (${monthsBack} || ' months')::interval)`;
+  const until = sql`date_trunc('month', (now() AT TIME ZONE 'America/Denver'))`;
+  // Vendor grain stays parent-only: mirror pairs carry different vendor strings so they
+  // cannot be paired — see mirrorTreeExcludedSql in gl-reader for the full caveat.
+  const notIncome = sql`account_name NOT ILIKE '%gross sales%' AND account_name NOT ILIKE '%discount%' AND account_name NOT ILIKE '%return%' AND account_name NOT ILIKE '%refund%' AND ${mirrorTreeExcludedSql}`;
 
   const vrows = rows(await db.execute(sql`
     SELECT COALESCE(vendor_or_payee, '(unlabeled)') AS vendor,
@@ -304,16 +340,12 @@ export async function getTopVendors(db: DB, monthsBack = 3, limit = 15): Promise
     GROUP BY 1 HAVING sum(amount) > 0
     ORDER BY sum(amount) DESC LIMIT ${limit}`)) as any[];
 
-  // Net sales via classifyAccount — the raw name-pattern version summed the Match-Shopify
-  // duplicate income tree too (same phantom-revenue bug class as the Finances page had).
-  const nsRows = rows(await db.execute(sql`
-    SELECT account_name AS account, round(sum(amount)::numeric, 2) AS amount
-    FROM qb_pl_detail
-    WHERE txn_date >= ${since} AND txn_date < ${until}
-    GROUP BY 1`)) as Array<{ account: string; amount: any }>;
+  // Net sales via the shared deduped reader + classifyAccount — parent-only reads dropped
+  // the one-sided Match-Shopify corrections and overstated the % denominators.
+  const nsRows = await getDedupedMonthlyGl(db, { monthsBack, cutoff: "completeMonths" });
   const netSales = r2(nsRows.reduce((s, r) => {
     const g = classifyAccount(r.account);
-    return g === "income" || g === "contra" ? s + num(r.amount) : s;
+    return g === "income" || g === "contra" ? s + r.amount : s;
   }, 0));
 
   const vendors: TopVendor[] = vrows.map((v: any) => ({

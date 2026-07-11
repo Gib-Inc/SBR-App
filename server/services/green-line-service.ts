@@ -14,6 +14,7 @@
 import { sql } from "drizzle-orm";
 import { debtTier, type Tier } from "./cash-flow-service";
 import { classifyAccount, rollup } from "./finance-pnl-service";
+import { getDedupedMonthlyGl } from "./gl-reader";
 
 type DB = any;
 const rows = (r: any): any[] => r?.rows ?? r ?? [];
@@ -37,18 +38,15 @@ export interface OpexMonth { month: string; netSales: number; opex: number; opex
 export async function computeOpexCreep(db: DB, sinceYmd = "2026-01-01"): Promise<{
   months: OpexMonth[]; latest: OpexMonth | null; monthsOver90: number;
 }> {
-  // Pull per-month, per-account totals and classify with the CANONICAL classifyAccount in JS
-  // (net sales = income + contra; opex = expense; cogs/duplicate excluded) so opex % matches
-  // the P&L surfaces exactly. Row count is tiny (months × accounts).
-  const rs = rows(await db.execute(sql`
-    select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, account_name, sum(amount) as amt
-    from qb_pl_detail where txn_date >= ${sinceYmd}::date
-    group by 1, 2 order by 1`));
+  // Per-month, per-account totals via the shared mirror-deduped reader, classified with
+  // the CANONICAL classifyAccount in JS (net sales = income + contra; opex = expense;
+  // cogs/duplicate excluded) so opex % matches the P&L surfaces exactly.
+  const rs = await getDedupedMonthlyGl(db, { sinceYmd, cutoff: "none" });
   const byMonth = new Map<string, { netSales: number; opex: number }>();
   for (const rr of rs) {
-    const ym = String(rr.ym);
-    const amt = num(rr.amt);
-    const g = classifyAccount(String(rr.account_name));
+    const ym = rr.month;
+    const amt = rr.amount;
+    const g = classifyAccount(rr.account);
     const m = byMonth.get(ym) ?? { netSales: 0, opex: 0 };
     if (g === "income" || g === "contra") m.netSales += amt; // contra is negative in QB → nets down
     else if (g === "expense") m.opex += amt;
@@ -96,6 +94,8 @@ export async function computeSpendLeaks(db: DB): Promise<{ vendors: VendorSpend[
   const byVendor = new Map<string, { spend90: number; spend30: number; prior30: number }>();
   let totalOpex90 = 0;
   for (const rr of raw) {
+    // Vendor grain keeps the parent-only 'duplicate' skip (mirror pairs can't be vendor-
+    // paired — see gl-reader's vendor-grain caveat); only true opex survives anyway.
     if (classifyAccount(String(rr.account_name)) !== "expense") continue; // opex only
     const vendor = String(rr.vendor);
     const v = byVendor.get(vendor) ?? { spend90: 0, spend30: 0, prior30: 0 };
@@ -278,24 +278,19 @@ export async function computeGreenLine(db: DB): Promise<GreenLineSummary> {
       where cash_on_hand is not null order by captured_at desc limit 1`).then((r: any) => rows(r)[0]),
     db.execute(sql`select realistic_days, calculated_burn_rate, runway_status from financial_runway_forecasts
       order by created_at desc limit 1`).then((r: any) => rows(r)[0]),
-    db.execute(sql`
-      select to_char(date_trunc('month',txn_date),'YYYY-MM') as ym, account_name, sum(amount) as amt
-      from qb_pl_detail where txn_date >= (current_date - interval '6 months')
-      group by 1, 2 order by 1`).then((r: any) => rows(r)),
+    getDedupedMonthlyGl(db, { rollingMonthsBack: 6, cutoff: "none" }),
     computeDebtAvalanche(db),
     computeDscr(db),
     computeOpexCreep(db),
     computeGovernor(db),
   ]);
 
-  // Net income per month via the canonical rollup() (classifies each account with the same
-  // classifyAccount the P&L surfaces use, excluding the Match-Shopify duplicate tree), so the
-  // trend reconciles to monthly_financials instead of the old ~5-11x-too-negative inline rule.
+  // Net income per month: shared deduped reader + the canonical rollup(), so the trend
+  // reconciles to monthly_financials (mirror pairs once, one-sided corrections counted).
   const niByMonth = new Map<string, Array<{ account: string; amount: number }>>();
-  for (const rr of niRows as any[]) {
-    const ym = String(rr.ym);
-    if (!niByMonth.has(ym)) niByMonth.set(ym, []);
-    niByMonth.get(ym)!.push({ account: String(rr.account_name), amount: num(rr.amt) });
+  for (const rr of niRows) {
+    if (!niByMonth.has(rr.month)) niByMonth.set(rr.month, []);
+    niByMonth.get(rr.month)!.push({ account: rr.account, amount: rr.amount });
   }
   const netIncomeTrend = Array.from(niByMonth.entries())
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))

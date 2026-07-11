@@ -47,7 +47,8 @@ interface BalanceSheet {
 }
 interface AdChannel { channel: string; spend: number; source?: "live" | "uploaded" | "canonical"; }
 interface ExpectedPayouts { amazonNet: number; shopifyNet: number; totalNet: number; }
-interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; balanceSheetDataGaps?: string[]; qbLive?: QbLive | null; netCashPosition?: number | null; expectedPayouts?: ExpectedPayouts | null; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
+interface CashBurn { burn30: number | null; from?: { asOf: string; balance: number }; to?: { asOf: string; balance: number }; spanDays?: number; reason?: string }
+interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; balanceSheetDataGaps?: string[]; qbLive?: QbLive | null; netCashPosition?: number | null; expectedPayouts?: ExpectedPayouts | null; adChannels?: AdChannel[]; adChannelsWindowDays?: number; cashBurn?: CashBurn | null; }
 
 const n = (v: string | number | null | undefined) => (v == null ? 0 : Number(v));
 const fmt = (v: number | null | undefined) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString());
@@ -98,8 +99,16 @@ export default function Finances() {
   // and a "HEALTHY" badge while the company is losing money). Fall back to the
   // trailing-3-closed-month average only when no live snapshot exists.
   const liveNet = data?.qbLive?.netIncome ?? null;
-  const burn3 = liveNet != null ? -liveNet : avg(netInc.slice(-3).map((x) => -x));
+  const plBurn = liveNet != null ? -liveNet : avg(netInc.slice(-3).map((x) => -x));
+  // Burn basis: prefer CASH (operator-entered bank-confirmed balances — true money
+  // movement incl. debt principal) over the accrual P&L number, which swings with
+  // income-booking timing (it moved -$31K → +$80K in one night of JE catch-up).
+  // Both are shown; the card labels which basis drives the headline.
+  const cb = data?.cashBurn ?? null;
+  const burnBasis: "cash" | "pl" = cb?.burn30 != null ? "cash" : "pl";
+  const burn3 = cb?.burn30 != null ? cb.burn30 : plBurn;
   const cash = bs && bs.cash != null ? bs.cash : 0;
+  // Runway is a PROJECTION: assumes the window's pace continues.
   const runwayMo = burn3 > 0 ? cash / burn3 : null;
   const ytdIdx = months.map((m, i) => (/2026/.test(m) ? i : -1)).filter((i) => i >= 0);
   const ytdRev = ytdIdx.reduce((s, i) => s + income[i], 0);
@@ -142,8 +151,15 @@ export default function Finances() {
           {/* Health KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <Kpi label="Cash on Hand" value={fmt(cash)} sub="bank accounts" tone={runwayMo != null && runwayMo < 2 ? "crit" : ""} />
-            <Kpi label="Cash Runway" value={runwayMo != null ? `${runwayMo.toFixed(1)} mo` : "—"} sub={runwayMo != null ? `~${Math.round(runwayMo * 30.4)} days` : "cash-flow +"} tone={status.tone} />
-            <Kpi label="Monthly Burn" value={burn3 > 0 ? fmt(burn3) : "cash-flow +"} sub="trailing-30d net · live QB" tone={burn3 > 0 ? "crit" : ""} />
+            <Kpi label="Cash Runway" value={runwayMo != null ? `${runwayMo.toFixed(1)} mo` : "—"} sub={runwayMo != null ? `~${Math.round(runwayMo * 30.4)} days · projection off ${burnBasis === "cash" ? "bank pace" : "P&L pace"}` : "cash-flow +"} tone={status.tone} />
+            <Kpi
+              label="Monthly Burn"
+              value={burn3 > 0 ? fmt(burn3) : "cash +"}
+              sub={burnBasis === "cash"
+                ? `cash basis · bank ${cb!.from!.asOf} → ${cb!.to!.asOf} · P&L: ${plBurn > 0 ? fmt(plBurn) : "positive"}`
+                : `P&L basis · trailing-30d · live QB · cash basis ${cb?.reason ? "not available" : "—"}`}
+              tone={burn3 > 0 ? "crit" : ""}
+            />
             <Kpi label="2026 Revenue" value={fmt(ytdRev)} sub="YTD" />
             <Kpi label="2026 Net Income" value={fmt(ytdNI)} sub="YTD" tone={ytdNI < 0 ? "crit" : ""} />
             <Kpi label="Total Liabilities" value={bs ? fmt(bs.totalLiabilities) : "—"} sub="all debt" tone="crit" />

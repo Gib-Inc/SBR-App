@@ -24376,6 +24376,38 @@ Generate only the email body text, no subject line.`;
         balanceSheet = { ...balanceSheet, cash: resolvedCash };
       }
 
+      // CASH-BASIS burn — from operator-entered bank-confirmed balances, the only true
+      // cash movement (the P&L "burn" is accrual: it swung -$31K → +$80K in one night of
+      // income-booking catch-up and excludes debt principal). Needs two entries ≥7 days
+      // apart within 45 days; otherwise null with a reason — never a plausible fill.
+      let cashBurn: {
+        burn30: number | null;
+        from?: { asOf: string; balance: number };
+        to?: { asOf: string; balance: number };
+        spanDays?: number;
+        reason?: string;
+      } = { burn30: null, reason: "not available — needs two bank-confirmed balances at least 7 days apart in the last 45 days" };
+      try {
+        const entries = (((await db.execute(sql`
+          SELECT available_balance::float8 AS balance, as_of
+          FROM bank_balance_entries
+          WHERE as_of >= now() - interval '45 days'
+          ORDER BY as_of ASC`)).rows ?? []) as Array<{ balance: number; as_of: string | Date }>);
+        if (entries.length >= 2) {
+          const first = entries[0], lastE = entries[entries.length - 1];
+          const spanDays = (new Date(lastE.as_of as any).getTime() - new Date(first.as_of as any).getTime()) / 86400000;
+          if (spanDays >= 7) {
+            const day = (d: any) => new Date(d).toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+            cashBurn = {
+              burn30: Math.round(((Number(first.balance) - Number(lastE.balance)) / spanDays) * 30.4 * 100) / 100,
+              from: { asOf: day(first.as_of), balance: Number(first.balance) },
+              to: { asOf: day(lastE.as_of), balance: Number(lastE.balance) },
+              spanDays: Math.round(spanDays * 10) / 10,
+            };
+          }
+        }
+      } catch (e: any) { console.warn("[CIPH.R] overview cash-burn failed:", e?.message ?? e); }
+
       // Live debt position — overlay the CURRENT debt stack from credit_lines (synced
       // daily from QB liability accounts) + live QB balance-sheet totals + live A/P,
       // so "Debt & Position" reflects today, not the last uploaded balance sheet (which
@@ -24426,6 +24458,7 @@ Generate only the email body text, no subject line.`;
         expectedPayouts,
         adChannels,
         adChannelsWindowDays: 30,
+        cashBurn,
       });
     } catch (error: any) {
       console.error('[CIPH.R] Finances overview error:', error);

@@ -22820,6 +22820,58 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── BOOK.E walk phase — daily sales journal entries ─────────────────────
+  // The scheduler DRAFTS one JE per channel per MT day into daily_je_proposals;
+  // QuickBooks is written exclusively by the approve endpoint below (human click).
+  const dailyJe = await import('./services/daily-sales-je-service');
+
+  // GET /api/bookkeeping/daily-je - list proposals, latest first
+  app.get("/api/bookkeeping/daily-je", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      res.json({ proposals: await dailyJe.listDailyJeProposals() });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to load daily JE proposals" });
+    }
+  });
+
+  // POST /api/bookkeeping/daily-je/:id/approve - posts the drafted JE to QuickBooks.
+  // The service claims the row atomically (pending → posting) before touching
+  // QBO; a lost race comes back as conflict → 409, never a second post.
+  app.post("/api/bookkeeping/daily-je/:id/approve", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const result = await dailyJe.approveProposal(Number(req.params.id), req.session.userId!);
+      if (!result.ok) return res.status(result.conflict ? 409 : 422).json({ error: result.error });
+      res.json({ success: true, postedJeId: result.postedJeId, adoptedAfterFailure: result.adoptedAfterFailure ?? false });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to approve daily JE" });
+    }
+  });
+
+  // POST /api/bookkeeping/daily-je/:id/reject
+  app.post("/api/bookkeeping/daily-je/:id/reject", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const ok = await dailyJe.rejectProposal(Number(req.params.id), req.session.userId!);
+      if (!ok) return res.status(422).json({ error: "Proposal not found or already decided" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to reject daily JE" });
+    }
+  });
+
+  // POST /api/bookkeeping/daily-je/:id/redraft - recovery lever for a
+  // mis-clicked Dismiss (or an instant retry on a blocked row): retires the
+  // rejected/blocked row to 'superseded' and re-drafts the date through the
+  // full guard pass. Draft only — nothing posts without a fresh Approve.
+  app.post("/api/bookkeeping/daily-je/:id/redraft", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const result = await dailyJe.redraftProposal(Number(req.params.id), req.session.userId!);
+      if (!result.ok) return res.status(result.conflict ? 409 : 422).json({ error: result.error });
+      res.json({ success: true, run: result.run });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to re-draft daily JE" });
+    }
+  });
+
   // GET /api/quickbooks/webhook-config - Get webhook configuration (masked token)
   app.get("/api/quickbooks/webhook-config", requireAuth, async (req: Request, res: Response) => {
     try {

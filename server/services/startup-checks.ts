@@ -352,6 +352,36 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS sku_mappings_external_source_idx ON sku_mappings(external_sku, source)`,
     `CREATE INDEX IF NOT EXISTS sku_mappings_canonical_sku_idx ON sku_mappings(canonical_sku)`,
+    // BOOK.E walk phase — nightly-drafted daily sales journal entries.
+    // Rows are written by the scheduler's draft pass (status 'pending' or
+    // 'blocked'); QuickBooks is written ONLY when a human approves. Approval
+    // first CLAIMS the row with a compare-and-set to status 'posting' (the
+    // double-post lock), then posts, then records 'approved_posted' with
+    // posted_je_id. lines holds the exact QBO Line array; feeder holds the
+    // source rows behind every number.
+    // doc_number uniqueness is a PARTIAL index over live statuses (pending/
+    // posting/approved_posted): superseded/rejected/blocked history for the
+    // same doc_number must be able to accumulate while at most one live
+    // draft-or-posted row exists. 'posting' is covered so a claimed row keeps
+    // holding the slot while its QBO write is in flight.
+    `CREATE TABLE IF NOT EXISTS daily_je_proposals (
+       id            SERIAL PRIMARY KEY,
+       target_date   DATE NOT NULL,
+       channel       TEXT NOT NULL,
+       doc_number    TEXT NOT NULL,
+       lines         JSONB NOT NULL,
+       feeder        JSONB NOT NULL,
+       status        TEXT NOT NULL DEFAULT 'pending',
+       block_reason  TEXT,
+       posted_je_id  TEXT,
+       created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+       decided_at    TIMESTAMPTZ,
+       decided_by    TEXT
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS daily_je_proposals_live_doc_uidx
+       ON daily_je_proposals (doc_number) WHERE status IN ('pending', 'posting', 'approved_posted')`,
+    `CREATE INDEX IF NOT EXISTS daily_je_proposals_date_idx ON daily_je_proposals (target_date DESC)`,
+    `CREATE INDEX IF NOT EXISTS daily_je_proposals_status_idx ON daily_je_proposals (status)`,
     // ad_metrics_daily dimension columns + widened unique index. The old
     // (platform, sku, date) unique index must be dropped first since the new
     // one covers more columns. DO blocks swallow errors if columns/indexes

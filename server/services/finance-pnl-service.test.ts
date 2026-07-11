@@ -16,6 +16,16 @@ describe("classifyAccount", () => {
     expect(classifyAccount("Advertising & Marketing")).toBe("expense");
     expect(classifyAccount("Shipping, Freight & Delivery")).toBe("expense");
   });
+
+  it("classifies the A2X connector revenue accounts as income (live since 6/24)", () => {
+    expect(classifyAccount("Channel sales:Shopify sales")).toBe("income");
+    expect(classifyAccount("Shopify sales")).toBe("income");
+    expect(classifyAccount("Shopify Shipping")).toBe("income");
+    // The liability account must NOT match the income regex, and fee/clearing
+    // accounts stay out of income.
+    expect(classifyAccount("Shopify Sales Tax Collected")).not.toBe("income");
+    expect(classifyAccount("Shopify fees")).toBe("expense");
+  });
 });
 
 describe("rollup excludes the Match-Shopify duplicate tree", () => {

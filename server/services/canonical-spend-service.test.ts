@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assembleMonth, merDenominator } from "./canonical-spend-service";
+import { assembleMonth, merDenominator, resolveQbChannelSum } from "./canonical-spend-service";
 
 describe("assembleMonth — per-channel precedence", () => {
   it("daily-card month: Google=QB, Meta=QB-Facebook (high), Amazon/Pinterest=ad_metrics", () => {
@@ -42,6 +42,41 @@ describe("assembleMonth — per-channel precedence", () => {
     const m = assembleMonth("2026-06", { qbGoogle: 5000, metaSnap: 10000, amazon: 3000, booked: 40000 });
     expect(m.byChannel.AMAZON).toMatchObject({ spend: 3000, understated: true });
     expect(m.byChannel.AMAZON.gapReason).toMatch(/giant horizons/i);
+  });
+});
+
+describe("resolveQbChannelSum — a NULL FILTERed sum is only a real $0 in a CLOSED month", () => {
+  it("CURRENT month with no channel rows → null (QB hasn't booked yet), never 0", () => {
+    expect(resolveQbChannelSum(null, "2026-07", "2026-07")).toBeNull();
+    expect(resolveQbChannelSum(undefined, "2026-07", "2026-07")).toBeNull();
+  });
+  it("CLOSED month with no channel rows keeps the $0 behavior ($0 is plausibly real there)", () => {
+    expect(resolveQbChannelSum(null, "2026-05", "2026-07")).toBe(0);
+  });
+  it("a real sum passes through numerically (pg returns numeric as string)", () => {
+    expect(resolveQbChannelSum("11000.00", "2026-06", "2026-07")).toBe(11000);
+    expect(resolveQbChannelSum(348.25, "2026-07", "2026-07")).toBe(348.25);
+  });
+});
+
+describe("assembleMonth — current-month Google gap is never a confident $0", () => {
+  it("in-progress month, QB absent → null + low confidence + understated + gapReason", () => {
+    const m = assembleMonth("2026-07", { qbGoogle: null, isCurrentMonth: true, metaSnap: 7286.43, amazon: 1000, booked: 20000 });
+    expect(m.byChannel.GOOGLE.spend).toBeNull();
+    expect(m.byChannel.GOOGLE.source).toBe("none");
+    expect(m.byChannel.GOOGLE.confidence).toBe("low");
+    expect(m.byChannel.GOOGLE.understated).toBe(true);
+    expect(m.byChannel.GOOGLE.gapReason).toMatch(/in-progress/i);
+  });
+  it("a genuinely booked $0 stays source quickbooks / confidence high", () => {
+    const m = assembleMonth("2026-03", { qbGoogle: 0, qbMeta: 50000, booked: 60000 });
+    expect(m.byChannel.GOOGLE).toMatchObject({ spend: 0, source: "quickbooks", confidence: "high" });
+  });
+  it("a PAST month's gap keeps the old shape (null, not understated)", () => {
+    const m = assembleMonth("2026-04", { qbGoogle: null, qbMeta: 50000, booked: 60000 });
+    expect(m.byChannel.GOOGLE.spend).toBeNull();
+    expect(m.byChannel.GOOGLE.understated).toBe(false);
+    expect(m.byChannel.GOOGLE.gapReason).toMatch(/no QB Google/i);
   });
 });
 

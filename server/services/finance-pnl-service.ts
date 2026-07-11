@@ -30,7 +30,10 @@ export function classifyAccount(name: string): AcctGroup {
   if (/match shopify total sales breakdown/.test(n)) return "duplicate";
   if (/cost of goods|cogs/.test(n)) return "cogs";
   if (/discount|return|refund/.test(n)) return "contra";
-  if (/gross sales|net sales|\bincome\b|\brevenue\b/.test(n)) return "income";
+  // "shopify sales"/"channel sales"/"shopify shipping" = the A2X connector's revenue
+  // accounts (live since 6/24); without them July+ revenue reads as expense. The
+  // negative lookahead keeps "Shopify Sales Tax Collected" (a liability) out.
+  if (/gross sales|net sales|shopify sales(?! tax)|channel sales|shopify shipping|\bincome\b|\brevenue\b/.test(n)) return "income";
   return "expense";
 }
 

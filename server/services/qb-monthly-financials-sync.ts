@@ -106,12 +106,39 @@ export function glAdSpend(d: DerivedMonth): number {
 export async function syncQbMonthlyFinancials(): Promise<{ updated: number; skipped: number }> {
   // Complete calendar months only — exclude the current (partial) month. Month label
   // 'Mon YYYY' matches the existing monthly_financials convention (e.g. "May 2026").
+  // Mirror-dedup: the bookkeeper's "Match Shopify Total Sales Breakdown" tree mirrored
+  // most lines of the primary Gross Sales/Discounts/Returns accounts, but corrections
+  // were sometimes posted to ONE side only (5/31 -$63,200.11 tree-only; 6/20 -$42,958.75
+  // tree-only; late-June deposits parent-only after the tree was abandoned for A2X).
+  // Skipping the whole tree (the old classifyAccount 'duplicate' path) drops one-sided
+  // corrections and inflates revenue. Instead: map tree names onto their primary account,
+  // pair lines per (date, account, amount) across the two sides, and count each key
+  // greatest(parent_n, tree_n) times — mirrored pairs count once, one-sided lines count
+  // in full. The pair key deliberately omits txn_type (a Deposit can mirror as a Journal
+  // Entry) and doc_number (NULL on all mirror lines). Unknown future '%Match Shopify%'
+  // accounts stay unmapped -> classifyAccount 'duplicate' -> skipped, safe by default.
   const rows = (((await db.execute(sql`
-    SELECT trim(to_char(date_trunc('month', txn_date), 'Mon YYYY')) AS month,
-           account_name AS account, round(sum(amount)::numeric, 2) AS amount
-    FROM qb_pl_detail
-    WHERE txn_date < date_trunc('month', (now() AT TIME ZONE 'America/Denver'))
-    GROUP BY 1, 2`)).rows ?? []) as Array<{ month: string; account: string; amount: any }>)
+    WITH gl AS (
+      SELECT txn_date,
+             CASE account_name
+               WHEN '1 - Gross Sales (Match Shopify Total Sales Breakdown)' THEN 'Gross Sales'
+               WHEN '2 - Discounts (Match Shopify Total Sales Breakdown)' THEN 'Discounts'
+               WHEN '3 - Returns/Refunds (Match Shopify Total Sales Breakdown) + Amazon' THEN 'Returns and Refunds'
+               ELSE account_name
+             END AS account,
+             (account_name ILIKE '%match shopify total sales breakdown%') AS is_tree,
+             amount
+      FROM qb_pl_detail
+      WHERE txn_date < date_trunc('month', (now() AT TIME ZONE 'America/Denver'))
+    ), keyed AS (
+      SELECT date_trunc('month', txn_date) AS mon, account, txn_date, amount,
+             count(*) FILTER (WHERE NOT is_tree) AS parent_n,
+             count(*) FILTER (WHERE is_tree)     AS tree_n
+      FROM gl GROUP BY 1, 2, 3, 4
+    )
+    SELECT trim(to_char(mon, 'Mon YYYY')) AS month, account,
+           round(sum(amount * greatest(parent_n, tree_n))::numeric, 2) AS amount
+    FROM keyed GROUP BY 1, 2`)).rows ?? []) as Array<{ month: string; account: string; amount: any }>)
     .map((r) => ({ month: String(r.month), account: String(r.account), amount: num(r.amount) }));
   if (!rows.length) return { updated: 0, skipped: 0 };
 

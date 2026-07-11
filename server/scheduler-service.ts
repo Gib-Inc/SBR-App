@@ -270,6 +270,11 @@ async function performAdPerformanceSync(): Promise<void> {
   let googleSynced = 0;
   let metaSynced = 0;
   let dashboardSynced = 0;
+  // initialize() returning false is a silent per-user no-op by design — but when it
+  // happens for EVERY user the channel's native feed is dead, and reporting plain
+  // "success" hid exactly that (googleSynced=0/metaSynced=0 under a green status).
+  let googleInitialized = 0;
+  let metaInitialized = 0;
   const errors: string[] = [];
 
   try {
@@ -304,6 +309,7 @@ async function performAdPerformanceSync(): Promise<void> {
       // not connected/enabled Google Ads, so unconfigured users are no-ops.
       try {
         if (await googleAdsDemandService.initialize(user.id)) {
+          googleInitialized++;
           const r = await googleAdsDemandService.syncDemandSignals();
           if (r.success) {
             googleSynced++;
@@ -319,6 +325,7 @@ async function performAdPerformanceSync(): Promise<void> {
       // Meta Ads — covers Facebook + Instagram placements via the Marketing API.
       try {
         if (await metaAdsDemandService.initialize(user.id)) {
+          metaInitialized++;
           const r = await metaAdsDemandService.syncPerformanceData();
           if (r.success) {
             metaSynced++;
@@ -349,16 +356,47 @@ async function performAdPerformanceSync(): Promise<void> {
       }
     }
 
+    // A native channel whose client initialized for NO user is a dead feed — it must
+    // be visible (degraded health row + skippedChannels + partial run), never a green
+    // "success, 0 errors" while Windsor is the only thing still writing rows.
+    const nativeChannels = [
+      { key: "google", label: "Google", initialized: googleInitialized },
+      { key: "meta", label: "Meta", initialized: metaInitialized },
+    ];
+    const skippedChannels = nativeChannels
+      .filter((c) => usersChecked > 0 && c.initialized === 0)
+      .map((c) => c.key);
+    for (const c of nativeChannels) {
+      const dead = usersChecked > 0 && c.initialized === 0;
+      try {
+        await storage.createOrUpdateIntegrationHealth({
+          integrationName: `ad-sync:${c.key}-native`,
+          lastSuccessAt: dead ? undefined : new Date(),
+          lastStatus: dead ? "degraded" : "success",
+          errorMessage: dead
+            ? `${c.label} native ad sync not connected for any user — Windsor-only coverage (client failed to initialize)`
+            : null,
+        });
+      } catch (e) {
+        console.warn(`[Ad Sync] Failed to update ${c.key} native health row:`, e);
+      }
+    }
+
     const duration = Date.now() - startTime;
-    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced}, windsor ${windsorSynced}, dashboard ${dashboardSynced} (users checked ${usersChecked})`);
+    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced}, windsor ${windsorSynced}, dashboard ${dashboardSynced} (users checked ${usersChecked}${skippedChannels.length ? `, DEAD native feeds: ${skippedChannels.join(", ")}` : ""})`);
     await recordRunSafe({
       schedulerId: "ad-performance-sync",
       schedulerName: "Marketing ad performance sync (Google + Meta + Windsor + dashboard)",
-      status: errors.length > 0 ? "partial" : "success",
+      status: errors.length > 0 || skippedChannels.length > 0 ? "partial" : "success",
       startedAt: schedulerStartedAt,
       durationMs: duration,
-      errorMessage: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
-      details: { usersChecked, googleSynced, metaSynced, windsorSynced, dashboardSynced, errorCount: errors.length },
+      errorMessage:
+        errors.length > 0
+          ? errors.slice(0, 3).join("; ")
+          : skippedChannels.length > 0
+            ? `${skippedChannels.join("/")} native sync not connected — Windsor only`
+            : null,
+      details: { usersChecked, googleSynced, metaSynced, windsorSynced, dashboardSynced, skippedChannels, errorCount: errors.length },
     });
   } catch (error: any) {
     console.error("[Ad Sync] Failed:", error);

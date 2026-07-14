@@ -23223,6 +23223,12 @@ Generate only the email body text, no subject line.`;
       if (!po) {
         return res.status(404).json({ success: false, error: 'Purchase order not found' });
       }
+      if (!["APPROVED", "SENT", "PARTIALLY_RECEIVED", "RECEIVED", "CLOSED"].includes(String(po.status || "").toUpperCase())) {
+        return res.status(409).json({
+          success: false,
+          error: `PO must be approved/sent/received before creating a QuickBooks Bill (current status: ${po.status})`,
+        });
+      }
       
       const poLines = await storage.getPurchaseOrderLinesByPOId(id);
       if (!poLines.length) {

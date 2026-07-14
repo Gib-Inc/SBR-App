@@ -318,6 +318,11 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     // (keep the most-recent) THEN enforce uniqueness so the ON CONFLICT upsert is race-safe.
     `DELETE FROM cash_position a USING cash_position b WHERE a.as_of = b.as_of AND (a.updated_at < b.updated_at OR (a.updated_at = b.updated_at AND a.id < b.id))`,
     `CREATE UNIQUE INDEX IF NOT EXISTS cash_position_as_of_uidx ON cash_position(as_of)`,
+    // Forecast snapshots are raw JSON by design: every CFO forecast gets persisted
+    // as-rendered so Friday variance review can compare "what we believed then"
+    // against actual bank/QBO outcomes without reconstructing stale assumptions.
+    `CREATE TABLE IF NOT EXISTS forecast_snapshots (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), as_of date NOT NULL, forecast_type text NOT NULL, payload jsonb NOT NULL, generated_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS forecast_snapshots_asof_type_uidx ON forecast_snapshots(as_of, forecast_type)`,
     // Operator-entered BANK-CONFIRMED available balance — the source of truth for cash on
     // hand. QuickBooks' Account.CurrentBalance lags the live bank (feed delay + book-vs-bank),
     // so cash read straight from QB silently under-reports. Roger/Stacy enter the bank-share
@@ -325,11 +330,6 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     // only when none exists. Append-only history (one row per entry) for the audit trail.
     `CREATE TABLE IF NOT EXISTS bank_balance_entries (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), available_balance numeric(14,2) NOT NULL, as_of timestamptz NOT NULL DEFAULT now(), in_transit jsonb NOT NULL DEFAULT '[]'::jsonb, source text NOT NULL DEFAULT 'manual', entered_by text, note text, created_at timestamptz NOT NULL DEFAULT now())`,
     `CREATE INDEX IF NOT EXISTS bank_balance_entries_as_of_idx ON bank_balance_entries(as_of DESC)`,
-    // CFO truth layer: each morning's cash forecast is persisted (one row per asOf date,
-    // latest run wins) so the Friday variance review can compare what we PREDICTED against
-    // what actually happened — the discipline that turns a forecast into an instrument.
-    `CREATE TABLE IF NOT EXISTS forecast_snapshots (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), as_of date NOT NULL UNIQUE, payload jsonb NOT NULL, generated_at timestamptz NOT NULL DEFAULT now())`,
-    `CREATE INDEX IF NOT EXISTS forecast_snapshots_as_of_idx ON forecast_snapshots(as_of DESC)`,
     // DROP + CREATE (not CREATE OR REPLACE): the view does `select o.*`, so adding ANY column
     // to cash_obligations shifts the column order and makes CREATE OR REPLACE fail with
     // "cannot change name of view column" — which silently froze this view at an old definition.

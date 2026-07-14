@@ -446,9 +446,12 @@ async function persistForecastSnapshot(db: any, result: CashForecastResult): Pro
   // Friday variance discipline: every morning's forecast is kept so it can be
   // compared against what actually happened. Raw JSON — no consumers yet.
   await db.execute(sql`
-    insert into forecast_snapshots (as_of, payload, generated_at)
-    values (${result.asOf}::date, ${JSON.stringify(result)}::jsonb, now())
-    on conflict (as_of) do update set payload = excluded.payload, generated_at = now()`);
+    insert into forecast_snapshots (as_of, forecast_type, payload, generated_at)
+    values (${result.asOf}::date, 'cash_forecast', ${JSON.stringify(result)}::jsonb, now())
+    on conflict (as_of, forecast_type) do update set
+      payload = excluded.payload,
+      generated_at = excluded.generated_at,
+      updated_at = now()`);
 }
 
 export async function getCashForecast(db: any, opts: { asOf?: string; horizons?: number[] } = {}): Promise<CashForecastResult> {

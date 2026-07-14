@@ -39,6 +39,13 @@ export async function syncApprovedPOToQuickBooks(
     if (!po) {
       return { success: false, error: 'Purchase order not found' };
     }
+    if (!["APPROVED", "SENT", "PARTIALLY_RECEIVED", "RECEIVED", "CLOSED"].includes(String(po.status || "").toUpperCase())) {
+      return {
+        success: false,
+        skipped: true,
+        reason: `PO must be approved/sent/received before QuickBooks Bill sync (current status: ${po.status})`,
+      };
+    }
 
     // Idempotent: don't double-create a Bill if we've already synced this PO
     if (po.externalAccountingId) {

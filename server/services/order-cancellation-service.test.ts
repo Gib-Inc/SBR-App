@@ -50,6 +50,11 @@ const h = vi.hoisted(() => {
     async createAuditLog() {
       return undefined;
     },
+    // Idempotency ledger (d439c69): the harness always grants the claim so the
+    // restore movement proceeds; dedup behavior is covered in inventory-movement.test.ts.
+    async claimInventoryMovementLedger() {
+      return true;
+    },
     async getIntegrationConfig() {
       return undefined;
     },

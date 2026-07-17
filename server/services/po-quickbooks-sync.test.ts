@@ -86,7 +86,9 @@ beforeEach(() => {
 });
 
 function seedPO(id: string, extra: Record<string, any> = {}) {
-  h.pos.set(id, { id, poNumber: `PO-${id}`, supplierId: `sup-${id}`, ...extra });
+  // Default APPROVED: the sync refuses POs that aren't approved/sent/received
+  // (status guard added on origin main) — fixtures assume an eligible PO.
+  h.pos.set(id, { id, poNumber: `PO-${id}`, supplierId: `sup-${id}`, status: "APPROVED", ...extra });
   h.suppliers.set(`sup-${id}`, { id: `sup-${id}`, name: `Vendor ${id}` });
   h.linesByPo.set(id, [{ id: `l-${id}`, itemId: `i-${id}`, qtyOrdered: 2, unitCost: 5 }]);
   h.items.push({ id: `i-${id}`, sku: `SKU-${id}`, name: `Item ${id}` });

@@ -2182,6 +2182,10 @@ export const quickbooksBills = pgTable("quickbooks_bills", {
   totalAmount: real("total_amount"),
   dueDate: timestamp("due_date"),
   errorMessage: text("error_message"),
+  // Full QBO Bill API response captured at sync time (create, and any update
+  // that receives a fresh QBO response). Evidence source so the accounting-spine
+  // classifier can later prove line-level explanations instead of inferring them.
+  rawPayload: jsonb("raw_payload"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({

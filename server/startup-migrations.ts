@@ -412,6 +412,22 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     sql: `CREATE INDEX IF NOT EXISTS qb_cat_proposals_status_idx ON qb_categorization_proposals (status, confidence DESC)`,
   },
 
+  // Truth Monitor (read-only daily V-suite report). One row per run; `checks`
+  // holds the classified check list the Health page renders. The monitor never
+  // writes to business tables — this is its only persistence surface.
+  {
+    name: "truth_reports.table",
+    sql: `CREATE TABLE IF NOT EXISTS truth_reports (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            run_at timestamptz DEFAULT now(),
+            overall text,
+            checks jsonb
+          )`,
+  },
+  {
+    name: "truth_reports.run_at_idx",
+    sql: `CREATE INDEX IF NOT EXISTS truth_reports_run_at_idx ON truth_reports (run_at DESC)`,
+  },
   // quickbooks_bills.raw_payload — full QBO Bill API response stored at sync
   // time (PO→QBO Bill create, and updates that receive a fresh QBO response).
   // Evidence source so the accounting-spine classifier can later prove

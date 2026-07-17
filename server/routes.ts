@@ -25833,6 +25833,20 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Accounting Spine Health — PO -> QuickBooks Bill reconciliation. Read-only:
+  // tells the operator whether eligible POs are in QBO exactly once, draft POs
+  // have not leaked to QBO, and local Bill rows match their PO accounting stamp.
+  app.get("/api/finances/accounting-spine", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getAccountingSpineHealth } = await import("./services/accounting-spine-health-service");
+      res.json(await getAccountingSpineHealth(db));
+    } catch (error: any) {
+      console.error("[Accounting Spine Health] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build accounting spine health" });
+    }
+  });
+
   // Marketing Truth — the hero-tile payload: blended MER + contribution MER vs
   // breakevens, with the feed-confidence layer. Composes the canonical engines
   // (governor / contribution-margin / reconciliation); no math of its own.
@@ -26744,6 +26758,18 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error('[System Integrity] latest error:', error);
       res.status(500).json({ error: error.message || 'Failed to fetch integrity report' });
+    }
+  });
+
+  // Latest daily Truth Report — read-only V-suite + ledger stats + feed
+  // confidence, persisted once per run by the truth-monitor scheduler.
+  app.get("/api/system-integrity/truth-report", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getLatestTruthReport } = await import("./services/truth-monitor-service");
+      res.json({ report: await getLatestTruthReport() });
+    } catch (error: any) {
+      console.error('[Truth Monitor] latest error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch truth report' });
     }
   });
 
@@ -27776,6 +27802,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] System Integrity Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize System Integrity Scheduler:", error);
+  });
+
+  import("./services/truth-monitor-scheduler").then(({ initializeTruthMonitorScheduler }) => {
+    initializeTruthMonitorScheduler();
+    console.log("[Server] Truth Monitor Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Truth Monitor Scheduler:", error);
   });
 
   import("./services/forecast-tuning-scheduler").then(({ initializeForecastTuningScheduler }) => {

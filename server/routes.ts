@@ -24817,6 +24817,24 @@ Generate only the email body text, no subject line.`;
         }
       }
 
+      if (platform === "GOOGLE" && String(source || "") !== "google-direct-api") {
+        const { isFreshGoogleDirectProtectedForPeriod } = await import("./services/google-ads-client");
+        const guard = await isFreshGoogleDirectProtectedForPeriod(periodStart, periodEnd);
+        if (guard.protected) {
+          await storage.createDataReconciliationLog([{
+            dataType: "marketing_spend",
+            entityKey,
+            action: "DISREGARDED",
+            field: "spend",
+            oldValue: null,
+            newValue: String(Number(f.spend) || 0),
+            reason: `${guard.reason} Latest direct period_end=${guard.latestPeriodEnd}.`,
+            source,
+          }]).catch(() => {});
+          return res.json({ success: true, action: "DISREGARDED", reconciliation: [{ action: "DISREGARDED", reason: guard.reason }], message: guard.reason });
+        }
+      }
+
       // Identical re-upload → log + no-op (don't add a duplicate row).
       if (rec.action === "DISREGARDED") {
         await storage.createDataReconciliationLog([{ dataType: "marketing_spend", entityKey, action: "DISREGARDED", field: null, oldValue: null, newValue: null, reason: rec.decision.reason, source }]);
@@ -26061,6 +26079,15 @@ Generate only the email body text, no subject line.`;
       res.json({ success: true, confidence: await getMetaDirectFeedConfidence() });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message || "Failed to compute Meta feed confidence" });
+    }
+  });
+
+  app.get("/api/marketing/google-direct/feed-confidence", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getGoogleDirectFeedConfidence } = await import("./services/google-ads-client");
+      res.json({ success: true, confidence: await getGoogleDirectFeedConfidence() });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || "Failed to compute Google feed confidence" });
     }
   });
 
@@ -28017,6 +28044,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Meta Direct Feed Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Meta Direct Feed Scheduler:", error);
+  });
+
+  import("./services/google-direct-feed-scheduler").then(({ initializeGoogleDirectFeedScheduler }) => {
+    initializeGoogleDirectFeedScheduler();
+    console.log("[Server] Google Direct Feed Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Google Direct Feed Scheduler:", error);
   });
 
   import("./services/system-integrity-scheduler").then(({ initializeSystemIntegrityScheduler }) => {

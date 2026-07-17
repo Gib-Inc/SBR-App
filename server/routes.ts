@@ -26274,16 +26274,37 @@ Generate only the email body text, no subject line.`;
 
   app.post("/api/marketing/meta-manual/ingest", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { parseMetaTracker } = await import("./services/meta-tracker-parser");
+      const { parseMetaTracker, hashRawText } = await import("./services/meta-tracker-parser");
       const { hashMarketingSnapshot } = await import("./services/reconciliation-service");
-      const parsed = parseMetaTracker(String(req.body?.text ?? ""));
+      const rawText = String(req.body?.text ?? "");
+      const parsed = parseMetaTracker(rawText);
+      // BROKEN-CELL GUARD: a broken SUMMARY/total cell, or >5% broken data rows,
+      // rejects the paste with every broken cell NAMED — never silently plugged.
+      if (parsed.error === "broken formula cells") {
+        return res.status(422).json({ error: "broken formula cells", brokenCells: parsed.brokenCells, warnings: parsed.warnings });
+      }
       if (!parsed.ok || !parsed.periodStart || !parsed.periodEnd) {
         return res.status(400).json({ error: "Nothing parseable in the paste", warnings: parsed.warnings });
       }
 
+      // This path is the FALLBACK while the Windsor Meta OAuth is flagged —
+      // label it so a manual paste is never mistaken for the canonical feed.
+      const fallbackNote = "FALLBACK source (manual paste) — canonical automated source: Windsor Meta feed (currently stale)";
+
+      // PASTE DEDUP: a byte-identical re-paste of an already-ACTIVE META
+      // snapshot → 409, NO writes. (The same Meta export was uploaded twice
+      // this month; sourceHash only catches the parsed content, later.)
+      const rawTextHash = hashRawText(rawText);
+      const active = await storage.getActiveMarketingSpendSnapshots();
+      const duplicate = (active as any[]).find((s) =>
+        String(s.platform || "").toUpperCase() === "META" && s.rawTextHash && s.rawTextHash === rawTextHash,
+      );
+      if (duplicate) {
+        return res.status(409).json({ error: "already imported", snapshotId: duplicate.id });
+      }
+
       // Supersede ANY active META snapshot overlapping this period — re-pasting
       // the growing monthly tracker must replace, never double-count.
-      const active = await storage.getActiveMarketingSpendSnapshots();
       const overlapping = (active as any[]).filter((s) =>
         String(s.platform || "").toUpperCase() === "META" &&
         s.periodStart && s.periodEnd &&
@@ -26300,8 +26321,11 @@ Generate only the email body text, no subject line.`;
       await storage.createMarketingSpendSnapshot({
         platform: "META", periodStart: parsed.periodStart, periodEnd: parsed.periodEnd,
         spend: parsed.totalSpend, conversions: parsed.totalPurchases, revenue: parsed.totalConversionValue,
-        currency: "USD", source: "manual:meta-tracker", status: "OK", sourceHash,
-        raw: { days: parsed.days.length, campaign: parsed.campaign, ingestedVia: "meta-manual" } as unknown,
+        currency: "USD", source: "manual:meta-tracker",
+        status: parsed.dataGaps.length ? "DATA_GAPPED" : "OK", sourceHash,
+        rawTextHash, notes: fallbackNote,
+        dataGaps: parsed.dataGaps.length ? (parsed.dataGaps as unknown) : null,
+        raw: { days: parsed.days.length, campaign: parsed.campaign, ingestedVia: "meta-manual", brokenCells: parsed.brokenCells } as unknown,
       } as any);
 
       // Daily campaign rows so Meta shows on the per-campaign directive board
@@ -26325,7 +26349,16 @@ Generate only the email body text, no subject line.`;
         source: "manual:meta-tracker",
       }]).catch(() => {});
 
-      res.json({ success: true, ingested: { ...parsed, superseded: overlapping.length } });
+      res.json({
+        success: true,
+        source: fallbackNote,
+        // Named data gaps (e.g. "COGS missing for N rows — margin/ROAS on those
+        // rows not computed") + hard-flagged broken cells — stated, never plugged.
+        dataGaps: parsed.dataGaps,
+        brokenCells: parsed.brokenCells,
+        warnings: parsed.warnings,
+        ingested: { ...parsed, superseded: overlapping.length },
+      });
     } catch (error: any) {
       console.error('[Meta Manual] ingest error:', error);
       res.status(500).json({ error: error.message || 'Failed to ingest tracker' });

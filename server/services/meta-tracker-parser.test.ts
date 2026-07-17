@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseMetaTracker, inferYear } from "./meta-tracker-parser";
+import { parseMetaTracker, inferYear, hashRawText } from "./meta-tracker-parser";
 
 // Real paste shape from the team's tracker (tab-separated, abbreviated).
 const JUNE = [
@@ -65,5 +65,99 @@ describe("inferYear", () => {
   });
   it("rolls back a year for far-future dates (December sheet pasted in January)", () => {
     expect(inferYear(12, 15, now)).toBe(2025);
+  });
+});
+
+// ── Broken-cell guard (the source workbook carries hundreds of #REF!/#DIV/0!
+// cells — they must be NAMED, never silently eaten or plugged) ──
+describe("broken-cell guard", () => {
+  it("rejects the paste when a SUMMARY/total cell is broken, naming every broken cell", () => {
+    const paste = [
+      "Summary\t\t\t\t\tReel 7 - High Performer",
+      "\tAd Spend\tPurchase\tCoversion Value\tROAS\tCost Per Result",
+      "Total\t#REF!\t37\t$11,968.92\t#DIV/0!\t$71.67",
+      "Monday, June 1\t$305.98\t4\t$986.05\t3.22\t$76.50",
+      "Tuesday, June 2\t$313.47\t6\t$3,296.36\t10.52\t$52.25",
+    ].join("\n");
+    const p = parseMetaTracker(paste, NOW);
+    expect(p.ok).toBe(false);
+    expect(p.error).toBe("broken formula cells");
+    expect(p.days).toHaveLength(0); // NO numbers survive a rejected paste
+    expect(p.brokenCells).toHaveLength(2);
+    expect(p.brokenCells.map((b) => b.token).sort()).toEqual(["#DIV/0!", "#REF!"]);
+    expect(p.brokenCells.every((b) => b.row === 3)).toBe(true);
+    expect(p.warnings.join(" ")).toMatch(/SUMMARY\/total/i);
+  });
+
+  it("rejects when more than 5% of data rows are broken", () => {
+    // 9 spend days + 2 placeholders = 11 data rows; 1 broken = 9% > 5% → reject.
+    const broken = JUNE.replace("Tuesday, June 2\t$313.47\t6\t$3,296.36", "Tuesday, June 2\t$313.47\t6\t#VALUE!");
+    const p = parseMetaTracker(broken, NOW);
+    expect(p.ok).toBe(false);
+    expect(p.error).toBe("broken formula cells");
+    expect(p.brokenCells).toEqual([expect.objectContaining({ column: "conversionValue", token: "#VALUE!" })]);
+  });
+
+  it("below the threshold: skips the broken row, warns, and still names the cell", () => {
+    // 21 data rows, 1 broken = 4.8% ≤ 5% → parse the rest, hard-flag the row.
+    const rows = ["Summary\tCampaign Z", "\tAd Spend\tPurchase\tCoversion Value\tROAS\tCost Per Result"];
+    for (let d = 1; d <= 21; d++) {
+      rows.push(d === 11
+        ? `Monday, June ${d}\t#N/A\t2\t$400.00\t4.00\t$50.00`
+        : `Monday, June ${d}\t$100.00\t2\t$400.00\t4.00\t$50.00`);
+    }
+    const p = parseMetaTracker(rows.join("\n"), new Date("2026-06-25T12:00:00Z"));
+    expect(p.ok).toBe(true);
+    expect(p.days).toHaveLength(20); // June 11 skipped, not zero-filled
+    expect(p.days.find((d) => d.date === "2026-06-11")).toBeUndefined();
+    expect(p.totalSpend).toBe(2000);
+    expect(p.brokenCells).toEqual([{ row: 13, column: "spend", token: "#N/A" }]);
+    expect(p.warnings.join(" ")).toMatch(/broken formula/i);
+  });
+});
+
+// ── COGS guard (only when the paste carries a COGS/margin column) ──
+describe("COGS guard", () => {
+  const COGS_PASTE = [
+    "Summary\t\t\t\t\t\tCampaign X",
+    "\tAd Spend\tPurchase\tCoversion Value\tROAS\tCost Per Result\tCOGS",
+    "Monday, June 1\t$100.00\t2\t$400.00\t4.00\t$50.00\t$140.00",
+    "Tuesday, June 2\t$50.00\t1\t$200.00\t4.00\t$50.00\t$0.00",
+    "Wednesday, June 3\t$80.00\t1\t$150.00\t1.88\t$80.00\t",
+  ].join("\n");
+
+  it("excludes COGS-0/null rows from margin/ROAS aggregates and names the gap", () => {
+    const p = parseMetaTracker(COGS_PASTE, NOW);
+    expect(p.ok).toBe(true);
+    expect(p.hasCogsColumn).toBe(true);
+    expect(p.dataGaps).toEqual(["COGS missing for 2 rows — margin/ROAS on those rows not computed"]);
+    // Aggregates over the ONE row with COGS only — never plugged with zeros.
+    expect(p.totalCogs).toBe(140);
+    expect(p.totalMargin).toBe(260); // 400 − 140
+    expect(p.marginRoas).toBe(2.6); // 260 / 100
+    // Spend/purchase/value totals still include every real row.
+    expect(p.totalSpend).toBe(230);
+    expect(p.days.find((d) => d.date === "2026-06-02")?.cogs).toBeNull();
+    expect(p.days.find((d) => d.date === "2026-06-01")?.cogs).toBe(140);
+  });
+
+  it("is a no-op for the typical Meta paste with no COGS column", () => {
+    const p = parseMetaTracker(JUNE, NOW);
+    expect(p.hasCogsColumn).toBe(false);
+    expect(p.dataGaps).toEqual([]);
+    expect(p.totalCogs).toBeNull();
+    expect(p.totalMargin).toBeNull();
+    expect(p.marginRoas).toBeNull();
+  });
+});
+
+// ── Raw-paste hash (byte-identical re-paste dedup for /ingest) ──
+describe("hashRawText", () => {
+  it("is sha256 of the exact raw text", () => {
+    expect(hashRawText("abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  });
+  it("identical pastes hash identically; any byte change differs", () => {
+    expect(hashRawText(JUNE)).toBe(hashRawText(JUNE));
+    expect(hashRawText(JUNE + " ")).not.toBe(hashRawText(JUNE));
   });
 });

@@ -1188,9 +1188,12 @@ function MetaManualCard() {
   return (
     <Card data-testid="card-meta-manual">
       <CardHeader className="pb-3">
-        <CardTitle>Log Meta Spend (manual)</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          Log Meta Spend (manual)
+          <Badge variant="outline" className="text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700" data-testid="badge-meta-fallback">FALLBACK (manual)</Badge>
+        </CardTitle>
         <CardDescription>
-          Paste the Facebook Ads tracker straight from the sheet (daily rows included). Totals, weekly rows, and empty days are handled automatically; re-pasting a period replaces it — never double-counts.
+          Fallback path while the Windsor Meta feed (the canonical automated source) is stale. Paste the Facebook Ads tracker straight from the sheet (daily rows included). Totals, weekly rows, and empty days are handled automatically; re-pasting a period replaces it — never double-counts, and a byte-identical re-paste is rejected.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -1220,6 +1223,9 @@ function MetaManualCard() {
             </div>
             {preview.warnings?.length > 0 && (
               <div className="text-xs text-amber-700 dark:text-amber-400">⚠ {preview.warnings.join(" · ")}</div>
+            )}
+            {preview.dataGaps?.length > 0 && (
+              <div className="text-xs text-red-700 dark:text-red-400" data-testid="text-meta-data-gaps">DATA GAP: {preview.dataGaps.join(" · ")}</div>
             )}
           </div>
         )}

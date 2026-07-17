@@ -283,6 +283,19 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
             ADD COLUMN IF NOT EXISTS superseded_at timestamp,
             ADD COLUMN IF NOT EXISTS superseded_by varchar`,
   },
+  // Manual-paste dedup: sha256 of the RAW pasted text. source_hash covers the
+  // PARSED content — this catches a byte-identical re-paste (a Meta export was
+  // uploaded twice in Jul 2026) and 409s it before any writes.
+  {
+    name: "marketing_spend_snapshots.raw_text_hash",
+    sql: `ALTER TABLE marketing_spend_snapshots ADD COLUMN IF NOT EXISTS raw_text_hash text`,
+  },
+  // Operator-facing provenance label (e.g. the FALLBACK-source note on manual
+  // Meta pastes — canonical automated source is the Windsor Meta feed).
+  {
+    name: "marketing_spend_snapshots.notes",
+    sql: `ALTER TABLE marketing_spend_snapshots ADD COLUMN IF NOT EXISTS notes text`,
+  },
   {
     name: "data_reconciliation_log.table",
     sql: `CREATE TABLE IF NOT EXISTS data_reconciliation_log (

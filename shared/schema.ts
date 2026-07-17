@@ -2323,6 +2323,13 @@ export const marketingSpendSnapshots = pgTable("marketing_spend_snapshots", {
   // the prior row (kept for audit, excluded from aggregation) so spend is never
   // double-counted; an identical sourceHash is a no-op duplicate.
   sourceHash: text("source_hash"),
+  // sha256 of the RAW pasted/uploaded text (manual ingests). sourceHash covers
+  // the PARSED content — rawTextHash catches a byte-identical re-paste earlier
+  // and hard-rejects it (a Meta export was uploaded twice in Jul 2026).
+  rawTextHash: text("raw_text_hash"),
+  // Provenance label surfaced to operators, e.g. the FALLBACK-source note on
+  // manual Meta pastes (canonical automated source: Windsor Meta feed).
+  notes: text("notes"),
   superseded: boolean("superseded").notNull().default(false),
   supersededAt: timestamp("superseded_at"),
   supersededByCsv: varchar("superseded_by"),

@@ -16,6 +16,7 @@ import { googleAdsClient } from './google-ads-client';
 import { GoHighLevelClient } from './gohighlevel-client';
 import { AuditLogger } from './audit-logger';
 import Anthropic from '@anthropic-ai/sdk';
+import { NumericWhitelist, validateNumbersAgainstWhitelist } from './numeric-grounding';
 
 // Claude model for briefing generation
 const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
@@ -86,7 +87,22 @@ Ad spend ceiling: well below 2025's 29.1% of revenue ($908K was unsustainable).
 
 Never fail silently. If data is missing or an API returned an error, say exactly what's missing and who needs to fix it. Route access blockers to Matt.
 
-If a data source returned no data or errored, include it in the briefing as: "[SOURCE]: NO DATA — [reason]. Route to Matt."`;
+If a data source returned no data or errored, include it in the briefing as: "[SOURCE]: NO DATA — [reason]. Route to Matt."
+
+NUMERIC GROUNDING (NON-NEGOTIABLE):
+Use ONLY the numbers in the data block below. Never estimate, extrapolate, average, or recall figures. If a value is missing, null, or marked stale, state 'data gap' for that value — never substitute a plausible number.`;
+
+// Benchmark / target figures that appear in MORNING_TRAP_SYSTEM_PROMPT above.
+// The LLM may legitimately reference these, so the provenance whitelist must
+// include them (keep in sync with the prompt text).
+const PROMPT_BENCHMARK_VALUES: number[] = [
+  27, 30, 20, 16, // checkout conversion baselines / flags
+  15, 10, 5,      // ROAS flags
+  7000, 10000,    // monthly ad spend baseline / flag ($7K / $10K)
+  400,            // briefing word limit
+  4500000, 13.4,  // 2026 revenue + net margin targets
+  29.1, 908000,   // 2025 ad-spend context
+];
 
 export interface TrapCheckResult {
   success: boolean;
@@ -153,13 +169,35 @@ export class MorningTrapService {
     const googleAdsData = googleAdsResult.status === 'fulfilled' ? googleAdsResult.value : null;
     const googleAdsError = googleAdsResult.status === 'rejected' ? String(googleAdsResult.reason) : undefined;
 
-    // Build the data payload for Claude
-    const dataPayload = this.buildDataPayload(runDate, shopifyData, shopifyError, googleAdsData, googleAdsError);
+    // Build the data payload for Claude (+ provenance whitelist of every
+    // numeric value placed into it)
+    const { payload: dataPayload, whitelist } = this.buildDataPayload(runDate, shopifyData, shopifyError, googleAdsData, googleAdsError);
 
     // Generate briefing via Claude
     let briefing: string | null = null;
     try {
       briefing = await this.generateBriefing(userId, dataPayload);
+
+      // Numeric provenance check: every figure in the composed SMS must trace
+      // back to the data payload. Fail VISIBLE (append a caution + warn audit
+      // row), never fail silent, never block the send.
+      try {
+        const validation = validateNumbersAgainstWhitelist(briefing, whitelist);
+        if (!validation.ok) {
+          const flagged = validation.violations.map(v => v.raw);
+          console.warn(`[MorningTrap] Numeric grounding: ${flagged.length} figure(s) in the briefing not traceable to source data: ${flagged.join(', ')}`);
+          await AuditLogger.logEvent({
+            source: 'MORNING_TRAP',
+            eventType: 'AI_NUMERIC_GROUNDING_VIOLATION',
+            status: 'WARNING',
+            description: `Morning trap briefing contains ${flagged.length} figure(s) not present in the source data payload`,
+            details: { runDate, violations: flagged, totalTokens: validation.totalTokens },
+          });
+          briefing += `\n\n[data-check: ${flagged.length} unverified figure(s) — verify before acting]`;
+        }
+      } catch (validationError: any) {
+        console.warn('[MorningTrap] Numeric grounding validation errored (non-blocking):', validationError.message);
+      }
     } catch (error: any) {
       console.error('[MorningTrap] Claude briefing generation failed:', error.message);
       briefing = `${runDate} TRAP CHECK\n\nBRIEFING GENERATION FAILED: ${error.message}\nRoute to Matt.\n\nRaw data attached in logs.`;
@@ -458,7 +496,10 @@ export class MorningTrapService {
   }
 
   /**
-   * Build the data payload string for Claude
+   * Build the data payload string for Claude, plus the numeric-provenance
+   * whitelist of every value placed into it (used to validate the composed
+   * briefing — any figure the LLM writes that can't be traced back here is
+   * flagged as unverified).
    */
   private static buildDataPayload(
     runDate: string,
@@ -466,29 +507,45 @@ export class MorningTrapService {
     shopifyError: string | undefined,
     googleAdsData: GoogleAdsTrapData | null,
     googleAdsError: string | undefined,
-  ): string {
+  ): { payload: string; whitelist: NumericWhitelist } {
     let payload = `MORNING TRAP CHECK DATA — ${runDate}\n\n`;
+    const whitelist = new NumericWhitelist();
+    whitelist.add(...PROMPT_BENCHMARK_VALUES);
+
+    // Windsor does NOT populate Google conversion value, so revenue==0 with
+    // spend>0 is a MISSING ATTRIBUTION FIELD, not zero sales.
+    const googleGated = !!googleAdsData && googleAdsData.totalSpend > 0 && googleAdsData.totalRevenue <= 0;
 
     // Google Ads
     payload += '=== GOOGLE ADS MTD ===\n';
     if (googleAdsData) {
       payload += `Total spend: $${googleAdsData.totalSpend.toFixed(2)}\n`;
-      // Windsor does NOT populate Google conversion value, so revenue==0 with
-      // spend>0 is a MISSING ATTRIBUTION FIELD, not zero sales. Presenting it as
-      // "$0 / ROAS 0:1" made the LLM emit a false "TOTAL CONVERSION TRACKING
-      // FAILURE" SMS daily (2026-06). Gate it as a data gap.
-      if (googleAdsData.totalSpend > 0 && googleAdsData.totalRevenue <= 0) {
+      whitelist.add(googleAdsData.totalSpend);
+      // Presenting the missing conversion value as "$0 / ROAS 0:1" made the
+      // LLM emit a false "TOTAL CONVERSION TRACKING FAILURE" SMS daily
+      // (2026-06). Gate it as a data gap.
+      if (googleGated) {
         payload += `Total sales (conv value): NOT ATTRIBUTED IN FEED — Google conversion value is not populated in the Windsor ad-spend feed, so platform-side Google sales/ROAS are UNAVAILABLE. This is a DATA GAP, not zero sales. Do NOT report "$0 sales", "ROAS 0:1", "zero conversions", or "conversion tracking failure" for Google — actual revenue is in SHOPIFY MTD below. Google's attributed revenue must come from a separate source (Windsor conversion_value / GA4) before any Google ROAS can be stated.\n`;
       } else {
         payload += `Total sales (conv value): $${googleAdsData.totalRevenue.toFixed(2)}\n`;
         payload += `Overall ROAS: ${googleAdsData.roas.toFixed(1)}:1\n`;
+        whitelist.add(googleAdsData.totalRevenue, googleAdsData.roas);
       }
       payload += `Total conversions: ${googleAdsData.totalConversions.toFixed(0)}\n`;
       payload += `Total clicks: ${googleAdsData.totalClicks}\n`;
       payload += `Total impressions: ${googleAdsData.totalImpressions}\n`;
+      whitelist.add(googleAdsData.totalConversions, googleAdsData.totalClicks, googleAdsData.totalImpressions);
       payload += `\nCampaigns (sorted by spend):\n`;
       for (const c of googleAdsData.campaigns) {
-        payload += `  ${c.name}: $${c.spend.toFixed(2)} spend, $${c.revenue.toFixed(2)} sales, ${c.roas.toFixed(1)}:1 ROAS, ${c.conversions.toFixed(0)} conv, ${c.clicks} clicks\n`;
+        if (googleGated) {
+          // Same data gap applies per campaign: spend is real, revenue is a
+          // missing attribution field. Never print per-campaign $0/ROAS 0.
+          payload += `  ${c.name}: $${c.spend.toFixed(2)} spend — revenue not attributed in feed, ${c.conversions.toFixed(0)} conv, ${c.clicks} clicks\n`;
+          whitelist.add(c.spend, c.conversions, c.clicks);
+        } else {
+          payload += `  ${c.name}: $${c.spend.toFixed(2)} spend, $${c.revenue.toFixed(2)} sales, ${c.roas.toFixed(1)}:1 ROAS, ${c.conversions.toFixed(0)} conv, ${c.clicks} clicks\n`;
+          whitelist.add(c.spend, c.revenue, c.roas, c.conversions, c.clicks);
+        }
       }
     } else {
       payload += `ERROR: ${googleAdsError || 'No data returned'}\n`;
@@ -501,19 +558,40 @@ export class MorningTrapService {
       payload += `Gross sales: $${shopifyData.grossSales.toFixed(2)}\n`;
       payload += `Refunded orders: ${shopifyData.refundedOrders}\n`;
       payload += `Cancelled orders: ${shopifyData.cancelledOrders}\n`;
+      whitelist.add(shopifyData.orderCount, shopifyData.grossSales, shopifyData.refundedOrders, shopifyData.cancelledOrders);
+      if (shopifyData.orderCount > 0) {
+        // Rates the LLM is asked to derive (return rate, source shares).
+        whitelist.add(
+          (shopifyData.refundedOrders / shopifyData.orderCount) * 100,
+          (shopifyData.cancelledOrders / shopifyData.orderCount) * 100,
+        );
+      }
       payload += `\nSource breakdown:\n`;
       for (const [source, data] of Object.entries(shopifyData.sourceBreakdown)) {
         payload += `  ${source}: ${data.orders} orders, $${data.revenue.toFixed(2)} revenue\n`;
+        whitelist.add(data.orders, data.revenue);
+        if (shopifyData.grossSales > 0) whitelist.add((data.revenue / shopifyData.grossSales) * 100);
+        if (shopifyData.orderCount > 0) whitelist.add((data.orders / shopifyData.orderCount) * 100);
       }
       payload += `\nRecent orders (last 10):\n`;
       for (const o of shopifyData.recentOrders) {
         payload += `  ${o.name}: $${o.total.toFixed(2)} via ${o.channel} (${o.status})\n`;
+        whitelist.add(o.total);
       }
     } else {
       payload += `ERROR: ${shopifyError || 'No data returned'}\n`;
     }
 
-    return payload;
+    // Legitimate COMBINED-section derivations the briefing format asks for.
+    if (shopifyData && googleAdsData) {
+      const combinedRevenue = shopifyData.grossSales + (googleGated ? 0 : googleAdsData.totalRevenue);
+      whitelist.add(combinedRevenue);
+      if (googleAdsData.totalSpend > 0) {
+        whitelist.add(shopifyData.grossSales / googleAdsData.totalSpend, combinedRevenue / googleAdsData.totalSpend);
+      }
+    }
+
+    return { payload, whitelist };
   }
 
   /**
@@ -634,13 +712,20 @@ export class MorningTrapService {
         cancelledOrders: shopifyData.cancelledOrders,
         sourceBreakdown: shopifyData.sourceBreakdown,
       } : null,
-      googleAds: googleAdsData ? {
-        totalSpend: googleAdsData.totalSpend,
-        totalRevenue: googleAdsData.totalRevenue,
-        totalConversions: googleAdsData.totalConversions,
-        roas: googleAdsData.roas,
-        campaigns: googleAdsData.campaigns,
-      } : null,
+      googleAds: googleAdsData ? (() => {
+        // Same attribution gate as the briefing payload: spend with no
+        // conversion value is a DATA GAP, not $0 revenue / 0 ROAS. Don't let
+        // the webhook leak the ungated 0s to n8n consumers.
+        const gated = googleAdsData.totalSpend > 0 && googleAdsData.totalRevenue <= 0;
+        return {
+          totalSpend: googleAdsData.totalSpend,
+          totalRevenue: gated ? null : googleAdsData.totalRevenue,
+          totalConversions: googleAdsData.totalConversions,
+          roas: gated ? null : googleAdsData.roas,
+          ...(gated ? { dataGap: 'google-conversion-value-not-attributed' } : {}),
+          campaigns: googleAdsData.campaigns,
+        };
+      })() : null,
     };
 
     const response = await fetch(webhookUrl, {

@@ -75,6 +75,9 @@ PROOF POINTS:
 - Hatch Valley Public Schools NM: Eliminated all herbicide on school grounds.
 - City of Portales NM: Ongoing active municipal account.
 
+NUMERIC GROUNDING (NON-NEGOTIABLE):
+Use ONLY numbers given in this prompt or in the task input (prices, stats, percentages, dates, quantities). Never estimate, extrapolate, average, or recall figures. If a needed value is missing, write "data gap" instead of a number. Never invent performance stats, review counts, or acreage claims.
+
 Respond ONLY with valid JSON. No markdown fences, no extra text.`;
 
 // ── Agent Prompts ──

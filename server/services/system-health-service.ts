@@ -240,6 +240,17 @@ const SCHEDULERS: SchedulerDefinition[] = [
     alertOnStale: true,
   },
   {
+    id: "truth-monitor",
+    name: "Truth Monitor daily report",
+    owner: "SBR-App process",
+    kind: "in-process",
+    cadence: "Daily at 7:00 AM MT + startup self-heal",
+    expectedIntervalMinutes: 24 * 60,
+    staleAfterMinutes: 48 * 60,
+    sourceOfTruth: "truth_reports + scheduler:truth-monitor health row",
+    alertOnStale: true,
+  },
+  {
     id: "forecast-tuning",
     name: "Forecast self-tuning",
     owner: "SBR-App process",
@@ -418,6 +429,18 @@ async function getRuntimeStatuses(): Promise<Record<string, { initialized: boole
     };
   } catch (error: any) {
     statuses["system-integrity"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
+  }
+
+  try {
+    const truthMonitor = await import("./truth-monitor-scheduler");
+    const status = truthMonitor.getTruthMonitorSchedulerStatus();
+    statuses["truth-monitor"] = {
+      initialized: status.initialized,
+      nextRunAt: status.nextRunAt ? status.nextRunAt.toISOString() : null,
+      notes: [`Timezone: ${status.timezone}`, status.lastRunAt ? `Last report: ${status.lastRunAt.toISOString()}` : "No report yet this process"],
+    };
+  } catch (error: any) {
+    statuses["truth-monitor"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
   }
 
   try {

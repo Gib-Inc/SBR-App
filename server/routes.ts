@@ -26747,6 +26747,18 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Latest daily Truth Report — read-only V-suite + ledger stats + feed
+  // confidence, persisted once per run by the truth-monitor scheduler.
+  app.get("/api/system-integrity/truth-report", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getLatestTruthReport } = await import("./services/truth-monitor-service");
+      res.json({ report: await getLatestTruthReport() });
+    } catch (error: any) {
+      console.error('[Truth Monitor] latest error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch truth report' });
+    }
+  });
+
   // Automated resolver for app-vs-Extensiv SKU drift: re-syncs stale items,
   // explains drift covered by open orders, auto-corrects bounded residuals via
   // InventoryMovement, and logs every decision to data_reconciliation_log.
@@ -27776,6 +27788,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] System Integrity Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize System Integrity Scheduler:", error);
+  });
+
+  import("./services/truth-monitor-scheduler").then(({ initializeTruthMonitorScheduler }) => {
+    initializeTruthMonitorScheduler();
+    console.log("[Server] Truth Monitor Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Truth Monitor Scheduler:", error);
   });
 
   import("./services/forecast-tuning-scheduler").then(({ initializeForecastTuningScheduler }) => {

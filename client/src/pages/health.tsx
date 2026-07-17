@@ -68,12 +68,35 @@ interface SystemHealthSummary {
   };
 }
 
+type TruthCheckStatus = "PASS" | "WARN" | "FAIL";
+
+interface TruthCheck {
+  id: string;
+  name: string;
+  status: TruthCheckStatus;
+  summary: string;
+  error?: string;
+}
+
+interface TruthReport {
+  id?: string;
+  runAt: string;
+  overall: TruthCheckStatus;
+  checks: TruthCheck[];
+}
+
 const statusLabels: Record<HealthState, string> = {
   healthy: "Healthy",
   warning: "Late",
   critical: "Stale",
   unknown: "Unknown",
 };
+
+function truthVariant(status: TruthCheckStatus): "default" | "secondary" | "destructive" {
+  if (status === "FAIL") return "destructive";
+  if (status === "WARN") return "secondary";
+  return "default";
+}
 
 function statusIcon(status: HealthState) {
   if (status === "healthy") return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
@@ -168,6 +191,12 @@ export default function Health() {
     queryKey: ["/api/system-health"],
     refetchInterval: 60_000,
   });
+
+  const { data: truthData } = useQuery<{ report: TruthReport | null }>({
+    queryKey: ["/api/system-integrity/truth-report"],
+    refetchInterval: 60_000,
+  });
+  const truthReport = truthData?.report ?? null;
 
   const alertMutation = useMutation({
     mutationFn: async () => {
@@ -310,6 +339,53 @@ export default function Health() {
           </Card>
         ))}
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <div>
+            <CardTitle className="text-base">Truth Report</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Daily read-only V-suite: order twins, spend overlaps, ledger dedup, shipment quantities, feed freshness.
+            </p>
+          </div>
+          {truthReport && (
+            <div className="text-right">
+              <Badge variant={truthVariant(truthReport.overall)}>{truthReport.overall}</Badge>
+              <div className="mt-1 text-xs text-muted-foreground">{formatTimestamp(truthReport.runAt)}</div>
+            </div>
+          )}
+        </CardHeader>
+        <CardContent className="pt-0">
+          {!truthReport ? (
+            <div className="text-sm text-muted-foreground">
+              No truth report yet — the first run lands at 7:00 AM MT (or on the next deploy via startup self-heal).
+            </div>
+          ) : (
+            <div className="divide-y">
+              {truthReport.checks.map((check) => (
+                <div key={check.id} className="flex items-start justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium">
+                      <span className="text-muted-foreground">{check.id}</span> · {check.name}
+                    </div>
+                    <div className="text-xs text-muted-foreground" title={check.summary}>
+                      {check.summary}
+                    </div>
+                    {check.error && (
+                      <div className="text-xs text-destructive truncate" title={check.error}>
+                        {check.error}
+                      </div>
+                    )}
+                  </div>
+                  <Badge variant={truthVariant(check.status)} className="shrink-0">
+                    {check.status}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="rounded-md border">
         <Table>

@@ -25798,6 +25798,20 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CFO Truth Audit — deterministic anti-hallucination gate for finance/ROAS
+  // surfaces. Read-only: it labels missing/stale/broken inputs so AI can narrate
+  // only verified query results and never fill spreadsheet gaps with guesses.
+  app.get("/api/finances/truth-audit", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeFinanceTruthAudit } = await import("./services/finance-truth-audit-service");
+      res.json(await computeFinanceTruthAudit(db));
+    } catch (error: any) {
+      console.error("[Finance Truth Audit] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build finance truth audit" });
+    }
+  });
+
   // Marketing Truth — the hero-tile payload: blended MER + contribution MER vs
   // breakevens, with the feed-confidence layer. Composes the canonical engines
   // (governor / contribution-margin / reconciliation); no math of its own.

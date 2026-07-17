@@ -25,6 +25,7 @@ import pg from "pg";
 import { getTableColumns, getTableName, is } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@shared/schema";
+import { storage as storageSingleton } from "../storage";
 import { HISTORICAL_PL_DATA } from "../routes/historical-pl-data";
 import { ZO_KPI_DATA } from "../routes/zo-kpi-data";
 
@@ -360,6 +361,36 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS sku_mappings_external_source_idx ON sku_mappings(external_sku, source)`,
     `CREATE INDEX IF NOT EXISTS sku_mappings_canonical_sku_idx ON sku_mappings(canonical_sku)`,
+    // BOOK.E walk phase — nightly-drafted daily sales journal entries.
+    // Rows are written by the scheduler's draft pass (status 'pending' or
+    // 'blocked'); QuickBooks is written ONLY when a human approves. Approval
+    // first CLAIMS the row with a compare-and-set to status 'posting' (the
+    // double-post lock), then posts, then records 'approved_posted' with
+    // posted_je_id. lines holds the exact QBO Line array; feeder holds the
+    // source rows behind every number.
+    // doc_number uniqueness is a PARTIAL index over live statuses (pending/
+    // posting/approved_posted): superseded/rejected/blocked history for the
+    // same doc_number must be able to accumulate while at most one live
+    // draft-or-posted row exists. 'posting' is covered so a claimed row keeps
+    // holding the slot while its QBO write is in flight.
+    `CREATE TABLE IF NOT EXISTS daily_je_proposals (
+       id            SERIAL PRIMARY KEY,
+       target_date   DATE NOT NULL,
+       channel       TEXT NOT NULL,
+       doc_number    TEXT NOT NULL,
+       lines         JSONB NOT NULL,
+       feeder        JSONB NOT NULL,
+       status        TEXT NOT NULL DEFAULT 'pending',
+       block_reason  TEXT,
+       posted_je_id  TEXT,
+       created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+       decided_at    TIMESTAMPTZ,
+       decided_by    TEXT
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS daily_je_proposals_live_doc_uidx
+       ON daily_je_proposals (doc_number) WHERE status IN ('pending', 'posting', 'approved_posted')`,
+    `CREATE INDEX IF NOT EXISTS daily_je_proposals_date_idx ON daily_je_proposals (target_date DESC)`,
+    `CREATE INDEX IF NOT EXISTS daily_je_proposals_status_idx ON daily_je_proposals (status)`,
     // ad_metrics_daily dimension columns + widened unique index. The old
     // (platform, sku, date) unique index must be dropped first since the new
     // one covers more columns. DO blocks swallow errors if columns/indexes
@@ -760,7 +791,38 @@ async function reportSchemaDrift(client: pg.PoolClient): Promise<void> {
   }
 }
 
+/**
+ * FATAL boot assertion — the ACTIVE storage singleton must expose
+ * claimLedgerAndUpdateItem (the atomic claim+stock-write used by
+ * InventoryMovement.apply, rung 1 of the fail-closed ladder). If a storage
+ * refactor ever drops it, claimed inventory movements would silently degrade
+ * to the sequential-claim rung (crash window: a recorded movement that never
+ * applied → permanently-skipped decrement / phantom stock). Refuse to boot
+ * instead: log FATAL and throw. The thrown error is marked `fatal` so the
+ * boot path (app.ts) rethrows it rather than swallowing it with the
+ * non-blocking startup-check failures.
+ */
+export function assertStorageClaimGate(activeStorage?: unknown): void {
+  const s = activeStorage ?? storageSingleton;
+  if (typeof (s as any)?.claimLedgerAndUpdateItem !== "function") {
+    const message =
+      "[Startup Checks] FATAL: active storage does not expose claimLedgerAndUpdateItem() — " +
+      "inventory movements would degrade to the non-atomic sequential-claim path " +
+      "(crash-window double-apply risk). Refusing to boot.";
+    console.error(message);
+    const err = new Error(message);
+    (err as any).fatal = true;
+    throw err;
+  }
+  console.log("[Startup Checks] OK: storage.claimLedgerAndUpdateItem present (atomic claim gate armed)");
+}
+
 export async function runStartupChecks(): Promise<void> {
+  // FATAL (throws, intentionally BEFORE the DATABASE_URL guard and NOT
+  // swallowed): the atomic inventory claim gate must exist on the active
+  // storage or the boot fails. See assertStorageClaimGate.
+  assertStorageClaimGate();
+
   if (!process.env.DATABASE_URL) {
     console.warn("[Startup Checks] DATABASE_URL not set — skipping checks");
     return;

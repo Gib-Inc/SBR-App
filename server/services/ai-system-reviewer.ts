@@ -98,6 +98,8 @@ Respond with a JSON array of recommendations. Each recommendation must have:
 
 If no significant issues are found, return an empty array: []
 
+**GROUNDING (NON-NEGOTIABLE):** Base every recommendation ONLY on the logs and counts provided above. Use ONLY the numbers in the data block above. Never estimate, extrapolate, average, or recall figures. If a value is missing, null, or marked stale, state 'data gap' for that value — never substitute a plausible number. Do not cite event counts, error rates, or patterns that do not appear in the provided logs.
+
 **IMPORTANT:** Only output the JSON array, no other text.`;
 
 class AISystemReviewerService {

@@ -37,6 +37,7 @@ const AD_METRICS_ALLOWLIST = new Set([
   "services/ad-metrics-sync.ts",               // ingestion writer
   "services/canonical-spend-service.ts",       // CANONICAL
   "services/corrected-ad-spend.ts",            // CANONICAL range adapter
+  "services/finance-truth-audit-service.ts",   // truth-audit verifier: reads raw grain ONLY to cross-check canonical, emits guidance to use canonical
   "services/financial-reconciliation-service.ts", // drift guard (reads raw BY DESIGN to detect fanout)
   "services/google-ads-client.ts",             // ingestion writer
   "services/marketing-analytics-service.ts",   // authoritative-grain aggregation (reviewed)

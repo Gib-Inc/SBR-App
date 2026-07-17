@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "db:push": "drizzle-kit push",
     "sync:extensiv": "node extensiv-sync.js",
-    "report:drift": "node inventory-drift-report.js"
+    "report:drift": "node inventory-drift-report.js",
+    "incident:repeat-decrement": "tsx scripts/incident-2026-07-repeat-decrement.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

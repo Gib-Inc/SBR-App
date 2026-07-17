@@ -1,18 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { opexStatus, computeOpexCreep } from "./green-line-service";
 
-// db stub: computeOpexCreep runs a single query, so every execute() returns the canned rows.
+// db stub: computeOpexCreep reads through gl-reader's single query, so every execute()
+// returns the canned rows (already in the reader's {month, account, amount} shape).
 const mockDb = (rows: any[]) => ({ execute: async () => ({ rows }) });
 
 describe("computeOpexCreep — classifies via the canonical classifyAccount (not the old '^[123] -' rule)", () => {
-  it("counts real Gross Sales as net sales (not opex), excludes the Match-Shopify duplicate + COGS", async () => {
+  it("counts real Gross Sales as net sales (not opex), excludes an unmapped Match-Shopify duplicate + COGS", async () => {
+    // An UNMAPPED '%Match Shopify%' account passes through the reader under its own
+    // name (gl-reader's safe default) — classifyAccount must still drop it here.
     const rows = [
-      { ym: "2026-03", account_name: "Gross Sales", amt: 400000 },
-      { ym: "2026-03", account_name: "3 - Returns/Refunds + Amazon", amt: -50000 }, // contra → nets down
-      { ym: "2026-03", account_name: "Cost of Goods Sold", amt: 140000 },           // cogs → NOT opex
-      { ym: "2026-03", account_name: "1 - Gross Sales (Match Shopify Total Sales Breakdown)", amt: 380000 }, // duplicate → excluded
-      { ym: "2026-03", account_name: "Advertising & Marketing", amt: 100000 },      // opex
-      { ym: "2026-03", account_name: "Shipping, Freight & Delivery", amt: 50000 },  // opex
+      { month: "2026-03", account: "Gross Sales", amount: 400000 },
+      { month: "2026-03", account: "3 - Returns/Refunds + Amazon", amount: -50000 }, // contra → nets down
+      { month: "2026-03", account: "Cost of Goods Sold", amount: 140000 },           // cogs → NOT opex
+      { month: "2026-03", account: "1a - Gross Sales v2 (Match Shopify Total Sales Breakdown)", amount: 380000 }, // duplicate → excluded
+      { month: "2026-03", account: "Advertising & Marketing", amount: 100000 },      // opex
+      { month: "2026-03", account: "Shipping, Freight & Delivery", amount: 50000 },  // opex
     ];
     const out = await computeOpexCreep(mockDb(rows) as any);
     const m = out.months.find((x) => x.month === "2026-03")!;

@@ -13,10 +13,10 @@
  */
 import { sql } from "drizzle-orm";
 import { rollup } from "./finance-pnl-service";
+import { getDedupedMonthlyGl, getDedupedRangeGl } from "./gl-reader";
 
 type DB = any;
 const rows = (r: any): any[] => r?.rows ?? r ?? [];
-const num = (v: any) => (v == null ? 0 : Number(v) || 0);
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const pct = (part: number, whole: number): number | null => (whole > 0 ? r2((part / whole) * 100) : null);
 
@@ -138,18 +138,13 @@ export async function getResetImpact(db: DB, monthsBack = 7): Promise<ResetImpac
     WHERE txn_date >= date_trunc('month', ${MT}) AND txn_date <= ${MT}::date`))[0] || {};
   const glThrough: string | null = glRow.d ?? null;
 
-  // Per-month, per-account totals INCLUDING the current (partial) month; future-dated excluded.
-  const data = rows(await db.execute(sql`
-    SELECT to_char(date_trunc('month', txn_date), 'YYYY-MM') AS month, account_name AS account,
-           round(sum(amount)::numeric, 2) AS amount
-    FROM qb_pl_detail
-    WHERE txn_date >= (date_trunc('month', ${MT}) - (${monthsBack} || ' months')::interval)
-      AND txn_date <= ${MT}::date
-    GROUP BY 1, 2 ORDER BY 1`)) as Array<{ month: string; account: string; amount: any }>;
+  // Per-month, per-account totals INCLUDING the current (partial) month; future-dated
+  // excluded — via the shared mirror-deduped reader ('toDate' = through MT today).
+  const data = await getDedupedMonthlyGl(db, { monthsBack, cutoff: "toDate" });
   const byMonth = new Map<string, Array<{ account: string; amount: number }>>();
   for (const r of data) {
     const a = byMonth.get(r.month) ?? [];
-    a.push({ account: r.account, amount: num(r.amount) });
+    a.push({ account: r.account, amount: r.amount });
     byMonth.set(r.month, a);
   }
 
@@ -176,13 +171,7 @@ export async function getResetImpact(db: DB, monthsBack = 7): Promise<ResetImpac
 
   // Pace: current vs prior month over the SAME posted day-range (windowed to glThrough),
   // so sales and spend cover identical windows on both sides — apples to apples.
-  const rangeRollup = async (start: string, end: string) => {
-    const rs = rows(await db.execute(sql`
-      SELECT account_name AS account, round(sum(amount)::numeric, 2) AS amount
-      FROM qb_pl_detail WHERE txn_date >= ${start}::date AND txn_date <= ${end}::date
-      GROUP BY 1`)) as Array<{ account: string; amount: any }>;
-    return rollup(rs.map((x) => ({ account: x.account, amount: num(x.amount) })));
-  };
+  const rangeRollup = async (start: string, end: string) => rollup(await getDedupedRangeGl(db, start, end));
   let pace: ResetImpactPace | null = null;
   if (glThrough) {
     const pr = paceRanges(glThrough);

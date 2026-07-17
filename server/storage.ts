@@ -596,6 +596,25 @@ export interface IStorage {
     salesOrderLineId?: string;
     quantity?: number;
   }): Promise<boolean>;
+  /**
+   * Ledger claim + item stock write in ONE transaction. Claiming before the
+   * write (the original d439c69 shape) left a crash window that permanently
+   * recorded a movement without applying it. Unique-conflict on the ledger →
+   * { claimed: false } and NO stock change.
+   */
+  claimLedgerAndUpdateItem(
+    claim: {
+      movementType: string;
+      externalRef: string;
+      itemId: string;
+      source?: string;
+      orderId?: string;
+      salesOrderLineId?: string;
+      quantity?: number;
+    },
+    itemId: string,
+    updates: Partial<Item>,
+  ): Promise<{ claimed: boolean; item?: Item }>;
   getAuditLogs(options?: { 
     limit?: number; 
     offset?: number; 
@@ -3549,7 +3568,27 @@ export class MemStorage implements IStorage {
     return true;
   }
 
-  async getAuditLogs(options?: { 
+  async claimLedgerAndUpdateItem(
+    claim: {
+      movementType: string;
+      externalRef: string;
+      itemId: string;
+      source?: string;
+      orderId?: string;
+      salesOrderLineId?: string;
+      quantity?: number;
+    },
+    itemId: string,
+    updates: Partial<Item>,
+  ): Promise<{ claimed: boolean; item?: Item }> {
+    // In-memory: claim-check and write are synchronous, so this is atomic.
+    const claimed = await this.claimInventoryMovementLedger(claim);
+    if (!claimed) return { claimed: false };
+    const item = await this.updateItem(itemId, updates);
+    return { claimed: true, item };
+  }
+
+  async getAuditLogs(options?: {
     limit?: number; 
     offset?: number; 
     source?: string;
@@ -6879,7 +6918,16 @@ export class PostgresStorage implements IStorage {
       // even if the caller's check-then-insert raced or missed. 23505 =
       // Postgres unique_violation.
       if (e?.code === "23505" && orderToInsert.externalOrderId) {
-        const existing = await this.getSalesOrderByExternalIdOnly(orderToInsert.externalOrderId);
+        // H4: the unique index is per-(channel, external_order_id), so 23505
+        // only ever fires on a SAME-channel collision. The recovery lookup must
+        // be channel-scoped too — the channel-blind *ByExternalIdOnly variant
+        // returns an arbitrary row when two channels share an external id,
+        // silently overwriting the WRONG channel's order.
+        const matches = insertOrder.channel
+          ? await this.getSalesOrdersByExternalId(insertOrder.channel, orderToInsert.externalOrderId)
+          : [];
+        const existing = matches[0]
+          ?? await this.getSalesOrderByExternalIdOnly(orderToInsert.externalOrderId);
         if (existing) {
           const updated = await this.updateSalesOrder(existing.id, {
             status: orderToInsert.status,
@@ -7113,7 +7161,49 @@ export class PostgresStorage implements IStorage {
     return (result as any).rows?.length > 0;
   }
 
-  async getAuditLogs(options?: { 
+  async claimLedgerAndUpdateItem(
+    claim: {
+      movementType: string;
+      externalRef: string;
+      itemId: string;
+      source?: string;
+      orderId?: string;
+      salesOrderLineId?: string;
+      quantity?: number;
+    },
+    itemId: string,
+    updates: Partial<Item>,
+  ): Promise<{ claimed: boolean; item?: Item }> {
+    // Claim + stock write in ONE transaction: either the ledger row AND the
+    // stock change both commit, or neither does. A crash between a standalone
+    // claim and the write would permanently record a movement that never
+    // applied (skipped decrement = phantom stock).
+    return await this.db.transaction(async (tx) => {
+      const result = await tx.execute(drizzleSql`
+        INSERT INTO inventory_movement_ledger (
+          movement_type, external_ref, item_id, source, order_id, sales_order_line_id, quantity
+        )
+        VALUES (
+          ${claim.movementType}, ${claim.externalRef}, ${claim.itemId},
+          ${claim.source ?? null}, ${claim.orderId ?? null},
+          ${claim.salesOrderLineId ?? null}, ${claim.quantity ?? null}
+        )
+        ON CONFLICT (movement_type, external_ref, item_id) DO NOTHING
+        RETURNING id
+      `);
+      if (!((result as any).rows?.length > 0)) {
+        return { claimed: false };
+      }
+      const [item] = await tx
+        .update(schema.items)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(schema.items.id, itemId))
+        .returning();
+      return { claimed: true, item };
+    });
+  }
+
+  async getAuditLogs(options?: {
     limit?: number; 
     offset?: number; 
     source?: string;

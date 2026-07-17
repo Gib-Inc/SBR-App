@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -34,6 +34,35 @@ interface RpReview {
   ok: boolean; error?: string; count: number; totalAmount: number; windowDays: number;
   byReason: Record<string, { count: number; amount: number }>; items: RpItem[];
 }
+interface DailyJeLine {
+  Description?: string;
+  Amount: number;
+  JournalEntryLineDetail: {
+    PostingType: "Debit" | "Credit";
+    AccountRef: { value: string; name?: string };
+  };
+}
+interface DailyJeProposal {
+  id: number;
+  target_date: string;
+  channel: string;
+  doc_number: string;
+  lines: DailyJeLine[];
+  feeder: {
+    // null on a money field = "not available" (a source row is missing the
+    // column) — the server blocks the draft rather than showing a made-up $0.
+    orders?: number; total?: number | null; subtotal?: number | null; tax?: number | null;
+    discounts?: number | null; refunds?: number | null; refundItems?: number;
+    shippingDerived?: number | null; revenueExTax?: number | null; taxExcluded?: number | null;
+    ordersMissingTotal?: number; ordersMissingSubtotal?: number; ordersMissingTax?: number;
+    ordersMissingDiscount?: number; refundItemsMissingUnitPrice?: number;
+    ordersExcludedCancelled?: number; gappedOrderNames?: string[];
+  } | null;
+  status: string;
+  block_reason: string | null;
+  posted_je_id: string | null;
+  created_at: string;
+}
 
 const money = (n: number | null | undefined) =>
   n == null ? "—" : `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
@@ -68,6 +97,30 @@ export default function Bookkeeping() {
   const { data: rp } = useQuery<RpReview>({
     queryKey: ["/api/bookkeeping/related-party-review"],
     queryFn: async () => (await apiRequest("GET", "/api/bookkeeping/related-party-review")).json(),
+  });
+
+  const { data: dailyJeData } = useQuery<{ proposals: DailyJeProposal[] }>({
+    queryKey: ["/api/bookkeeping/daily-je"],
+    queryFn: async () => (await apiRequest("GET", "/api/bookkeeping/daily-je")).json(),
+  });
+
+  const decideDailyJe = useMutation({
+    mutationFn: async ({ id, action }: { id: number; action: "approve" | "reject" | "redraft" }) =>
+      apiRequest("POST", `/api/bookkeeping/daily-je/${id}/${action}`),
+    onSuccess: (_r, v) => {
+      toast({
+        title: v.action === "approve" ? "Posted to QuickBooks" : v.action === "redraft" ? "Re-drafted" : "Rejected",
+        description:
+          v.action === "approve" ? "The journal entry was written to QuickBooks."
+          : v.action === "redraft" ? "The day was drafted fresh through the full guard pass. Nothing posts without a new Approve."
+          : "Nothing was posted. Use Re-draft below if this was a mis-click.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/bookkeeping/daily-je"] });
+    },
+    onError: (e: any) => {
+      toast({ title: "Error", description: e?.message, variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["/api/bookkeeping/daily-je"] });
+    },
   });
 
   const invalidate = () => {
@@ -119,6 +172,11 @@ export default function Bookkeeping() {
   ).sort((a, b) => b.total - a.total);
   const rpRecurring = rpGroups.filter((g) => g.items.length >= 3);
   const rpSingles = rpGroups.filter((g) => g.items.length < 3).flatMap((g) => g.items).sort((a, b) => b.amount - a.amount);
+  const dailyJes = dailyJeData?.proposals ?? [];
+  // 'posting' = an approve is mid-flight (or a crashed one awaiting reconcile) — keep it visible.
+  const dailyJeOpen = dailyJes.filter((p) => ["pending", "blocked", "posting"].includes(p.status));
+  const dailyJeDecided = dailyJes.filter((p) => ["approved_posted", "rejected", "superseded"].includes(p.status));
+  const dailyJeRejected = dailyJeDecided.filter((p) => p.status === "rejected").slice(0, 10);
 
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-6xl mx-auto">
@@ -166,6 +224,52 @@ export default function Bookkeeping() {
         <Tile label="Applied to QuickBooks" value={String(summary?.applied ?? "—")} sub={summary ? `${money(summary.appliedAmount)} recategorized` : ""} accent="green" />
         <Tile label="Rejected" value={String(summary?.rejected ?? "—")} sub="the agent learns nothing is auto-applied" />
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <BookOpenCheck className="h-4 w-4" /> Daily sales entries ({dailyJeOpen.length})
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Each night the app drafts the prior day's sales journal entries (one per channel) from order data.
+            Review the source numbers and the exact QuickBooks lines, then Approve — nothing posts until you do.
+            Blocked drafts show why they cannot be posted safely.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {dailyJeOpen.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No daily sales entries waiting. New drafts appear each morning for the prior day.
+            </p>
+          ) : (
+            dailyJeOpen.map((p) => (
+              <DailyJeRow key={p.id} p={p} decide={decideDailyJe} busy={decideDailyJe.isPending} />
+            ))
+          )}
+          {dailyJeRejected.length > 0 && (
+            <div className="pt-1 space-y-1">
+              <p className="text-[11px] text-muted-foreground">Recently rejected (re-draftable):</p>
+              {dailyJeRejected.map((p) => (
+                <div key={p.id} className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground pl-1">
+                  <span className="truncate">
+                    {p.channel === "SHOPIFY" ? "Shopify" : "Amazon"} {String(p.target_date).slice(0, 10)}
+                    <span className="ml-1 opacity-60">#{p.doc_number}</span>
+                  </span>
+                  <Button size="sm" variant="ghost" className="h-6 text-[11px]" disabled={decideDailyJe.isPending}
+                    onClick={() => decideDailyJe.mutate({ id: p.id, action: "redraft" })}>Re-draft</Button>
+                </div>
+              ))}
+            </div>
+          )}
+          {dailyJeDecided.length > 0 && (
+            <p className="text-[11px] text-muted-foreground pt-1">
+              {dailyJeDecided.filter((p) => p.status === "approved_posted").length} posted ·{" "}
+              {dailyJeDecided.filter((p) => p.status === "rejected").length} rejected ·{" "}
+              {dailyJeDecided.filter((p) => p.status === "superseded").length} superseded by fresher drafts
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       {rp && rp.count > 0 && (
         <Card className="border-amber-200 dark:border-amber-900/40">
@@ -323,6 +427,114 @@ function ProposalRow({ p, threshold, decide, busy, readOnly }: {
           {p.apply_error && <div className="text-red-600 dark:text-red-400">Apply failed: {p.apply_error}</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+const money2 = (n: number | null | undefined) =>
+  n == null ? "—" : `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+function DailyJeRow({ p, decide, busy }: {
+  p: DailyJeProposal;
+  decide: { mutate: (v: { id: number; action: "approve" | "reject" | "redraft" }) => void };
+  busy?: boolean;
+}) {
+  // Synchronous double-click guard: React's isPending only disables the
+  // button on the NEXT render — a fast double-click fires two mutations in
+  // the same tick. The ref flips immediately; the server-side atomic claim
+  // (409 on the loser) is the real lock, this just avoids the noisy toast.
+  const firedRef = useRef(false);
+  useEffect(() => { if (!busy) firedRef.current = false; }, [busy]);
+  const fire = (action: "approve" | "reject" | "redraft") => {
+    if (firedRef.current) return;
+    firedRef.current = true;
+    decide.mutate({ id: p.id, action });
+  };
+  const f = p.feeder ?? {};
+  const isShopify = p.channel === "SHOPIFY";
+  const blocked = p.status === "blocked";
+  const posting = p.status === "posting";
+  const feederBits: Array<[string, string]> = isShopify
+    ? [
+        ["Orders", String(f.orders ?? "—")],
+        ["Total", money2(f.total)],
+        ["Tax", money2(f.tax)],
+        ["Discounts", money2(f.discounts)],
+        ["Refunds", money2(f.refunds)],
+      ]
+    : [
+        ["Orders", String(f.orders ?? "—")],
+        ["Total", money2(f.total)],
+        ["Tax excluded", money2(f.taxExcluded)],
+        ["Revenue ex-tax", money2(f.revenueExTax)],
+      ];
+  return (
+    <div className={`rounded-lg border px-3 py-2 ${blocked ? "border-amber-300 bg-amber-50/50 dark:border-amber-900/40 dark:bg-amber-950/15" : "hover-elevate"}`}>
+      <div className="flex items-center gap-3 flex-wrap">
+        <Badge className={`text-[10px] font-semibold ${isShopify ? "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300" : "bg-orange-100 text-orange-900 dark:bg-orange-950/40 dark:text-orange-300"}`}>
+          {isShopify ? "Shopify" : "Amazon"}
+        </Badge>
+        <div className="flex-1 min-w-0">
+          <div className="font-medium">
+            {String(p.target_date).slice(0, 10)}
+            <span className="text-[11px] text-muted-foreground ml-2">#{p.doc_number}</span>
+          </div>
+        </div>
+        {posting && (
+          <Badge className="bg-blue-100 text-blue-900 dark:bg-blue-950/40 dark:text-blue-300 text-[10px] font-semibold">
+            Posting to QuickBooks…
+          </Badge>
+        )}
+        {!blocked && !posting && (
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy}
+              onClick={() => fire("approve")}>Approve → QuickBooks</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={busy}
+              onClick={() => fire("reject")}>Reject</Button>
+          </div>
+        )}
+        {blocked && (
+          <div className="flex items-center gap-1.5">
+            <Badge className="bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300 text-[10px] font-semibold">Blocked</Badge>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={busy}
+              onClick={() => fire("redraft")}>Re-draft now</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" disabled={busy}
+              onClick={() => fire("reject")}>Dismiss</Button>
+          </div>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground mt-1 pl-1">
+        {feederBits.map(([label, val]) => (
+          <span key={label}>{label}: <span className="tabular-nums font-medium text-foreground">{val}</span></span>
+        ))}
+        {(f.ordersMissingTotal ?? 0) > 0 && <span className="text-amber-700 dark:text-amber-400">{f.ordersMissingTotal} order(s) missing total — not available</span>}
+        {(f.ordersMissingSubtotal ?? 0) > 0 && <span className="text-amber-700 dark:text-amber-400">{f.ordersMissingSubtotal} order(s) missing subtotal — not available</span>}
+        {(f.ordersMissingTax ?? 0) > 0 && <span className="text-amber-700 dark:text-amber-400">{f.ordersMissingTax} order(s) missing tax — not available</span>}
+        {(f.ordersMissingDiscount ?? 0) > 0 && <span className="text-amber-700 dark:text-amber-400">{f.ordersMissingDiscount} order(s) missing discount — not available</span>}
+        {(f.refundItemsMissingUnitPrice ?? 0) > 0 && <span className="text-amber-700 dark:text-amber-400">{f.refundItemsMissingUnitPrice} refund line(s) missing unit price — not available</span>}
+        {(f.ordersExcludedCancelled ?? 0) > 0 && <span>{f.ordersExcludedCancelled} cancelled order(s) excluded</span>}
+      </div>
+      {blocked && p.block_reason && (
+        <div className="text-[11px] text-amber-800 dark:text-amber-300 mt-1 pl-1 flex items-start gap-1">
+          <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" /> <span>{p.block_reason}</span>
+        </div>
+      )}
+      <div className="mt-1.5 pl-1 space-y-0.5">
+        {(p.lines ?? []).map((l, i) => {
+          const d = l.JournalEntryLineDetail;
+          const dr = d.PostingType === "Debit";
+          return (
+            <div key={i} className="flex items-center justify-between gap-3 text-[11px]">
+              <span className="text-muted-foreground truncate">
+                <span className={`font-semibold mr-1.5 ${dr ? "" : "pl-4"}`}>{dr ? "Dr" : "Cr"}</span>
+                {d.AccountRef.name ?? d.AccountRef.value}
+                <span className="ml-1 opacity-60">({d.AccountRef.value})</span>
+              </span>
+              <span className="tabular-nums font-medium whitespace-nowrap">{money2(l.Amount)}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

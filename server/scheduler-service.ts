@@ -34,6 +34,7 @@ let driftReportTimer: NodeJS.Timeout | null = null;
 let adSyncTimer: NodeJS.Timeout | null = null;
 let weeklyDigestTimer: NodeJS.Timeout | null = null;
 let financialSnapshotTimer: NodeJS.Timeout | null = null;
+let dailyJeDraftTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
@@ -476,6 +477,128 @@ async function performFinancialSnapshotCapture(): Promise<void> {
   }
 }
 
+/**
+ * BOOK.E walk phase — nightly DRAFT of the prior MT day's sales journal
+ * entries (Shopify + Amazon) into daily_je_proposals. DRAFT ONLY: nothing is
+ * ever posted to QuickBooks from here — posting happens exclusively when a
+ * human clicks Approve on the Bookkeeping page.
+ *
+ * Each tick does three things:
+ *  0. reconcile proposals stuck in 'posting' (server died mid-approve);
+ *  1. fresh-draft yesterday (supersedes stale pendings — late-syncing orders);
+ *  2. sweep EVERY date since 2026-07-10 for holes (same idempotent backfill
+ *     as boot) so a channel-day that failed to draft is retried the next
+ *     night, not the next redeploy.
+ * A 'refused' channel outcome (a failure that could not even store a blocked
+ * trace row) marks the run FAILED — never success.
+ */
+async function performDailyJeDraft(): Promise<void> {
+  const startedAt = new Date();
+  try {
+    const svc = await import("./services/daily-sales-je-service");
+
+    const reconciled = await svc.reconcileStuckPostingProposals().catch((e: any) => {
+      console.warn("[Daily JE] Stuck-posting reconcile failed:", e?.message ?? e);
+      return null;
+    });
+
+    const nightly = await svc.draftDailyJes(); // default: yesterday MT
+    const summary = nightly.channels.map((c) => `${c.channel}:${c.outcome}`).join(", ") || "no channels";
+    if (nightly.ok) {
+      console.log(`[Daily JE] Nightly draft for ${nightly.targetDate}: ${summary}`);
+    } else {
+      console.warn(`[Daily JE] Nightly draft refused for ${nightly.targetDate}: ${nightly.error}`);
+    }
+
+    const sweep = await svc.backfillMissingDailyJes();
+    console.log(
+      `[Daily JE] Nightly sweep: ${sweep.daysChecked} day(s) checked, ${sweep.drafted} drafted pending, ${sweep.blocked} blocked, ${sweep.refused} refused`,
+    );
+
+    const allChannels = [...nightly.channels, ...sweep.results.flatMap((r) => r.channels)];
+    const refused = allChannels.filter((c) => c.outcome === "refused");
+    const blocked = allChannels.filter((c) => c.outcome === "drafted_blocked");
+    const failed = !nightly.ok || refused.length > 0 || sweep.refused > 0;
+    const problems: string[] = [];
+    if (!nightly.ok && nightly.error) problems.push(nightly.error);
+    if (refused.length) problems.push(`${refused.length} channel-day(s) REFUSED (no trace row could be stored): ${refused.map((c) => `${c.docNumber}: ${c.reason ?? "?"}`).join("; ")}`);
+    if (blocked.length) problems.push(`${blocked.length} channel-day(s) drafted blocked — see Bookkeeping page`);
+    await recordRunSafe({
+      schedulerId: "daily-je-draft",
+      schedulerName: "BOOK.E daily sales JE draft (human-approved posting)",
+      status: failed ? "failed" : blocked.length > 0 ? "partial" : "success",
+      startedAt,
+      durationMs: Date.now() - startedAt.getTime(),
+      errorMessage: problems.length ? problems.join(" | ") : null,
+      details: {
+        targetDate: nightly.targetDate,
+        channels: nightly.channels,
+        sweep: { daysChecked: sweep.daysChecked, drafted: sweep.drafted, blocked: sweep.blocked, refused: sweep.refused },
+        reconciled,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Daily JE] Nightly draft failed:", error);
+    await recordRunSafe({
+      schedulerId: "daily-je-draft",
+      schedulerName: "BOOK.E daily sales JE draft (human-approved posting)",
+      status: "failed",
+      startedAt,
+      durationMs: Date.now() - startedAt.getTime(),
+      errorMessage: error?.message ?? String(error),
+    });
+  }
+}
+
+/**
+ * Boot-time backfill: draft any MT dates from 2026-07-10 through yesterday
+ * that don't have a live proposal yet (deploys/restarts can straddle the
+ * 2:30 AM tick). Dates <= 2026-07-09 are refused inside the service — those
+ * JEs were posted by hand. Draft only; never posts. Also reconciles any
+ * proposals stuck in 'posting' from a crash mid-approve. A 'refused'
+ * channel-day (no trace row stored) marks the run FAILED.
+ */
+async function performDailyJeBootBackfill(): Promise<void> {
+  const startedAt = new Date();
+  try {
+    const svc = await import("./services/daily-sales-je-service");
+    const reconciled = await svc.reconcileStuckPostingProposals().catch((e: any) => {
+      console.warn("[Daily JE] Stuck-posting reconcile failed:", e?.message ?? e);
+      return null;
+    });
+    const r = await svc.backfillMissingDailyJes();
+    console.log(
+      `[Daily JE] Boot backfill: ${r.daysChecked} day(s) checked, ${r.drafted} drafted pending, ${r.blocked} drafted blocked, ${r.refused} refused`,
+    );
+    const refusedDetail = r.results
+      .flatMap((x) => x.channels)
+      .filter((c) => c.outcome === "refused")
+      .map((c) => `${c.docNumber}: ${c.reason ?? "?"}`);
+    const problems: string[] = [];
+    if (r.refused > 0) problems.push(`${r.refused} channel-day(s)/date(s) REFUSED: ${refusedDetail.join("; ") || "see logs"}`);
+    if (r.blocked > 0) problems.push(`${r.blocked} channel-day(s) blocked — see Bookkeeping page`);
+    await recordRunSafe({
+      schedulerId: "daily-je-draft-backfill",
+      schedulerName: "BOOK.E daily sales JE boot backfill (draft only)",
+      status: r.refused > 0 ? "failed" : r.blocked > 0 ? "partial" : "success",
+      startedAt,
+      durationMs: Date.now() - startedAt.getTime(),
+      errorMessage: problems.length ? problems.join(" | ") : null,
+      details: { daysChecked: r.daysChecked, drafted: r.drafted, blocked: r.blocked, refused: r.refused, reconciled },
+    });
+  } catch (error: any) {
+    console.error("[Daily JE] Boot backfill failed:", error);
+    await recordRunSafe({
+      schedulerId: "daily-je-draft-backfill",
+      schedulerName: "BOOK.E daily sales JE boot backfill (draft only)",
+      status: "failed",
+      startedAt,
+      durationMs: Date.now() - startedAt.getTime(),
+      errorMessage: error?.message ?? String(error),
+    });
+  }
+}
+
 async function performAISystemReview(): Promise<void> {
   console.log("[Scheduler] Starting AI System Review...");
   const startTime = Date.now();
@@ -703,6 +826,22 @@ function msUntilNextMidnightMT(): number {
 }
 
 /**
+ * ms until the next 2:30 AM MT firing (same fixed UTC-7 math as the other
+ * MT-anchored jobs). The daily-JE draft runs here so the 11:59 PM daily-sales
+ * aggregation and the 12:05 AM syncs have fully settled the prior day first.
+ */
+function msUntilNext230amMT(): number {
+  const now = new Date();
+  const mstOffset = -7 * 60; // minutes — MST is UTC-7
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const mstMinutes = utcMinutes + mstOffset;
+  const targetMstMinutes = 2 * 60 + 30; // 02:30 MT
+  let minutesUntil = targetMstMinutes - mstMinutes;
+  if (minutesUntil <= 0) minutesUntil += 24 * 60;
+  return minutesUntil * 60 * 1000;
+}
+
+/**
  * Calculate milliseconds until next 7 AM MST (UTC-7)
  */
 function msUntilNext7amMST(): number {
@@ -730,7 +869,7 @@ function msUntilNext7amMST(): number {
 export async function startScheduler(): Promise<void> {
   console.log("[Scheduler] Starting per-channel scheduler...");
   let sectionsStarted = 0;
-  const totalSections = 9;
+  const totalSections = 10;
 
   try {
     const channels = await storage.getAllChannels();
@@ -965,6 +1104,34 @@ export async function startScheduler(): Promise<void> {
     console.error("[Scheduler] Financial snapshot capture failed to initialize:", err);
   }
 
+  try {
+    // BOOK.E daily sales JE drafts. Boot backfill covers dates missed while
+    // the server was down (never earlier than 2026-07-10); the nightly tick
+    // at 2:30 AM MT drafts yesterday AND re-runs the same idempotent sweep so
+    // a failed channel-day never waits for a redeploy. DRAFT ONLY — posting
+    // to QuickBooks happens exclusively through the human Approve endpoint.
+    performDailyJeBootBackfill().catch((err) => {
+      console.error("[Daily JE] Boot backfill failed:", err);
+    });
+    if (dailyJeDraftTimer) {
+      clearTimeout(dailyJeDraftTimer);
+      clearInterval(dailyJeDraftTimer);
+    }
+    const msUntilJeDraft = msUntilNext230amMT();
+    console.log(
+      `[Daily JE] Scheduled. Next draft in ${(msUntilJeDraft / (1000 * 60 * 60)).toFixed(1)} hours (2:30 AM MT), then daily`,
+    );
+    dailyJeDraftTimer = setTimeout(() => {
+      performDailyJeDraft().catch(() => {});
+      dailyJeDraftTimer = setInterval(() => {
+        performDailyJeDraft().catch(() => {});
+      }, 24 * 60 * 60 * 1000);
+    }, msUntilJeDraft);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Daily JE draft failed to initialize:", err);
+  }
+
   console.log(
     `[Scheduler] Scheduler started successfully (${sectionsStarted}/${totalSections} sections initialized, ${channelSchedules.size} channels active)`,
   );
@@ -1030,6 +1197,13 @@ export function stopScheduler(): void {
     clearTimeout(adSyncTimer);
     clearInterval(adSyncTimer);
     adSyncTimer = null;
+  }
+
+  // Stop Daily JE draft timer
+  if (dailyJeDraftTimer) {
+    clearTimeout(dailyJeDraftTimer);
+    clearInterval(dailyJeDraftTimer);
+    dailyJeDraftTimer = null;
   }
 
   console.log("[Scheduler] All schedulers stopped");

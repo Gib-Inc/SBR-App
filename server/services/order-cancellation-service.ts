@@ -290,6 +290,9 @@ export class OrderCancellationService {
         source: "USER",
         orderId: order.id,
         salesOrderLineId: line.id,
+        // Anchored on the channel's external order id when one exists so a
+        // webhook-cancel racing this manual cancel claims the same ledger key.
+        externalRef: `${order.channel}:${order.externalOrderId ?? order.id}:${line.id}`,
         channel: order.channel,
         userId: this.userId,
         userName: user?.email,

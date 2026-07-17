@@ -182,6 +182,14 @@ export class InventoryMovement {
       const location = params.location || (isFinished ? "PIVOT" : "N/A");
       const isPivotFulfilled = location === "PIVOT";
 
+      // FAIL-CLOSED LADDER (reconciles origin 188f4b7 with the atomic-claim
+      // restructure): (1) sales events MUST carry an idempotency ref — refuse
+      // the movement otherwise; (2) the ref is computed here but CLAIMED
+      // atomically WITH the stock write below (claimLedgerAndUpdateItem —
+      // claiming before the write left a crash window that recorded a movement
+      // which never applied: a permanently-skipped decrement / phantom stock);
+      // (3) at the write site the ladder degrades atomic → sequential-claim
+      // (test/dev harnesses only) → FAIL CLOSED when no claim method exists.
       const requiresIdempotency = this.requiresIdempotency(params);
       const idempotencyRef = this.getIdempotencyRef(params);
       if (requiresIdempotency && !idempotencyRef) {
@@ -195,42 +203,7 @@ export class InventoryMovement {
           error: `${params.eventType} requires an idempotency reference before stock can move`,
         };
       }
-      if (idempotencyRef) {
-        if (typeof this.storage.claimInventoryMovementLedger !== "function") {
-          return {
-            success: false,
-            itemId: params.itemId,
-            sku: item.sku,
-            beforeQty: beforeState.onHand,
-            afterQty: beforeState.onHand,
-            quantityChanged: 0,
-            error: "Inventory movement ledger claim method is unavailable; refusing to mutate stock",
-          };
-        }
 
-        const claimed = await this.storage.claimInventoryMovementLedger({
-          movementType: params.eventType,
-          externalRef: idempotencyRef,
-          itemId: params.itemId,
-          source: params.source,
-          orderId: params.orderId,
-          salesOrderLineId: params.salesOrderLineId,
-          quantity: params.quantity,
-        });
-
-        if (!claimed) {
-          await this.logDedupSkip(params, item, beforeState, idempotencyRef);
-          return {
-            success: true,
-            itemId: params.itemId,
-            sku: item.sku,
-            beforeQty: beforeState.onHand,
-            afterQty: beforeState.onHand,
-            quantityChanged: 0,
-          };
-        }
-      }
-      
       let updates: {
         hildaleQty?: number;
         pivotQty?: number;
@@ -506,7 +479,59 @@ export class InventoryMovement {
 
       if (Object.keys(updates).length > 0) {
         updates.forecastDirty = true;
-        await this.storage.updateItem(params.itemId, updates);
+        if (idempotencyRef) {
+          // Claim + stock write in ONE transaction (PostgresStorage runs both
+          // inside db.transaction). Unique-conflict on the ledger → no stock
+          // change, one capped DEDUP_SKIP log row, deduplicated result.
+          // Partial storage stubs (test harnesses) may lack the atomic method;
+          // fall back to sequential claim→write so the gateway still dedups.
+          const claim = {
+            movementType: params.eventType,
+            externalRef: idempotencyRef,
+            itemId: params.itemId,
+            source: params.source,
+            orderId: params.orderId,
+            salesOrderLineId: params.salesOrderLineId,
+            quantity: params.quantity,
+          };
+          let claimResult: { claimed: boolean };
+          if (typeof (this.storage as any).claimLedgerAndUpdateItem === "function") {
+            // Rung 1 (production path): claim + write in ONE db transaction.
+            claimResult = await this.storage.claimLedgerAndUpdateItem(claim, params.itemId, updates);
+          } else if (typeof (this.storage as any).claimInventoryMovementLedger === "function") {
+            // Rung 2 (test/dev harnesses ONLY): sequential claim → write.
+            // startup-checks asserts the prod storage never lands here.
+            const claimed = await this.storage.claimInventoryMovementLedger(claim);
+            if (claimed) await this.storage.updateItem(params.itemId, updates);
+            claimResult = { claimed };
+          } else {
+            // Rung 3: FAIL CLOSED (origin 188f4b7). A storage with no claim
+            // method may not mutate claimed-event stock — refusing beats a
+            // silent unledgered write reopening the double-apply window.
+            return {
+              success: false,
+              itemId: params.itemId,
+              sku: item.sku,
+              beforeQty: beforeState.onHand,
+              afterQty: beforeState.onHand,
+              quantityChanged: 0,
+              error: "Inventory movement ledger claim method is unavailable; refusing to mutate stock",
+            };
+          }
+          if (!claimResult.claimed) {
+            await this.logDedupSkip(params, item, beforeState, idempotencyRef);
+            return {
+              success: true,
+              itemId: params.itemId,
+              sku: item.sku,
+              beforeQty: beforeState.onHand,
+              afterQty: beforeState.onHand,
+              quantityChanged: 0,
+            };
+          }
+        } else {
+          await this.storage.updateItem(params.itemId, updates);
+        }
         // Realtime broadcast: only the fields we actually mutated. forecastDirty
         // is a bookkeeping flag and not relevant to the UI, so we strip it.
         const changedFields = Object.keys(updates).filter((f) => f !== "forecastDirty");
@@ -680,7 +705,22 @@ export class InventoryMovement {
     // The key is claimed before any item update so webhook redelivery,
     // reconciliation backfills, or concurrent handlers cannot decrement/restore
     // the same movement twice.
-    if (!this.requiresIdempotency(params)) {
+    // Claimable events = mandatory sales events PLUS BOM_CONSUMPTION (optional:
+    // production draws claim on their production log when one exists, but a
+    // missing log does not refuse the movement — requiresIdempotency() stays
+    // sales-only so legacy BOM callers keep working).
+    if (!this.requiresIdempotency(params) && params.eventType !== "BOM_CONSUMPTION") {
+      return null;
+    }
+
+    // BOM_CONSUMPTION: fulfillment-time draw is a no-op (C3 fix in
+    // bom-consumption-service.ts); the live draw is production-build only.
+    // Claim on the production log so a re-fired build event (retry, replayed
+    // request, future scheduler) can never draw the same log's components twice.
+    // The ledger unique key includes item_id, so per-component claims are distinct.
+    if (params.eventType === "BOM_CONSUMPTION") {
+      if (params.externalRef) return params.externalRef;
+      if (params.productionLogId) return `PRODUCTION:${params.productionLogId}`;
       return null;
     }
 
@@ -690,9 +730,26 @@ export class InventoryMovement {
     return null;
   }
 
+  // Mandatory-ref events (origin 188f4b7): sales movements may NEVER apply
+  // unclaimed. BOM_CONSUMPTION claims opportunistically (see getIdempotencyRef)
+  // but is not mandatory.
   private requiresIdempotency(params: InventoryMovementParams): boolean {
     return params.eventType === "SALES_ORDER_CREATED" ||
       params.eventType === "SALES_ORDER_CANCELLED";
+  }
+
+  // Audit-noise cap: at most ONE DEDUP_SKIP row per (ref, item) per MT day.
+  // A webhook redelivery storm must be provable from the audit log, not drown it.
+  // Process-lifetime map; resets on deploy, which only means one extra row/day.
+  private static dedupLogSeen = new Map<string, string>();
+
+  private shouldLogDedupSkip(idempotencyRef: string, itemId: string): boolean {
+    const day = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+    const key = `${idempotencyRef}:${itemId}`;
+    if (InventoryMovement.dedupLogSeen.get(key) === day) return false;
+    InventoryMovement.dedupLogSeen.set(key, day);
+    if (InventoryMovement.dedupLogSeen.size > 50_000) InventoryMovement.dedupLogSeen.clear();
+    return true;
   }
 
   private async logDedupSkip(
@@ -702,6 +759,7 @@ export class InventoryMovement {
     idempotencyRef: string,
   ): Promise<void> {
     try {
+      if (!this.shouldLogDedupSkip(idempotencyRef, params.itemId)) return;
       const source: AuditSource = params.source === "USER" || params.source === "SYSTEM"
         ? params.source as AuditSource
         : "SYSTEM";

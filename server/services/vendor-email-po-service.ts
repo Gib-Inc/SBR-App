@@ -185,7 +185,7 @@ const SYSTEM_PROMPT = `You extract structured purchase data from a vendor order-
   "tax": number | null,
   "total": number | null
 }
-Rules: partNumber is the vendor's item/part number (e.g. "S-13320", "91257A592", a Home Depot SKU). unitCost is per-unit price, not extended. Include no-charge lines only if they have a real part number, with unitCost 0. Numbers must be plain (no "$" or commas). If a field is unknown use null.`;
+Rules: partNumber is the vendor's item/part number (e.g. "S-13320", "91257A592", a Home Depot SKU). unitCost is per-unit price, not extended. Include no-charge lines only if they have a real part number, with unitCost 0. Numbers must be plain (no "$" or commas). If a field is unknown use null — NEVER invent, estimate, or infer a value that is not stated in the email. Every number you output (quantities, unit costs, totals, dates) must appear in the email text itself. Do not fill gaps with typical or plausible values.`;
 
 function stripToJson(text: string): string {
   let t = text.trim();

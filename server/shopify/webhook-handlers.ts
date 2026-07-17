@@ -10,6 +10,7 @@ import { InventoryMovement } from '../services/inventory-movement';
 import { triggerShortageAlertsForOrder, triggerHildaleFulfillmentAlert } from '../services/ghl-stock-alert-service';
 import { ShopifyInventorySyncService } from '../services/shopify-inventory-sync-service';
 import { consumeBomForFulfilledOrder } from '../services/bom-consumption-service';
+import { reconcileShippedLines } from '../services/fulfillment-line-reconciler';
 
 export interface WebhookHandlerResult {
   success: boolean;
@@ -256,16 +257,10 @@ export async function handleOrderCreated(
       // becomes SHIPPED/DELIVERED. Mark the existing lines fulfilled so the
       // Available/Committed calc (ordered - fulfilled) stops counting an order we
       // already shipped as still-owed — the cause of the "-1,559 Available" bug.
+      // (Shared reconciler: per-fulfillment quantities preferred, qtyOrdered fill
+      // as fallback, never decreases — d439c69 semantics.)
       if (orderStatus === 'SHIPPED' || orderStatus === 'DELIVERED') {
-        for (const el of existingLines) {
-          if ((el.qtyFulfilled ?? 0) < (el.qtyOrdered ?? 0)) {
-            await storage.updateSalesOrderLine(el.id, {
-              qtyFulfilled: el.qtyOrdered,
-              qtyShipped: el.qtyOrdered,
-              backorderQty: 0,
-            });
-          }
-        }
+        await reconcileShippedLines(storage, salesOrder.id, { fulfillments: payload.fulfillments });
       }
       return {
         success: true,
@@ -496,16 +491,10 @@ export async function handleOrderUpdated(
 
       const effectiveStatus = shouldUpdate ? newStatus : previousStatus;
       if (effectiveStatus === 'SHIPPED' || effectiveStatus === 'DELIVERED') {
-        const lines = await storage.getSalesOrderLines(existingOrder.id);
-        for (const line of lines) {
-          if ((line.qtyShipped ?? 0) < (line.qtyOrdered ?? 0) || (line.qtyFulfilled ?? 0) < (line.qtyOrdered ?? 0)) {
-            await storage.updateSalesOrderLine(line.id, {
-              qtyShipped: line.qtyOrdered,
-              qtyFulfilled: line.qtyOrdered,
-              backorderQty: 0,
-            });
-          }
-        }
+        // d439c69's fill, now via the shared reconciler: per-fulfillment
+        // quantities from the payload take precedence, qtyOrdered fill covers
+        // lines with no per-line data, and it never decreases qty_shipped.
+        await reconcileShippedLines(storage, existingOrder.id, { fulfillments: payload.fulfillments });
       }
       
       return {
@@ -562,6 +551,10 @@ export async function handleOrderCancelled(
             source: 'SHOPIFY',
             orderId: existingOrder.id,
             salesOrderLineId: line.id,
+            // Anchored on Shopify's order id so a redelivered orders/cancelled
+            // webhook claims the same ledger key (line-zeroing above is the
+            // first guard; the ledger is the hard stop).
+            externalRef: `SHOPIFY:${orderId}:${line.id}`,
             channel: 'SHOPIFY',
             userId,
             notes: `Shopify order ${orderName} cancelled: released ${allocated} allocated`,
@@ -655,6 +648,11 @@ export async function handleOrderFulfilled(
       });
       
       console.log(`[Shopify Webhook] Order ${existingOrder.id} status: ${newStatus} (shipment: ${shipmentStatus || 'not tracked'})`);
+
+      // orders/fulfilled = every line item has shipped → reconcile line
+      // quantities (per-fulfillment quantities preferred, qtyOrdered fill for
+      // lines missing from the payload; never decreases qty_shipped).
+      await reconcileShippedLines(storage, existingOrder.id, { fulfillments: payload.fulfillments });
 
       // ─── BOM SUBTRACTION: Subtract raw materials for each fulfilled line item ───
       try {
@@ -757,8 +755,16 @@ export async function handleOrderPartiallyFulfilled(
         rawPayload: payload,
       });
       console.log(`[Shopify Webhook] Order ${existingOrder.id} status: ${newStatus} (shipment: ${shipmentStatus || 'not tracked'})`);
+
+      // PARTIAL fulfillment: only the per-fulfillment quantities are
+      // trustworthy — never fill to qtyOrdered here. The unfulfilled
+      // remainder must stay open (open = ordered − fulfilled-sum).
+      await reconcileShippedLines(storage, existingOrder.id, {
+        fulfillments: payload.fulfillments,
+        fillToOrdered: false,
+      });
     }
-    
+
     return { success: true, message: `Order ${orderId} partially fulfilled` };
   } catch (error: any) {
     console.error(`[Shopify Webhook] Error handling partial fulfillment:`, error);
@@ -1148,12 +1154,20 @@ export async function handleFulfillmentCreated(
         ...(deliveredAt && { deliveredAt }),
         rawPayload: { ...((existingOrder.rawPayload as any) || {}), lastFulfillment: payload },
       });
-      
+
       console.log(`  - Updated order ${existingOrder.id} status to ${newStatus}`);
+
+      // The webhook payload IS one fulfillment (line_items carry per-line
+      // quantity). Reconcile exactly what shipped in it; a fulfillments/create
+      // does not assert the whole order shipped, so no qtyOrdered fill.
+      await reconcileShippedLines(storage, existingOrder.id, {
+        fulfillments: [payload as any],
+        fillToOrdered: false,
+      });
     }
-    
-    return { 
-      success: true, 
+
+    return {
+      success: true,
       message: `Fulfillment ${fulfillmentId} created, status: ${shipmentStatus || 'pending'}`,
       data: { fulfillmentId, orderId, trackingNumber, shipmentStatus },
     };
@@ -1213,6 +1227,15 @@ export async function handleFulfillmentUpdated(
             }
           }
         }
+
+        // Reconcile line quantities from THIS fulfillment's line_items —
+        // independent of the status downgrade guard above (the reconciler
+        // never decreases, so a stale event cannot regress lines). A single
+        // fulfillment does not assert the whole order shipped → no fill.
+        await reconcileShippedLines(storage, existingOrder.id, {
+          fulfillments: [payload as any],
+          fillToOrdered: false,
+        });
       }
     }
     

@@ -25,6 +25,7 @@ import {
 } from './marketing-analytics-queries-v2';
 import { runWindsorSync, getWindsorApiKey } from '../services/windsor-ingestion-service';
 import { getCorrectedAdSummary } from '../services/corrected-ad-spend';
+import { NUMERIC_GROUNDING_CLAUSE } from '../services/numeric-grounding';
 import { WeeklyDigestService } from '../services/weekly-digest-service';
 import { seedHistoricalSales, queryFullYearComparison, queryFullCMOHistory } from './historical-sales-seed';
 import { seedZoKpiData } from './zo-kpi-seed';
@@ -512,7 +513,7 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
       const response = await client.messages.create({
         model: CLAUDE_MODEL,
         max_tokens: 2048,
-        system: `You are the CMO advisor for Sticker Burr Roller (SBR), a $10M outdoor tool company targeting $4.5M revenue this year. Voice: direct, contractions, no hype, no em dashes. Analyze the marketing data and produce ranked next-best-actions. Each must be specific, quantified, and assigned to an owner (Zo=creative/Google, Kevin=Meta, Christopher=budget, Mark=B2B). Respond ONLY with valid JSON: an array of objects with fields: rank (number), title (string, under 12 words), rationale (string, one sentence), expectedImpact (string, quantified), action (string, the specific move), owner (string). Max 6 recommendations. No markdown.`,
+        system: `You are the CMO advisor for Sticker Burr Roller (SBR), a $10M outdoor tool company targeting $4.5M revenue this year. Voice: direct, contractions, no hype, no em dashes. Analyze the marketing data and produce ranked next-best-actions. Each must be specific, quantified, and assigned to an owner (Zo=creative/Google, Kevin=Meta, Christopher=budget, Mark=B2B). ${NUMERIC_GROUNDING_CLAUSE} Respond ONLY with valid JSON: an array of objects with fields: rank (number), title (string, under 12 words), rationale (string, one sentence), expectedImpact (string, quantified), action (string, the specific move), owner (string). Max 6 recommendations. No markdown.`,
         messages: [{ role: 'user', content: `Marketing data (last 30 days):\n${JSON.stringify(snapshot, null, 2)}\n\nProduce the ranked next-best-actions as JSON.` }],
       });
 

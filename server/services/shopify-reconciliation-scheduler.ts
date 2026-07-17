@@ -14,6 +14,7 @@ import { ShopifyClient } from "./shopify-client";
 import { logService } from "./log-service";
 import { triggerSalesOrderSync } from "./ghl-sync-triggers";
 import { recordSchedulerRun } from "./scheduler-run-recorder";
+import { reconcileShippedLines } from "./fulfillment-line-reconciler";
 import { SystemLogType, SystemLogSeverity, SystemLogEntityType, type User } from "@shared/schema";
 
 const TIMEZONE = "America/Denver";
@@ -208,6 +209,15 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
                 shipToZip: orderData.shipToZip,
                 shipToCountry: orderData.shipToCountry,
               });
+
+              // P0-3: reconciliation is a SHIPPED/DELIVERED transition path —
+              // fill line qty_shipped/qty_fulfilled (per-fulfillment
+              // quantities preferred; never decreases).
+              if (orderData.status === 'SHIPPED' || orderData.status === 'DELIVERED') {
+                await reconcileShippedLines(storage, existingOrder.id, {
+                  fulfillments: (orderData.rawPayload as any)?.fulfillments,
+                });
+              }
               result.ordersUpdated++;
             } else {
               const salesOrder = await storage.createSalesOrder({
@@ -240,13 +250,19 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
                 }
                 
                 if (product) {
+                  // P0-3: orders first seen already SHIPPED/DELIVERED get
+                  // their lines recorded as shipped from the start.
+                  const lineShipped = (orderData.status === 'SHIPPED' || orderData.status === 'DELIVERED')
+                    ? lineItem.qtyOrdered
+                    : 0;
                   await storage.createSalesOrderLine({
                     salesOrderId: salesOrder.id,
                     productId: product.id,
                     sku: product.sku,
                     qtyOrdered: lineItem.qtyOrdered,
                     qtyAllocated: 0,
-                    qtyShipped: 0,
+                    qtyShipped: lineShipped,
+                    qtyFulfilled: lineShipped,
                     unitPrice: lineItem.unitPrice,
                   });
                 }

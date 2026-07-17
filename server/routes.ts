@@ -7519,11 +7519,21 @@ TOTAL: $${subtotal.toFixed(2)}
               shipToZip: orderData.shipToZip,
               shipToCountry: orderData.shipToCountry,
             });
-            
+
+            // P0-3: sync is a SHIPPED/DELIVERED transition path too — reconcile
+            // line qty_shipped/qty_fulfilled like the webhook path does
+            // (per-fulfillment quantities preferred; never decreases).
+            if (orderData.status === 'SHIPPED' || orderData.status === 'DELIVERED') {
+              const { reconcileShippedLines } = await import('./services/fulfillment-line-reconciler');
+              await reconcileShippedLines(storage, existingOrder.id, {
+                fulfillments: (orderData.rawPayload as any)?.fulfillments,
+              });
+            }
+
             // Only count as updated if there were real changes
             if (hasRealChanges) {
               updatedCount++;
-            
+
               // Track updated record
               syncedRecords.push({
                 id: orderData.externalOrderId,
@@ -7620,6 +7630,18 @@ TOTAL: $${subtotal.toFixed(2)}
               }
             }
 
+            // Duplicate-creation guard: createSalesOrder 23505-recovers to the
+            // canonical order when a webhook won the insert race — in that case
+            // this "create branch" is really an update and must NOT add a second
+            // set of lines or re-decrement stock. (The ledger claim below is the
+            // hard backstop; this guard keeps the lines table clean.)
+            const preexistingLines = await storage.getSalesOrderLines(salesOrder.id);
+            if (preexistingLines.length > 0) {
+              console.log(`[Shopify] Order ${orderData.externalOrderId} already has ${preexistingLines.length} line(s) — skipping line creation (create raced an earlier ingest)`);
+              createdCount++;
+              continue;
+            }
+
             // Create order lines
             for (const lineItem of orderData.lineItems) {
               try {
@@ -7673,14 +7695,22 @@ TOTAL: $${subtotal.toFixed(2)}
                 const qtyAllocated = Math.min(lineItem.qtyOrdered, product.availableForSaleQty || 0);
                 const backorderQty = lineItem.qtyOrdered - qtyAllocated;
 
+                // P0-3: orders first seen already SHIPPED/DELIVERED get their
+                // lines recorded as shipped from the start (mirrors the
+                // webhook path's lineFulfilled fill).
+                const lineShipped = (orderData.status === 'SHIPPED' || orderData.status === 'DELIVERED')
+                  ? lineItem.qtyOrdered
+                  : 0;
+
                 const createdLine = await storage.createSalesOrderLine({
                   salesOrderId: salesOrder.id,
                   productId: product.id,
                   sku: lineItem.sku,
                   qtyOrdered: lineItem.qtyOrdered,
                   qtyAllocated,
-                  qtyShipped: 0,
-                  backorderQty,
+                  qtyShipped: lineShipped,
+                  qtyFulfilled: lineShipped,
+                  backorderQty: lineShipped > 0 ? 0 : backorderQty,
                   unitPrice: lineItem.unitPrice,
                 });
 
@@ -7696,7 +7726,12 @@ TOTAL: $${subtotal.toFixed(2)}
                     source: "SYSTEM",
                     orderId: salesOrder.id,
                     salesOrderLineId: createdLine.id,
-                    externalRef: `SHOPIFY:${orderData.externalOrderId}:${createdLine.id}`,
+                    // Same canonical ref as the webhook path: one physical
+                    // movement claims one ledger key no matter which ingest
+                    // path fires first (webhook, sync, or backfill). NOT the
+                    // internal createdLine.id — each path mints its own line
+                    // rows, so internal ids can never dedup across paths.
+                    externalRef: `SHOPIFY:${orderData.externalOrderId}:${(lineItem as any).externalLineId ?? lineItem.sku}`,
                     channel: "SHOPIFY",
                     notes: `Shopify order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
                   });
@@ -8464,6 +8499,16 @@ TOTAL: $${subtotal.toFixed(2)}
                 deliveredAt: order.deliveredAt,
                 externalOrderId: order.externalOrderId,
               });
+
+              // P0-3: orders that land SHIPPED/DELIVERED via full-order-sync
+              // must reconcile line qty_shipped/qty_fulfilled too (idempotent;
+              // never decreases what POST /ship recorded).
+              if (order.status === 'SHIPPED' || order.status === 'DELIVERED') {
+                const { reconcileShippedLines } = await import('./services/fulfillment-line-reconciler');
+                await reconcileShippedLines(storage, existingOrder.id, {
+                  fulfillments: (order.rawPayload as any)?.fulfillments,
+                });
+              }
               ordersUpdated++;
             } else {
               // Create new order
@@ -8495,12 +8540,19 @@ TOTAL: $${subtotal.toFixed(2)}
                   continue;
                 }
                 const item = await storage.getItemBySku(line.sku);
+                // P0-3: historical orders arrive already SHIPPED/DELIVERED —
+                // record their lines as shipped from the start.
+                const lineShipped = (order.status === 'SHIPPED' || order.status === 'DELIVERED')
+                  ? (line.qtyOrdered ?? 0)
+                  : 0;
                 await storage.createSalesOrderLine({
                   salesOrderId: newOrder.id,
                   productId: item?.id,
                   sku: line.sku,
                   productName: line.name,
                   qtyOrdered: line.qtyOrdered,
+                  qtyShipped: lineShipped,
+                  qtyFulfilled: lineShipped,
                   unitPrice: line.unitPrice,
                 });
               }
@@ -8718,6 +8770,22 @@ TOTAL: $${subtotal.toFixed(2)}
               shipToZip,
               shipToCountry,
             });
+
+            // P0-3: reconcile line qty_shipped from Amazon's authoritative
+            // per-line QuantityShipped whenever the order is in a shipped
+            // state. mapStatus() yields SHIPPED only for PARTIALLY shipped
+            // Amazon orders (fully shipped → DELIVERED), so the qtyOrdered
+            // fill for SKUs missing per-line data applies only on DELIVERED.
+            if (isNowShipped) {
+              const { reconcileShippedLines } = await import('./services/fulfillment-line-reconciler');
+              await reconcileShippedLines(storage, existingOrder.id, {
+                amazonLines: orderData.lineItems.map((li: any) => ({
+                  sku: li.sku,
+                  qtyShipped: li.qtyShipped ?? 0,
+                })),
+                fillToOrdered: orderData.status === 'DELIVERED',
+              });
+            }
             updatedCount++;
             
             // Track updated record
@@ -8815,6 +8883,16 @@ TOTAL: $${subtotal.toFixed(2)}
               }
             }
 
+            // Duplicate-creation guard: createSalesOrder 23505-recovers to the
+            // canonical order when another ingest won the insert race — do NOT
+            // add a second set of lines or re-decrement stock in that case.
+            const preexistingAmzLines = await storage.getSalesOrderLines(salesOrder.id);
+            if (preexistingAmzLines.length > 0) {
+              console.log(`[Amazon] Order ${orderData.externalOrderId} already has ${preexistingAmzLines.length} line(s) — skipping line creation (create raced an earlier ingest)`);
+              createdCount++;
+              continue;
+            }
+
             // Create order lines
             for (const lineItem of orderData.lineItems) {
               try {
@@ -8868,14 +8946,23 @@ TOTAL: $${subtotal.toFixed(2)}
                 const qtyAllocated = Math.min(lineItem.qtyOrdered, product.availableForSaleQty || 0);
                 const backorderQty = lineItem.qtyOrdered - qtyAllocated;
 
+                // P0-3: Amazon lines carry an authoritative per-line shipped
+                // count (SP-API OrderItems[].QuantityShipped) — record it at
+                // create instead of the old hardcoded 0.
+                const amzShipped = Math.min(
+                  lineItem.qtyOrdered,
+                  Math.max(0, (lineItem as any).qtyShipped ?? 0),
+                );
+
                 const createdLine = await storage.createSalesOrderLine({
                   salesOrderId: salesOrder.id,
                   productId: product.id,
                   sku: lineItem.sku,
                   qtyOrdered: lineItem.qtyOrdered,
                   qtyAllocated,
-                  qtyShipped: 0,
-                  backorderQty,
+                  qtyShipped: amzShipped,
+                  qtyFulfilled: amzShipped,
+                  backorderQty: amzShipped >= lineItem.qtyOrdered ? 0 : backorderQty,
                   unitPrice: lineItem.unitPrice,
                 });
 
@@ -8891,7 +8978,11 @@ TOTAL: $${subtotal.toFixed(2)}
                     source: "SYSTEM",
                     orderId: salesOrder.id,
                     salesOrderLineId: createdLine.id,
-                    externalRef: `AMAZON:${orderData.externalOrderId}:${createdLine.id}`,
+                    // Deterministic per (order, sku): Amazon order ids are
+                    // globally unique and Amazon orders don't repeat SKUs per
+                    // line, so re-syncs/replays claim the same ledger key.
+                    // NOT createdLine.id — internal ids differ per ingest path.
+                    externalRef: `AMAZON:${orderData.externalOrderId}:${lineItem.sku}`,
                     channel: "AMAZON",
                     notes: `Amazon order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
                   });
@@ -21863,6 +21954,8 @@ Generate only the email body text, no subject line.`;
           source: "USER",
           orderId: createdOrder.id,
           salesOrderLineId: line.id,
+          // Channel-aware ref (origin's richer form): a manual POST that carries
+          // an externalOrderId keys on it, matching channel-cancel ref shapes.
           externalRef: `${validatedOrder.channel || "MANUAL"}:${createdOrder.externalOrderId || createdOrder.id}:${line.id}`,
           channel: validatedOrder.channel,
           userId: req.session.userId,
@@ -21924,6 +22017,19 @@ Generate only the email body text, no subject line.`;
         return res.status(404).json({ error: "Sales order not found" });
       }
 
+      // P0-3: a manual status flip to SHIPPED/DELIVERED is a fulfillment
+      // transition like any other — reconcile line qty_shipped/qty_fulfilled
+      // (idempotent; never decreases what POST /ship already recorded).
+      if (
+        validatedData.status &&
+        (updatedOrder.status === 'SHIPPED' || updatedOrder.status === 'DELIVERED')
+      ) {
+        const { reconcileShippedLines } = await import('./services/fulfillment-line-reconciler');
+        await reconcileShippedLines(storage, id, {
+          fulfillments: (updatedOrder.rawPayload as any)?.fulfillments,
+        });
+      }
+
       res.json(updatedOrder);
     } catch (error: any) {
       if (error.name === 'ZodError') {
@@ -21972,6 +22078,9 @@ Generate only the email body text, no subject line.`;
               source: "USER",
               orderId: id,
               salesOrderLineId: line.id,
+              // Same key shape as webhook/service cancels: a delete racing a
+              // channel cancel restores stock exactly once.
+              externalRef: `${order.channel}:${order.externalOrderId ?? order.id}:${line.id}`,
               channel: order.channel,
               userId: req.session.userId,
               userName: user?.email,
@@ -22820,6 +22929,58 @@ Generate only the email body text, no subject line.`;
       res.json({ applied: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Batch approve failed" });
+    }
+  });
+
+  // ── BOOK.E walk phase — daily sales journal entries ─────────────────────
+  // The scheduler DRAFTS one JE per channel per MT day into daily_je_proposals;
+  // QuickBooks is written exclusively by the approve endpoint below (human click).
+  const dailyJe = await import('./services/daily-sales-je-service');
+
+  // GET /api/bookkeeping/daily-je - list proposals, latest first
+  app.get("/api/bookkeeping/daily-je", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      res.json({ proposals: await dailyJe.listDailyJeProposals() });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to load daily JE proposals" });
+    }
+  });
+
+  // POST /api/bookkeeping/daily-je/:id/approve - posts the drafted JE to QuickBooks.
+  // The service claims the row atomically (pending → posting) before touching
+  // QBO; a lost race comes back as conflict → 409, never a second post.
+  app.post("/api/bookkeeping/daily-je/:id/approve", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const result = await dailyJe.approveProposal(Number(req.params.id), req.session.userId!);
+      if (!result.ok) return res.status(result.conflict ? 409 : 422).json({ error: result.error });
+      res.json({ success: true, postedJeId: result.postedJeId, adoptedAfterFailure: result.adoptedAfterFailure ?? false });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to approve daily JE" });
+    }
+  });
+
+  // POST /api/bookkeeping/daily-je/:id/reject
+  app.post("/api/bookkeeping/daily-je/:id/reject", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const ok = await dailyJe.rejectProposal(Number(req.params.id), req.session.userId!);
+      if (!ok) return res.status(422).json({ error: "Proposal not found or already decided" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to reject daily JE" });
+    }
+  });
+
+  // POST /api/bookkeeping/daily-je/:id/redraft - recovery lever for a
+  // mis-clicked Dismiss (or an instant retry on a blocked row): retires the
+  // rejected/blocked row to 'superseded' and re-drafts the date through the
+  // full guard pass. Draft only — nothing posts without a fresh Approve.
+  app.post("/api/bookkeeping/daily-je/:id/redraft", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const result = await dailyJe.redraftProposal(Number(req.params.id), req.session.userId!);
+      if (!result.ok) return res.status(result.conflict ? 409 : 422).json({ error: result.error });
+      res.json({ success: true, run: result.run });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to re-draft daily JE" });
     }
   });
 
@@ -24333,6 +24494,38 @@ Generate only the email body text, no subject line.`;
         balanceSheet = { ...balanceSheet, cash: resolvedCash };
       }
 
+      // CASH-BASIS burn — from operator-entered bank-confirmed balances, the only true
+      // cash movement (the P&L "burn" is accrual: it swung -$31K → +$80K in one night of
+      // income-booking catch-up and excludes debt principal). Needs two entries ≥7 days
+      // apart within 45 days; otherwise null with a reason — never a plausible fill.
+      let cashBurn: {
+        burn30: number | null;
+        from?: { asOf: string; balance: number };
+        to?: { asOf: string; balance: number };
+        spanDays?: number;
+        reason?: string;
+      } = { burn30: null, reason: "not available — needs two bank-confirmed balances at least 7 days apart in the last 45 days" };
+      try {
+        const entries = (((await db.execute(sql`
+          SELECT available_balance::float8 AS balance, as_of
+          FROM bank_balance_entries
+          WHERE as_of >= now() - interval '45 days'
+          ORDER BY as_of ASC`)).rows ?? []) as Array<{ balance: number; as_of: string | Date }>);
+        if (entries.length >= 2) {
+          const first = entries[0], lastE = entries[entries.length - 1];
+          const spanDays = (new Date(lastE.as_of as any).getTime() - new Date(first.as_of as any).getTime()) / 86400000;
+          if (spanDays >= 7) {
+            const day = (d: any) => new Date(d).toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+            cashBurn = {
+              burn30: Math.round(((Number(first.balance) - Number(lastE.balance)) / spanDays) * 30.4 * 100) / 100,
+              from: { asOf: day(first.as_of), balance: Number(first.balance) },
+              to: { asOf: day(lastE.as_of), balance: Number(lastE.balance) },
+              spanDays: Math.round(spanDays * 10) / 10,
+            };
+          }
+        }
+      } catch (e: any) { console.warn("[CIPH.R] overview cash-burn failed:", e?.message ?? e); }
+
       // Live debt position — overlay the CURRENT debt stack from credit_lines (synced
       // daily from QB liability accounts) + live QB balance-sheet totals + live A/P,
       // so "Debt & Position" reflects today, not the last uploaded balance sheet (which
@@ -24383,6 +24576,7 @@ Generate only the email body text, no subject line.`;
         expectedPayouts,
         adChannels,
         adChannelsWindowDays: 30,
+        cashBurn,
       });
     } catch (error: any) {
       console.error('[CIPH.R] Finances overview error:', error);
@@ -26031,22 +26225,17 @@ Generate only the email body text, no subject line.`;
     try {
       const { db } = await import("./db");
       const { sql } = await import("drizzle-orm");
-      // Use the CANONICAL classifier so this matches monthly_financials. The old inline rule
-      // classified BOTH the real Gross Sales AND the "1 - Gross Sales (Match Shopify...)"
-      // duplicate as income → net sales double-counted ~70-100% (phantom profit). It also
-      // wrongly treated discounts/returns as positive income; classifyAccount makes them contra.
+      // Shared mirror-deduped reader + the CANONICAL classifier so this matches
+      // monthly_financials: mirror pairs count once, one-sided Match-Shopify corrections
+      // count in full, and discounts/returns are contra (not positive income).
       const { classifyAccount, rollup } = await import("./services/finance-pnl-service");
+      const { getDedupedMonthlyGl } = await import("./services/gl-reader");
       const r0 = (n: number) => Math.round(n * 100) / 100;
-      const rawMonths = ((await db.execute(sql`
-        select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym, account_name, sum(amount) as amt
-        from qb_pl_detail
-        where txn_date >= (date_trunc('month', current_date) - interval '3 months') and txn_date < date_trunc('month', current_date)
-        group by 1, 2`)).rows ?? []) as any[];
+      const rawMonths = await getDedupedMonthlyGl(db, { monthsBack: 3, cutoff: "completeMonths" });
       const monthItems = new Map<string, Array<{ account: string; amount: number }>>();
       for (const r of rawMonths) {
-        const ym = String(r.ym);
-        if (!monthItems.has(ym)) monthItems.set(ym, []);
-        monthItems.get(ym)!.push({ account: String(r.account_name), amount: Number(r.amt) || 0 });
+        if (!monthItems.has(r.month)) monthItems.set(r.month, []);
+        monthItems.get(r.month)!.push({ account: r.account, amount: r.amount });
       }
       const monthsAgg = Array.from(monthItems.entries())
         .sort((a, b) => (a[0] < b[0] ? 1 : -1)) // most-recent first
@@ -26061,7 +26250,7 @@ Generate only the email body text, no subject line.`;
           select to_char(date_trunc('month', txn_date),'YYYY-MM') as ym,
             coalesce(nullif(trim(vendor_or_payee),''),'(unspecified)') as vendor, account_name, sum(amount) as amt
           from qb_pl_detail
-          where txn_date >= ${prior.month + '-01'}::date and txn_date < date_trunc('month', current_date)
+          where txn_date >= ${prior.month + '-01'}::date and txn_date < date_trunc('month', (now() AT TIME ZONE 'America/Denver'))
           group by 1, 2, 3`)).rows ?? []) as any[];
         const moverMap = new Map<string, { curr: number; prior: number }>();
         for (const r of rawMovers) {
@@ -26129,16 +26318,37 @@ Generate only the email body text, no subject line.`;
 
   app.post("/api/marketing/meta-manual/ingest", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { parseMetaTracker } = await import("./services/meta-tracker-parser");
+      const { parseMetaTracker, hashRawText } = await import("./services/meta-tracker-parser");
       const { hashMarketingSnapshot } = await import("./services/reconciliation-service");
-      const parsed = parseMetaTracker(String(req.body?.text ?? ""));
+      const rawText = String(req.body?.text ?? "");
+      const parsed = parseMetaTracker(rawText);
+      // BROKEN-CELL GUARD: a broken SUMMARY/total cell, or >5% broken data rows,
+      // rejects the paste with every broken cell NAMED — never silently plugged.
+      if (parsed.error === "broken formula cells") {
+        return res.status(422).json({ error: "broken formula cells", brokenCells: parsed.brokenCells, warnings: parsed.warnings });
+      }
       if (!parsed.ok || !parsed.periodStart || !parsed.periodEnd) {
         return res.status(400).json({ error: "Nothing parseable in the paste", warnings: parsed.warnings });
       }
 
+      // This path is the FALLBACK while the Windsor Meta OAuth is flagged —
+      // label it so a manual paste is never mistaken for the canonical feed.
+      const fallbackNote = "FALLBACK source (manual paste) — canonical automated source: Windsor Meta feed (currently stale)";
+
+      // PASTE DEDUP: a byte-identical re-paste of an already-ACTIVE META
+      // snapshot → 409, NO writes. (The same Meta export was uploaded twice
+      // this month; sourceHash only catches the parsed content, later.)
+      const rawTextHash = hashRawText(rawText);
+      const active = await storage.getActiveMarketingSpendSnapshots();
+      const duplicate = (active as any[]).find((s) =>
+        String(s.platform || "").toUpperCase() === "META" && s.rawTextHash && s.rawTextHash === rawTextHash,
+      );
+      if (duplicate) {
+        return res.status(409).json({ error: "already imported", snapshotId: duplicate.id });
+      }
+
       // Supersede ANY active META snapshot overlapping this period — re-pasting
       // the growing monthly tracker must replace, never double-count.
-      const active = await storage.getActiveMarketingSpendSnapshots();
       const overlapping = (active as any[]).filter((s) =>
         String(s.platform || "").toUpperCase() === "META" &&
         s.periodStart && s.periodEnd &&
@@ -26170,8 +26380,11 @@ Generate only the email body text, no subject line.`;
       await storage.createMarketingSpendSnapshot({
         platform: "META", periodStart: parsed.periodStart, periodEnd: parsed.periodEnd,
         spend: parsed.totalSpend, conversions: parsed.totalPurchases, revenue: parsed.totalConversionValue,
-        currency: "USD", source: "manual:meta-tracker", status: "OK", sourceHash,
-        raw: { days: parsed.days.length, campaign: parsed.campaign, ingestedVia: "meta-manual" } as unknown,
+        currency: "USD", source: "manual:meta-tracker",
+        status: parsed.dataGaps.length ? "DATA_GAPPED" : "OK", sourceHash,
+        rawTextHash, notes: fallbackNote,
+        dataGaps: parsed.dataGaps.length ? (parsed.dataGaps as unknown) : null,
+        raw: { days: parsed.days.length, campaign: parsed.campaign, ingestedVia: "meta-manual", brokenCells: parsed.brokenCells } as unknown,
       } as any);
 
       // Daily campaign rows so Meta shows on the per-campaign directive board
@@ -26195,7 +26408,16 @@ Generate only the email body text, no subject line.`;
         source: "manual:meta-tracker",
       }]).catch(() => {});
 
-      res.json({ success: true, ingested: { ...parsed, superseded: overlapping.length } });
+      res.json({
+        success: true,
+        source: fallbackNote,
+        // Named data gaps (e.g. "COGS missing for N rows — margin/ROAS on those
+        // rows not computed") + hard-flagged broken cells — stated, never plugged.
+        dataGaps: parsed.dataGaps,
+        brokenCells: parsed.brokenCells,
+        warnings: parsed.warnings,
+        ingested: { ...parsed, superseded: overlapping.length },
+      });
     } catch (error: any) {
       console.error('[Meta Manual] ingest error:', error);
       res.status(500).json({ error: error.message || 'Failed to ingest tracker' });

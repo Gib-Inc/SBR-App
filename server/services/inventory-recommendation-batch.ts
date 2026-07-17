@@ -22,6 +22,12 @@ import { buildReportContext, formatReportContextForPrompt, type ReportContext } 
 export type BatchRunReason = "SCHEDULED_10AM" | "SCHEDULED_3PM" | "CRITICAL_TRIGGER" | "MANUAL";
 export type OrderTiming = "ORDER_TODAY" | "SAFE_UNTIL_TOMORROW";
 
+// Absolute floor for LLM-scraped prices (Matt's P1-4 spec): reject any scraped
+// price below $0.50 outright. Sub-50-cent "unit prices" from a supplier page
+// are extraction garbage (cents mis-parse, per-gram/per-piece tier, truncated
+// number) — they must never be written to the item or land on a PO line.
+const MIN_SCRAPED_PRICE_USD = 0.50;
+
 export interface BatchRunParams {
   reason: BatchRunReason;
   affectedSkus?: string[];
@@ -713,21 +719,55 @@ Respond with JSON in this exact format:
   }
 
   /**
-   * Normalize a recommendation from LLM response to our format
+   * Normalize a recommendation from LLM response to our format.
+   *
+   * Anti-hallucination clamps (P1-4): the LLM narrative is advisory only —
+   * the deterministic engine is the bounds oracle for every number that gets
+   * persisted or turned into a PO:
+   * - recommendedQty must land within [max(MOQ, 75% of deterministic qty),
+   *   125% of deterministic qty]; outside that band the deterministic qty is
+   *   used instead (logged + noted for the human reviewer).
+   * - daysUntilStockout is ALWAYS the deterministic context value. The LLM
+   *   never sets it.
    */
   private normalizeRecommendation(rec: any, contexts: SKUContext[]): LLMRecommendation {
     const context = contexts.find(c => c.sku === rec.sku || c.itemId === rec.itemId);
-    
+
+    const llmQty = typeof rec.recommendedQty === "number" && isFinite(rec.recommendedQty) ? rec.recommendedQty : 0;
+    let recommendedQty = llmQty;
+    let daysUntilStockout = typeof rec.daysUntilStockout === "number" ? rec.daysUntilStockout : 999;
+    let notesForHuman: string | undefined = rec.notesForHuman || undefined;
+
+    if (context) {
+      // daysUntilStockout: deterministic context value, never the LLM's.
+      daysUntilStockout = Math.round(context.daysUntilStockout);
+
+      // recommendedQty: clamp to deterministic bounds.
+      const det = this.computeDeterministicRecommendation(context);
+      const lowerBound = Math.max(context.supplierMOQ || 0, Math.floor(det.recommendedQty * 0.75));
+      const upperBound = Math.max(1, Math.ceil(det.recommendedQty * 1.25));
+      if (llmQty < lowerBound || llmQty > upperBound) {
+        recommendedQty = det.recommendedQty;
+        if (llmQty !== det.recommendedQty) {
+          console.warn(
+            `[AI Batch] ${context.sku}: LLM recommendedQty ${llmQty} outside deterministic bounds [${lowerBound}, ${upperBound}] — using deterministic qty ${det.recommendedQty}`
+          );
+          const clampNote = `qty clamped to deterministic bounds (LLM said ${llmQty})`;
+          notesForHuman = notesForHuman ? `${notesForHuman}; ${clampNote}` : clampNote;
+        }
+      }
+    }
+
     return {
       sku: rec.sku || context?.sku || "",
       itemId: rec.itemId || context?.itemId || "",
       riskLevel: this.normalizeRiskLevel(rec.riskLevel),
       recommendedAction: this.normalizeAction(rec.recommendedAction),
-      recommendedQty: typeof rec.recommendedQty === "number" ? rec.recommendedQty : 0,
-      daysUntilStockout: typeof rec.daysUntilStockout === "number" ? rec.daysUntilStockout : (context?.daysUntilStockout || 999),
+      recommendedQty,
+      daysUntilStockout,
       orderTiming: this.normalizeOrderTiming(rec.orderTiming),
       reasoning: rec.reasoning || rec.rationale || "No reasoning provided",
-      notesForHuman: rec.notesForHuman || undefined,
+      notesForHuman,
     };
   }
 
@@ -758,10 +798,21 @@ Respond with JSON in this exact format:
   }
 
   /**
-   * Generate deterministic recommendations when LLM is unavailable
+   * Generate deterministic recommendations for a set of contexts.
+   * Also serves as the bounds oracle for clamping LLM output (see
+   * normalizeRecommendation / computeDeterministicRecommendation).
    */
   private generateDeterministicRecommendations(contexts: SKUContext[]): LLMRecommendation[] {
-    return contexts.map(ctx => {
+    return contexts.map(ctx => this.computeDeterministicRecommendation(ctx));
+  }
+
+  /**
+   * Compute the deterministic (non-LLM) recommendation for one SKU context.
+   * Pure math over the context — no LLM involved. Used both as a fallback
+   * recommendation and as the bounds oracle that clamps LLM quantities.
+   */
+  private computeDeterministicRecommendation(ctx: SKUContext): LLMRecommendation {
+    {
       const { daysUntilStockout, leadTimeDays, safetyStockDays, riskThresholdHighDays, riskThresholdMediumDays } = ctx;
       const coverageBuffer = daysUntilStockout - leadTimeDays;
 
@@ -841,7 +892,7 @@ Respond with JSON in this exact format:
         orderTiming,
         reasoning,
       };
-    });
+    }
   }
 
   /**
@@ -943,18 +994,65 @@ Respond with JSON in this exact format:
             llmProvider,
             apiKey
           );
-          
+
           if (priceResult.success && priceResult.price && priceResult.price > 0) {
             if (priceResult.confidence === 'high' || priceResult.confidence === 'medium') {
-              unitCost = priceResult.price;
-              console.log(`[AI Batch] LLM extracted price $${unitCost} for ${sku} (${priceResult.confidence} confidence)`);
-              
-              await this.storage.updateItem(item.id, {
-                defaultPurchaseCost: unitCost,
-                currency: priceResult.currency,
-                costSource: 'AUTO_SCRAPED',
-                lastCostUpdatedAt: new Date(),
-              });
+              // AUTO_SCRAPED write gate (P1-4): a scraped price is untrusted
+              // LLM output over untrusted page content. Validate it against
+              // the prior known cost before it can touch the item or the PO.
+              const scrapedPrice = priceResult.price;
+              const priorCost = designatedSupplierItem.price ?? item.defaultPurchaseCost ?? 0;
+
+              const applyScrapedPrice = async () => {
+                unitCost = scrapedPrice;
+                console.log(`[AI Batch] LLM extracted price $${unitCost} for ${sku} (${priceResult.confidence} confidence)`);
+                await this.storage.updateItem(item.id, {
+                  defaultPurchaseCost: unitCost,
+                  currency: priceResult.currency,
+                  costSource: 'AUTO_SCRAPED',
+                  lastCostUpdatedAt: new Date(),
+                });
+              };
+
+              if (scrapedPrice < MIN_SCRAPED_PRICE_USD) {
+                // Absolute floor — rejected before any relative (±%) checks.
+                console.warn(`[AI Batch] REJECTED scraped price $${scrapedPrice} for ${sku} — below the $${MIN_SCRAPED_PRICE_USD.toFixed(2)} absolute floor for scraped prices. Keeping prior cost.`);
+              } else if (priorCost > 0) {
+                const ratio = scrapedPrice / priorCost;
+                if (ratio < 0.6 || ratio > 1.4) {
+                  // Outside ±40% of the prior cost — reject outright.
+                  console.warn(`[AI Batch] REJECTED scraped price $${scrapedPrice} for ${sku} — outside ±40% of prior cost $${priorCost}. Keeping prior cost.`);
+                } else if (ratio < 0.85 || ratio > 1.15) {
+                  // Within ±40% but beyond ±15% — do NOT auto-write. Propose
+                  // for human confirmation and keep the prior cost for now.
+                  try {
+                    await this.storage.createDataReconciliationLog([{
+                      dataType: 'auto_scraped_cost',
+                      entityKey: sku,
+                      action: 'PROPOSED',
+                      field: 'defaultPurchaseCost',
+                      oldValue: String(priorCost),
+                      newValue: String(scrapedPrice),
+                      reason: `Auto-scraped price $${scrapedPrice} is ${((ratio - 1) * 100).toFixed(1)}% off prior cost $${priorCost} (beyond ±15%, within ±40%) — human confirmation required before applying`,
+                      source: item.supplierProductUrl,
+                    }]);
+                  } catch (logError: any) {
+                    console.warn(`[AI Batch] Failed to log PROPOSED scraped cost for ${sku}: ${logError.message}`);
+                  }
+                  console.log(`[AI Batch] Scraped price $${scrapedPrice} for ${sku} proposed for human confirmation (prior $${priorCost}); keeping prior cost`);
+                } else {
+                  // Within ±15% of prior — safe to auto-write.
+                  await applyScrapedPrice();
+                }
+              } else {
+                // No prior cost on file — only auto-write on high confidence
+                // and a sane absolute bound.
+                if (priceResult.confidence === 'high' && scrapedPrice < 10000) {
+                  await applyScrapedPrice();
+                } else {
+                  console.warn(`[AI Batch] Skipping scraped price $${scrapedPrice} for ${sku} — no prior cost on file and auto-write requires high confidence + price < $10,000 (got ${priceResult.confidence} confidence)`);
+                }
+              }
             } else {
               console.log(`[AI Batch] Skipping low-confidence price $${priceResult.price} for ${sku} - not updating`);
             }

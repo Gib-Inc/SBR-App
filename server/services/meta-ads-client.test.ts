@@ -172,6 +172,87 @@ describe("Meta direct Marketing API feed", () => {
     }
   });
 
+  it("gapped rows cannot make the feed look fresh: all-gapped recent window → NOT actual and NOT protected", async () => {
+    // Three recent direct rows, ALL DATA_GAPPED (the API returned nothing) —
+    // there is no usable data, so confidence must not be "actual" and the
+    // period must not be protected from a manual upload that could fill it.
+    const storage = makeStorage([
+      { id: "gap-1", platform: "META", periodStart: "2026-07-13", periodEnd: "2026-07-13", spend: 0, source: "meta-direct-api", status: "DATA_GAPPED" },
+      { id: "gap-2", platform: "META", periodStart: "2026-07-14", periodEnd: "2026-07-14", spend: 0, source: "meta-direct-api", status: "DATA_GAPPED" },
+      { id: "gap-3", platform: "META", periodStart: "2026-07-15", periodEnd: "2026-07-15", spend: 0, source: "meta-direct-api", status: "DATA_GAPPED" },
+    ]);
+    const oldToken = process.env.META_ACCESS_TOKEN;
+    const oldAccount = process.env.META_AD_ACCOUNT_ID;
+    process.env.META_ACCESS_TOKEN = "token";
+    process.env.META_AD_ACCOUNT_ID = "act_1";
+    try {
+      const confidence = await getMetaDirectFeedConfidence({ storage: storage as any, now: new Date("2026-07-16T12:00:00Z") });
+      expect(confidence.confidence).not.toBe("actual");
+      expect(confidence.confidence).toBe("stale");
+      // The reason names the gapped days so the operator sees WHICH days have no data.
+      expect(confidence.reason).toContain("DATA_GAPPED");
+      expect(confidence.reason).toContain("2026-07-15");
+    } finally {
+      if (oldToken == null) delete process.env.META_ACCESS_TOKEN;
+      else process.env.META_ACCESS_TOKEN = oldToken;
+      if (oldAccount == null) delete process.env.META_AD_ACCOUNT_ID;
+      else process.env.META_AD_ACCOUNT_ID = oldAccount;
+    }
+
+    await expect(isFreshMetaDirectProtectedForPeriod("2026-07-15", "2026-07-15", {
+      storage: storage as any,
+      now: new Date("2026-07-16T12:00:00Z"),
+    })).resolves.toMatchObject({
+      protected: false,
+      overlappingDirectIds: [],
+    });
+  });
+
+  it("mixed OK + gapped rows: verdicts come from the OK rows only", async () => {
+    // Latest row by periodEnd is GAPPED (07-15); the freshest REAL data is
+    // 07-14. Confidence/protection must be computed from the 07-14 OK row —
+    // fresh as of 07-16 (2 days) — and the gapped 07-15 row must not protect
+    // its own day.
+    const storage = makeStorage([
+      { id: "ok-1", platform: "META", periodStart: "2026-07-14", periodEnd: "2026-07-14", spend: 25, source: "meta-direct-api", status: "OK" },
+      { id: "gap-1", platform: "META", periodStart: "2026-07-15", periodEnd: "2026-07-15", spend: 0, source: "meta-direct-api", status: "DATA_GAPPED" },
+    ]);
+    const oldToken = process.env.META_ACCESS_TOKEN;
+    const oldAccount = process.env.META_AD_ACCOUNT_ID;
+    process.env.META_ACCESS_TOKEN = "token";
+    process.env.META_AD_ACCOUNT_ID = "act_1";
+    try {
+      const confidence = await getMetaDirectFeedConfidence({ storage: storage as any, now: new Date("2026-07-16T12:00:00Z") });
+      // Judged from the OK row (07-14, 2 days old) → still actual; the gapped
+      // 07-15 row is excluded from the freshness computation.
+      expect(confidence).toMatchObject({ confidence: "actual", latestPeriodEnd: "2026-07-14" });
+    } finally {
+      if (oldToken == null) delete process.env.META_ACCESS_TOKEN;
+      else process.env.META_ACCESS_TOKEN = oldToken;
+      if (oldAccount == null) delete process.env.META_AD_ACCOUNT_ID;
+      else process.env.META_AD_ACCOUNT_ID = oldAccount;
+    }
+
+    // The OK day stays protected against manual double-counting…
+    await expect(isFreshMetaDirectProtectedForPeriod("2026-07-14", "2026-07-14", {
+      storage: storage as any,
+      now: new Date("2026-07-16T12:00:00Z"),
+    })).resolves.toMatchObject({
+      protected: true,
+      overlappingDirectIds: ["ok-1"],
+      latestPeriodEnd: "2026-07-14",
+    });
+
+    // …but the gapped day is NOT protected — only OK rows can overlap-protect.
+    await expect(isFreshMetaDirectProtectedForPeriod("2026-07-15", "2026-07-15", {
+      storage: storage as any,
+      now: new Date("2026-07-16T12:00:00Z"),
+    })).resolves.toMatchObject({
+      protected: false,
+      overlappingDirectIds: [],
+    });
+  });
+
   it("protects fresh direct periods from later manual Meta uploads but releases stale periods", async () => {
     const storage = makeStorage([
       { id: "direct", platform: "META", periodStart: "2026-07-15", periodEnd: "2026-07-15", spend: 20, source: "meta-direct-api" },

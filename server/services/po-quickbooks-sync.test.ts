@@ -86,6 +86,8 @@ beforeEach(() => {
 });
 
 function seedPO(id: string, extra: Record<string, any> = {}) {
+  // Default SENT (PR #4's merged convention): the sync refuses POs that aren't
+  // approved/sent/received — fixtures assume an eligible PO.
   h.pos.set(id, { id, poNumber: `PO-${id}`, supplierId: `sup-${id}`, status: "SENT", ...extra });
   h.suppliers.set(`sup-${id}`, { id: `sup-${id}`, name: `Vendor ${id}` });
   h.linesByPo.set(id, [{ id: `l-${id}`, itemId: `i-${id}`, qtyOrdered: 2, unitCost: 5 }]);

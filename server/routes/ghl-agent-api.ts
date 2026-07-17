@@ -8,6 +8,7 @@ import { items, salesOrders, salesOrderLines, purchaseOrders, purchaseOrderLines
 import { eq, ilike, and, or, lt, desc } from "drizzle-orm";
 import { GoHighLevelClient } from "../services/gohighlevel-client";
 import { storage } from "../storage";
+import { NUMERIC_GROUNDING_CLAUSE } from "../services/numeric-grounding";
 import { returnsService } from "../services/returns-service";
 import bcrypt from "bcrypt";
 import sgMail from "@sendgrid/mail";
@@ -1883,7 +1884,9 @@ Response format: {"intent": "intent_name", "params": {extracted params}, "confid
               model: "claude-haiku-4-5-20251001",
               max_tokens: 500,
               system: `You are an AI assistant for Sticker Burr Roller inventory management. Answer concisely for voice/SMS.
-              
+
+${NUMERIC_GROUNDING_CLAUSE}
+
 Current inventory snapshot:
 - Total SKUs: ${allItemsForContext.length}
 - Low stock items: ${lowStock.length}

@@ -287,10 +287,15 @@ export default async function runApp(
   // lines) but doesn't block startup so other routes still come up if
   // anything is off. Awaited here so the output appears before the
   // "serving on ..." line — easy to spot in the deploy log tail.
+  // EXCEPTION: errors marked `fatal` (assertStorageClaimGate — the atomic
+  // inventory claim gate is missing from the active storage) are rethrown so
+  // the server never reaches listen(); a degraded boot here would silently
+  // reopen the claimed-movement crash window.
   try {
     const { runStartupChecks } = await import("./services/startup-checks");
     await runStartupChecks();
   } catch (err: any) {
+    if (err?.fatal === true) throw err;
     console.error("[Startup Checks] Failed to run:", err?.message ?? err);
   }
 

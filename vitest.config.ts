@@ -12,6 +12,7 @@ export default defineConfig({
     environment: "node",
     // Only pick up server-side unit tests for now. Widen this glob as more
     // suites are added (e.g. integration tests under server/shopify).
-    include: ["server/**/*.test.ts"],
+    // scripts/: pure helpers for repo scripts (no DB in tests).
+    include: ["server/**/*.test.ts", "scripts/**/*.test.ts"],
   },
 });

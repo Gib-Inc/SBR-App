@@ -557,6 +557,38 @@ describe("idempotency ledger — work-order regression suite", () => {
     expect(storage.get("FG1").availableForSaleQty).toBe(100);
   });
 
+  it("P0-2 true-up path: MANUAL_COUNT restore applies AFTER a claimed sales decrement (old claims cannot no-op it)", async () => {
+    // The true-up script restores stock via MANUAL_COUNT. MANUAL_COUNT is
+    // unclaimed BY DESIGN (requiresIdempotency is sales-only and
+    // getIdempotencyRef returns null for it), so a ledger claim burned by the
+    // original SALES_ORDER_CREATED movement must never dedup/no-op the
+    // restoration — the "should apply" here is an assertion, not a hope.
+    finished({ availableForSaleQty: 100 });
+    await engine.apply({
+      eventType: "SALES_ORDER_CREATED", itemId: "FG1", quantity: 10,
+      location: "PIVOT", source: "SHOPIFY", orderId: "so-trueup",
+      salesOrderLineId: "line-1", externalRef: "SHOPIFY:9010:li-1",
+    });
+    expect(storage.get("FG1").availableForSaleQty).toBe(90);
+
+    const restore = await engine.apply({
+      eventType: "MANUAL_COUNT", itemId: "FG1", quantity: 10,
+      location: "PIVOT", source: "SYSTEM",
+    });
+    expect(restore.success).toBe(true);
+    expect(restore.quantityChanged).toBe(10);
+    expect(storage.get("FG1").availableForSaleQty).toBe(100); // restore APPLIED
+
+    // And a second true-up pass on the same item still applies — MANUAL_COUNT
+    // never routes through the claim ledger at all.
+    const second = await engine.apply({
+      eventType: "MANUAL_COUNT", itemId: "FG1", quantity: -2,
+      location: "PIVOT", source: "SYSTEM",
+    });
+    expect(second.success).toBe(true);
+    expect(storage.get("FG1").availableForSaleQty).toBe(98);
+  });
+
   it("claim is NOT burned when the movement produces no stock update (atomicity contract)", async () => {
     // PURCHASE_ORDER_RECEIVED on finished product = warn-and-no-op; it is not a
     // claimed event type, so the ledger stays empty and nothing is recorded.

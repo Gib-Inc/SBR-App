@@ -22,6 +22,12 @@ import { buildReportContext, formatReportContextForPrompt, type ReportContext } 
 export type BatchRunReason = "SCHEDULED_10AM" | "SCHEDULED_3PM" | "CRITICAL_TRIGGER" | "MANUAL";
 export type OrderTiming = "ORDER_TODAY" | "SAFE_UNTIL_TOMORROW";
 
+// Absolute floor for LLM-scraped prices (Matt's P1-4 spec): reject any scraped
+// price below $0.50 outright. Sub-50-cent "unit prices" from a supplier page
+// are extraction garbage (cents mis-parse, per-gram/per-piece tier, truncated
+// number) — they must never be written to the item or land on a PO line.
+const MIN_SCRAPED_PRICE_USD = 0.50;
+
 export interface BatchRunParams {
   reason: BatchRunReason;
   affectedSkus?: string[];
@@ -1008,7 +1014,10 @@ Respond with JSON in this exact format:
                 });
               };
 
-              if (priorCost > 0) {
+              if (scrapedPrice < MIN_SCRAPED_PRICE_USD) {
+                // Absolute floor — rejected before any relative (±%) checks.
+                console.warn(`[AI Batch] REJECTED scraped price $${scrapedPrice} for ${sku} — below the $${MIN_SCRAPED_PRICE_USD.toFixed(2)} absolute floor for scraped prices. Keeping prior cost.`);
+              } else if (priorCost > 0) {
                 const ratio = scrapedPrice / priorCost;
                 if (ratio < 0.6 || ratio > 1.4) {
                   // Outside ±40% of the prior cost — reject outright.

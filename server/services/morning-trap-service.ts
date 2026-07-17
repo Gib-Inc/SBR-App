@@ -104,6 +104,22 @@ const PROMPT_BENCHMARK_VALUES: number[] = [
   29.1, 908000,   // 2025 ad-spend context
 ];
 
+/**
+ * Google attribution-gap gate — the ONE definition shared by the briefing
+ * data payload and the n8n webhook payload (they previously duplicated the
+ * condition and could drift apart).
+ *
+ * Windsor does NOT populate Google conversion value, so revenue == 0 with
+ * spend > 0 is a MISSING ATTRIBUTION FIELD, not zero sales. Presenting it as
+ * "$0 / ROAS 0:1" made the LLM emit a false "TOTAL CONVERSION TRACKING
+ * FAILURE" SMS daily (2026-06). Gate it as a data gap instead.
+ */
+export function isGoogleAttributionGapped(
+  data: { totalSpend: number; totalRevenue: number } | null | undefined,
+): boolean {
+  return !!data && data.totalSpend > 0 && data.totalRevenue <= 0;
+}
+
 export interface TrapCheckResult {
   success: boolean;
   briefing: string | null;
@@ -173,31 +189,28 @@ export class MorningTrapService {
     // numeric value placed into it)
     const { payload: dataPayload, whitelist } = this.buildDataPayload(runDate, shopifyData, shopifyError, googleAdsData, googleAdsError);
 
-    // Generate briefing via Claude
+    // Generate briefing via Claude, with numeric-provenance escalation:
+    // reject → regenerate once → deterministic fallback (never send LLM prose
+    // that failed verification twice).
     let briefing: string | null = null;
     try {
-      briefing = await this.generateBriefing(userId, dataPayload);
-
-      // Numeric provenance check: every figure in the composed SMS must trace
-      // back to the data payload. Fail VISIBLE (append a caution + warn audit
-      // row), never fail silent, never block the send.
-      try {
-        const validation = validateNumbersAgainstWhitelist(briefing, whitelist);
-        if (!validation.ok) {
-          const flagged = validation.violations.map(v => v.raw);
-          console.warn(`[MorningTrap] Numeric grounding: ${flagged.length} figure(s) in the briefing not traceable to source data: ${flagged.join(', ')}`);
+      const composed = await this.composeVerifiedBriefing({
+        generate: (systemNote) => this.generateBriefing(userId, dataPayload, systemNote),
+        whitelist,
+        deterministicFallback: () =>
+          this.buildDeterministicBriefing(runDate, shopifyData, shopifyError, googleAdsData, googleAdsError),
+        onViolation: async (attempt, flagged) => {
+          console.warn(`[MorningTrap] Numeric grounding (attempt ${attempt}): ${flagged.length} figure(s) in the briefing not traceable to source data: ${flagged.join(', ')}`);
           await AuditLogger.logEvent({
             source: 'MORNING_TRAP',
             eventType: 'AI_NUMERIC_GROUNDING_VIOLATION',
             status: 'WARNING',
-            description: `Morning trap briefing contains ${flagged.length} figure(s) not present in the source data payload`,
-            details: { runDate, violations: flagged, totalTokens: validation.totalTokens },
+            description: `Morning trap briefing draft ${attempt} contains ${flagged.length} figure(s) not present in the source data payload${attempt >= 2 ? ' — sending deterministic fallback briefing' : ' — regenerating once'}`,
+            details: { runDate, attempt, violations: flagged },
           });
-          briefing += `\n\n[data-check: ${flagged.length} unverified figure(s) — verify before acting]`;
-        }
-      } catch (validationError: any) {
-        console.warn('[MorningTrap] Numeric grounding validation errored (non-blocking):', validationError.message);
-      }
+        },
+      });
+      briefing = composed.briefing;
     } catch (error: any) {
       console.error('[MorningTrap] Claude briefing generation failed:', error.message);
       briefing = `${runDate} TRAP CHECK\n\nBRIEFING GENERATION FAILED: ${error.message}\nRoute to Matt.\n\nRaw data attached in logs.`;
@@ -513,8 +526,9 @@ export class MorningTrapService {
     whitelist.add(...PROMPT_BENCHMARK_VALUES);
 
     // Windsor does NOT populate Google conversion value, so revenue==0 with
-    // spend>0 is a MISSING ATTRIBUTION FIELD, not zero sales.
-    const googleGated = !!googleAdsData && googleAdsData.totalSpend > 0 && googleAdsData.totalRevenue <= 0;
+    // spend>0 is a MISSING ATTRIBUTION FIELD, not zero sales. Shared gate —
+    // same helper the n8n webhook uses, so the two surfaces cannot drift.
+    const googleGated = isGoogleAttributionGapped(googleAdsData);
 
     // Google Ads
     payload += '=== GOOGLE ADS MTD ===\n';
@@ -595,9 +609,125 @@ export class MorningTrapService {
   }
 
   /**
-   * Generate the morning briefing using Claude
+   * Compose a briefing whose every figure survives numeric-provenance
+   * verification. Escalation ladder (P1-4 5b):
+   *   1. Draft. Clean → send as-is.
+   *   2. Violations → retry the LLM ONCE with the flagged figures named in a
+   *      system note.
+   *   3. Retry still violates → do NOT send LLM prose. Send the deterministic
+   *      fallback composed purely from the data payload.
+   * A validator crash is non-blocking (accept the draft, warn) — the validator
+   * must never take the briefing down with it.
+   *
+   * Injected `generate`/`deterministicFallback` keep this testable without an
+   * Anthropic client.
    */
-  private static async generateBriefing(userId: string, dataPayload: string): Promise<string> {
+  static async composeVerifiedBriefing(args: {
+    generate: (systemNote?: string) => Promise<string>;
+    whitelist: NumericWhitelist;
+    deterministicFallback: () => string;
+    onViolation?: (attempt: 1 | 2, violations: string[]) => Promise<void> | void;
+  }): Promise<{ briefing: string; verification: 'clean' | 'retry' | 'deterministic-fallback' }> {
+    const validate = (text: string): string[] | null => {
+      // Returns the violation list, or null when the text is clean OR the
+      // validator itself errored (non-blocking, matches prior behavior).
+      try {
+        const validation = validateNumbersAgainstWhitelist(text, args.whitelist);
+        return validation.ok ? null : validation.violations.map(v => v.raw);
+      } catch (validationError: any) {
+        console.warn('[MorningTrap] Numeric grounding validation errored (non-blocking):', validationError.message);
+        return null;
+      }
+    };
+    const reportViolation = async (attempt: 1 | 2, flagged: string[]) => {
+      try {
+        await args.onViolation?.(attempt, flagged);
+      } catch (reportError: any) {
+        console.warn('[MorningTrap] Grounding-violation reporting errored (non-blocking):', reportError.message);
+      }
+    };
+
+    const draft = await args.generate();
+    const draftViolations = validate(draft);
+    if (!draftViolations) {
+      return { briefing: draft, verification: 'clean' };
+    }
+
+    await reportViolation(1, draftViolations);
+    let retry: string;
+    try {
+      retry = await args.generate(
+        `Your previous draft contained figures not present in the data block: ${draftViolations.join(', ')}. Re-compose using ONLY data-block numbers.`,
+      );
+    } catch (retryError: any) {
+      // We already hold a draft that failed verification — refuse to send it,
+      // and a dead retry call must not kill the briefing either.
+      console.warn('[MorningTrap] Regeneration call failed; using deterministic fallback:', retryError.message);
+      return { briefing: args.deterministicFallback(), verification: 'deterministic-fallback' };
+    }
+    const retryViolations = validate(retry);
+    if (!retryViolations) {
+      return { briefing: retry, verification: 'retry' };
+    }
+
+    await reportViolation(2, retryViolations);
+    return { briefing: args.deterministicFallback(), verification: 'deterministic-fallback' };
+  }
+
+  /**
+   * Deterministic fallback briefing — composed purely from the data payload
+   * sections, zero LLM prose. Every number below is the raw pulled value, so
+   * it cannot fail numeric verification by construction.
+   */
+  static buildDeterministicBriefing(
+    runDate: string,
+    shopifyData: ShopifyTrapData | null,
+    shopifyError: string | undefined,
+    googleAdsData: GoogleAdsTrapData | null,
+    googleAdsError: string | undefined,
+  ): string {
+    const lines: string[] = [];
+    lines.push('[deterministic briefing — LLM draft failed numeric verification twice]');
+    lines.push('');
+    lines.push(`${runDate} TRAP CHECK`);
+    lines.push('');
+    lines.push('GOOGLE ADS MTD');
+    if (googleAdsData) {
+      lines.push(`Spend: $${googleAdsData.totalSpend.toFixed(2)}`);
+      if (isGoogleAttributionGapped(googleAdsData)) {
+        lines.push('Sales/ROAS: data gap. Google conversion value is not attributed in the feed. Actual revenue is in SHOPIFY MTD below.');
+      } else {
+        lines.push(`Sales: $${googleAdsData.totalRevenue.toFixed(2)} | ROAS: ${googleAdsData.roas.toFixed(1)}:1`);
+      }
+      lines.push(`Conversions: ${googleAdsData.totalConversions.toFixed(0)} | Clicks: ${googleAdsData.totalClicks} | Impressions: ${googleAdsData.totalImpressions}`);
+    } else {
+      lines.push(`GOOGLE ADS: NO DATA — ${googleAdsError || 'no data returned'}. Route to Matt.`);
+    }
+    lines.push('');
+    lines.push('SHOPIFY MTD');
+    if (shopifyData) {
+      lines.push(`Gross sales: $${shopifyData.grossSales.toFixed(2)} | Orders: ${shopifyData.orderCount}`);
+      lines.push(`Refunded orders: ${shopifyData.refundedOrders} | Cancelled orders: ${shopifyData.cancelledOrders}`);
+      const sources = Object.entries(shopifyData.sourceBreakdown);
+      if (sources.length) {
+        lines.push('Source breakdown:');
+        for (const [source, data] of sources) {
+          lines.push(`  ${source}: ${data.orders} orders, $${data.revenue.toFixed(2)}`);
+        }
+      }
+    } else {
+      lines.push(`SHOPIFY: NO DATA — ${shopifyError || 'no data returned'}. Route to Matt.`);
+    }
+    lines.push('');
+    lines.push('Go win your ground war.');
+    return lines.join('\n');
+  }
+
+  /**
+   * Generate the morning briefing using Claude.
+   * `systemNote` (regeneration path) is appended to the system prompt.
+   */
+  private static async generateBriefing(userId: string, dataPayload: string, systemNote?: string): Promise<string> {
     // Get API key from settings
     const settingsRow = await storage.getSettings(userId);
     // Prefer the per-account key from Settings; fall back to the app's
@@ -614,7 +744,7 @@ export class MorningTrapService {
     const response = await client.messages.create({
       model: CLAUDE_MODEL,
       max_tokens: 2048,
-      system: MORNING_TRAP_SYSTEM_PROMPT,
+      system: systemNote ? `${MORNING_TRAP_SYSTEM_PROMPT}\n\n${systemNote}` : MORNING_TRAP_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: `Analyze this data and produce today's morning briefing.\n\n${dataPayload}` }],
     });
 
@@ -713,10 +843,10 @@ export class MorningTrapService {
         sourceBreakdown: shopifyData.sourceBreakdown,
       } : null,
       googleAds: googleAdsData ? (() => {
-        // Same attribution gate as the briefing payload: spend with no
-        // conversion value is a DATA GAP, not $0 revenue / 0 ROAS. Don't let
-        // the webhook leak the ungated 0s to n8n consumers.
-        const gated = googleAdsData.totalSpend > 0 && googleAdsData.totalRevenue <= 0;
+        // Same attribution gate as the briefing payload (shared helper): spend
+        // with no conversion value is a DATA GAP, not $0 revenue / 0 ROAS.
+        // Don't let the webhook leak the ungated 0s to n8n consumers.
+        const gated = isGoogleAttributionGapped(googleAdsData);
         return {
           totalSpend: googleAdsData.totalSpend,
           totalRevenue: gated ? null : googleAdsData.totalRevenue,

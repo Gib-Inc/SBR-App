@@ -582,8 +582,19 @@ export async function getMetaDirectFeedConfidence(
   }
   const snaps = ((await s.getActiveMarketingSpendSnapshots().catch(() => [])) as any[])
     .filter((x) => String(x.platform || "").toUpperCase() === "META" && String(x.source || "") === META_DIRECT_SOURCE && x.periodEnd);
-  const latest = snaps.sort((a, b) => String(b.periodEnd).localeCompare(String(a.periodEnd)))[0];
+  // Freshness is judged on rows carrying real API data ONLY. DATA_GAPPED rows
+  // are placeholders for days Meta returned nothing — a recent gap row must
+  // not make the feed look fresh.
+  const okSnaps = snaps.filter((x) => String(x.status || "") !== "DATA_GAPPED");
+  const gappedEnds = snaps
+    .filter((x) => String(x.status || "") === "DATA_GAPPED")
+    .map((x) => String(x.periodEnd))
+    .sort();
+  const latest = okSnaps.sort((a, b) => String(b.periodEnd).localeCompare(String(a.periodEnd)))[0];
   if (!latest) {
+    if (gappedEnds.length) {
+      return { feed: "meta-direct", confidence: "stale", latestPeriodEnd: null, daysOld: null, source: META_DIRECT_SOURCE, reason: `All recent Meta direct rows are DATA_GAPPED (${gappedEnds.join(", ")}) — no usable API data; manual Meta tracker is the fallback until the API recovers.` };
+    }
     return { feed: "meta-direct", confidence: "fallback", latestPeriodEnd: null, daysOld: null, source: null, reason: "No active Meta direct snapshot yet; manual Meta tracker remains canonical if present." };
   }
   const today = isoDateUTC(deps.now ?? new Date());
@@ -591,7 +602,8 @@ export async function getMetaDirectFeedConfidence(
   if (daysOld <= 2) {
     return { feed: "meta-direct", confidence: "actual", latestPeriodEnd: latest.periodEnd, daysOld, source: META_DIRECT_SOURCE, reason: "Meta direct feed is fresh; overlapping manual Meta snapshots are superseded." };
   }
-  return { feed: "meta-direct", confidence: "stale", latestPeriodEnd: latest.periodEnd, daysOld, source: META_DIRECT_SOURCE, reason: "Meta direct feed is stale >2 days; manual Meta tracker is the fallback until the API recovers." };
+  const gapSuffix = gappedEnds.length ? ` Gapped day(s) with no API data: ${gappedEnds.join(", ")}.` : "";
+  return { feed: "meta-direct", confidence: "stale", latestPeriodEnd: latest.periodEnd, daysOld, source: META_DIRECT_SOURCE, reason: `Meta direct feed is stale >2 days; manual Meta tracker is the fallback until the API recovers.${gapSuffix}` };
 }
 
 export async function isFreshMetaDirectProtectedForPeriod(
@@ -605,13 +617,24 @@ export async function isFreshMetaDirectProtectedForPeriod(
   const s = deps.storage ?? defaultStorage as any;
   const active = ((await s.getActiveMarketingSpendSnapshots().catch(() => [])) as any[])
     .filter((x) => String(x.platform || "").toUpperCase() === "META" && String(x.source || "") === META_DIRECT_SOURCE && x.periodStart && x.periodEnd);
-  const latest = active.sort((a, b) => String(b.periodEnd).localeCompare(String(a.periodEnd)))[0];
+  // Only rows with real API data can protect a period. DATA_GAPPED rows are
+  // no-data placeholders — a gap row must neither look fresh nor block a
+  // manual upload from filling the very day the API failed to cover.
+  const okActive = active.filter((x) => String(x.status || "") !== "DATA_GAPPED");
+  const gappedEnds = active
+    .filter((x) => String(x.status || "") === "DATA_GAPPED")
+    .map((x) => String(x.periodEnd))
+    .sort();
+  const latest = okActive.sort((a, b) => String(b.periodEnd).localeCompare(String(a.periodEnd)))[0];
   if (!latest) {
+    if (gappedEnds.length) {
+      return { protected: false, overlappingDirectIds: [], latestPeriodEnd: null, reason: `All active Meta direct rows are DATA_GAPPED (${gappedEnds.join(", ")}) — no usable API data; manual upload may fill the gap.` };
+    }
     return { protected: false, overlappingDirectIds: [], latestPeriodEnd: null, reason: "No active Meta direct snapshots exist; manual may be canonical." };
   }
   const today = isoDateUTC(deps.now ?? new Date());
   const daysOld = Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${latest.periodEnd}T00:00:00Z`)) / 86400000);
-  const overlapping = active.filter((x) => x.periodStart <= periodEnd && x.periodEnd >= periodStart);
+  const overlapping = okActive.filter((x) => x.periodStart <= periodEnd && x.periodEnd >= periodStart);
   if (!overlapping.length) {
     return { protected: false, overlappingDirectIds: [], latestPeriodEnd: latest.periodEnd, reason: "No direct Meta row overlaps this manual period." };
   }

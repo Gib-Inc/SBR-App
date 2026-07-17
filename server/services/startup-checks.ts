@@ -25,6 +25,7 @@ import pg from "pg";
 import { getTableColumns, getTableName, is } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@shared/schema";
+import { storage as storageSingleton } from "../storage";
 import { HISTORICAL_PL_DATA } from "../routes/historical-pl-data";
 import { ZO_KPI_DATA } from "../routes/zo-kpi-data";
 
@@ -790,7 +791,38 @@ async function reportSchemaDrift(client: pg.PoolClient): Promise<void> {
   }
 }
 
+/**
+ * FATAL boot assertion — the ACTIVE storage singleton must expose
+ * claimLedgerAndUpdateItem (the atomic claim+stock-write used by
+ * InventoryMovement.apply, rung 1 of the fail-closed ladder). If a storage
+ * refactor ever drops it, claimed inventory movements would silently degrade
+ * to the sequential-claim rung (crash window: a recorded movement that never
+ * applied → permanently-skipped decrement / phantom stock). Refuse to boot
+ * instead: log FATAL and throw. The thrown error is marked `fatal` so the
+ * boot path (app.ts) rethrows it rather than swallowing it with the
+ * non-blocking startup-check failures.
+ */
+export function assertStorageClaimGate(activeStorage?: unknown): void {
+  const s = activeStorage ?? storageSingleton;
+  if (typeof (s as any)?.claimLedgerAndUpdateItem !== "function") {
+    const message =
+      "[Startup Checks] FATAL: active storage does not expose claimLedgerAndUpdateItem() — " +
+      "inventory movements would degrade to the non-atomic sequential-claim path " +
+      "(crash-window double-apply risk). Refusing to boot.";
+    console.error(message);
+    const err = new Error(message);
+    (err as any).fatal = true;
+    throw err;
+  }
+  console.log("[Startup Checks] OK: storage.claimLedgerAndUpdateItem present (atomic claim gate armed)");
+}
+
 export async function runStartupChecks(): Promise<void> {
+  // FATAL (throws, intentionally BEFORE the DATABASE_URL guard and NOT
+  // swallowed): the atomic inventory claim gate must exist on the active
+  // storage or the boot fails. See assertStorageClaimGate.
+  assertStorageClaimGate();
+
   if (!process.env.DATABASE_URL) {
     console.warn("[Startup Checks] DATABASE_URL not set — skipping checks");
     return;

@@ -375,9 +375,11 @@ export class LLMService {
     if (request.taskType === "price_extraction" && request.payload?.prompt) {
       // NEVER return a fabricated price from a stub — a fake "found" price
       // flows into unitCost and auto-draft POs (P0 fabrication vector).
+      // Spec shape (P1-4): confidence "none" + status "no_data" mark this as a
+      // no-quote (not an error); the parser treats "none" identically to low.
       return {
         success: true,
-        text: '{"found": false, "price": null, "currency": "USD", "confidence": "low", "notes": "provider stub — no live extraction"}',
+        text: '{"found": false, "price": null, "currency": "USD", "confidence": "none", "status": "no_data", "notes": "provider stub — no live extraction"}',
         data: { provider: "grok", taskType: request.taskType },
       };
     }
@@ -439,9 +441,11 @@ export class LLMService {
     if (request.taskType === "price_extraction" && request.payload?.prompt) {
       // NEVER return a fabricated price from a stub — a fake "found" price
       // flows into unitCost and auto-draft POs (P0 fabrication vector).
+      // Spec shape (P1-4): confidence "none" + status "no_data" mark this as a
+      // no-quote (not an error); the parser treats "none" identically to low.
       return {
         success: true,
-        text: '{"found": false, "price": null, "currency": "USD", "confidence": "low", "notes": "provider stub — no live extraction"}',
+        text: '{"found": false, "price": null, "currency": "USD", "confidence": "none", "status": "no_data", "notes": "provider stub — no live extraction"}',
         data: { provider: "custom", endpoint: request.customEndpoint, taskType: request.taskType },
       };
     }
@@ -1352,12 +1356,20 @@ If no price is found, set found:false and price:null.`;
         const parsed = JSON.parse(jsonMatch[0]);
         
         if (parsed.found && typeof parsed.price === 'number' && parsed.price > 0) {
-          console.log(`[Price Extraction] Found price $${parsed.price} for ${sku} (${parsed.confidence} confidence)`);
+          // Parse tolerance: the accepted enum is high/medium/low. Anything
+          // else — including the stub/no-data shape's confidence "none" — is
+          // clamped to 'low' so it behaves identically to low downstream and
+          // can never pass the high/medium gate that reaches unitCost.
+          const confidence: 'high' | 'medium' | 'low' =
+            parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low'
+              ? parsed.confidence
+              : 'low';
+          console.log(`[Price Extraction] Found price $${parsed.price} for ${sku} (${confidence} confidence)`);
           return {
             success: true,
             price: parsed.price,
             currency: parsed.currency || 'USD',
-            confidence: parsed.confidence || 'medium',
+            confidence,
             source: url,
           };
         }

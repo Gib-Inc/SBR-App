@@ -16,6 +16,7 @@ const h = vi.hoisted(() => {
   const linesByOrder = new Map<string, any[]>();
   const items = new Map<string, any>();
   const refreshedSnapshots: string[] = [];
+  const movementLedgerClaims = new Set<string>();
 
   const storage = {
     async getSalesOrder(orderId: string) {
@@ -44,16 +45,17 @@ const h = vi.hoisted(() => {
       Object.assign(it, data);
       return it;
     },
+    async claimInventoryMovementLedger(input: any) {
+      const key = `${input.movementType}:${input.externalRef}:${input.itemId}`;
+      if (movementLedgerClaims.has(key)) return false;
+      movementLedgerClaims.add(key);
+      return true;
+    },
     async getUser() {
       return { id: "u1", email: "test@example.com" };
     },
     async createAuditLog() {
       return undefined;
-    },
-    // Idempotency ledger (d439c69): the harness always grants the claim so the
-    // restore movement proceeds; dedup behavior is covered in inventory-movement.test.ts.
-    async claimInventoryMovementLedger() {
-      return true;
     },
     async getIntegrationConfig() {
       return undefined;
@@ -66,7 +68,7 @@ const h = vi.hoisted(() => {
     },
   };
 
-  return { storage, orders, linesByOrder, items, refreshedSnapshots };
+  return { storage, orders, linesByOrder, items, refreshedSnapshots, movementLedgerClaims };
 });
 
 vi.mock("../storage", () => ({ storage: h.storage }));
@@ -90,6 +92,7 @@ beforeEach(() => {
   h.linesByOrder.clear();
   h.items.clear();
   h.refreshedSnapshots.length = 0;
+  h.movementLedgerClaims.clear();
   vi.clearAllMocks();
 });
 

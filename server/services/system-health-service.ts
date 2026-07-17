@@ -218,6 +218,17 @@ const SCHEDULERS: SchedulerDefinition[] = [
     alertOnStale: true,
   },
   {
+    id: "meta-direct-feed",
+    name: "Meta Marketing API direct feed",
+    owner: "SBR-App process",
+    kind: "in-process",
+    cadence: "Daily at 6:45 AM MT + startup self-heal",
+    expectedIntervalMinutes: 24 * 60,
+    staleAfterMinutes: 48 * 60,
+    sourceOfTruth: "marketing_spend_snapshots(source=meta-direct-api) + scheduler:meta-direct-feed health row",
+    alertOnStale: true,
+  },
+  {
     id: "system-integrity",
     name: "System integrity sweep",
     owner: "SBR-App process",

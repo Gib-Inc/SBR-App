@@ -6,6 +6,7 @@
  * Every check below is DB-derived, read-only, and returns an explicit status.
  */
 import { sql } from "drizzle-orm";
+import { getCanonicalMonthlySpendByChannel } from "./canonical-spend-service";
 
 const rows = (r: any): any[] => r?.rows ?? r ?? [];
 const num = (v: any): number => {
@@ -229,31 +230,26 @@ export async function computeFinanceTruthAudit(db: any): Promise<FinanceTruthAud
       : "No action needed.",
   });
 
-  const google = rows(await db.execute(sql`
-    with g as (
-      select * from ad_metrics_daily
-      where platform ilike '%google%' and date >= current_date - 30
-    )
-    select
-      coalesce(sum(spend), 0)::float8 as all_spend,
-      coalesce(sum(spend) filter (where campaign = '_all' and device = '_all' and country = '_all'), 0)::float8 as aggregate_spend
-    from g`))[0] ?? {};
-  const allSpend = num(google.all_spend);
-  const aggregateSpend = num(google.aggregate_spend);
-  const inflationRatio = aggregateSpend > 0 ? r2(allSpend / aggregateSpend) : null;
+  const canonicalSpend = await getCanonicalMonthlySpendByChannel(db, 2);
+  const googleCanonicalSpend = r2(canonicalSpend.reduce((sum, month) => {
+    return sum + (month.byChannel.GOOGLE?.spend ?? 0);
+  }, 0));
+  const googleMonthsWithGaps = canonicalSpend.filter((month) => {
+    return month.byChannel.GOOGLE?.spend == null || month.byChannel.GOOGLE?.understated;
+  });
   checks.push({
-    id: "google_dimension_inflation",
-    label: "Google ad_metrics dimension inflation",
-    severity: inflationRatio != null && inflationRatio > 1.5 ? "block" : "pass",
-    status: inflationRatio != null && inflationRatio > 1.5 ? "broken" : "actual",
-    source: "ad_metrics_daily",
+    id: "google_canonical_spend_coverage",
+    label: "Google canonical spend coverage",
+    severity: googleMonthsWithGaps.length > 0 ? "block" : "pass",
+    status: googleMonthsWithGaps.length > 0 ? "unknown" : "actual",
+    source: "canonical-spend-service",
     asOf: new Date().toISOString(),
-    value: inflationRatio,
-    detail: inflationRatio == null
-      ? "No aggregate Google spend rows found in the trailing 30 days."
-      : `All Google rows sum to $${Math.round(allSpend).toLocaleString()} vs aggregate rows $${Math.round(aggregateSpend).toLocaleString()} (${inflationRatio}x).`,
-    nextAction: inflationRatio != null && inflationRatio > 1.5
-      ? "Use canonical spend only; do not sum raw ad_metrics_daily dimension rows."
+    value: googleCanonicalSpend,
+    detail: googleMonthsWithGaps.length > 0
+      ? `Canonical Google spend is missing or understated for ${googleMonthsWithGaps.map((m) => m.month).join(", ")}.`
+      : `Canonical Google spend is available for the current/previous month window ($${Math.round(googleCanonicalSpend).toLocaleString()}).`,
+    nextAction: googleMonthsWithGaps.length > 0
+      ? "Fix the canonical Google spend source before presenting Google ROAS/MER as actual."
       : "No action needed.",
   });
 

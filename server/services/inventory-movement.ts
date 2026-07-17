@@ -182,11 +182,27 @@ export class InventoryMovement {
       const location = params.location || (isFinished ? "PIVOT" : "N/A");
       const isPivotFulfilled = location === "PIVOT";
 
-      // Idempotency ref is computed here but CLAIMED atomically with the stock
-      // write below (claimLedgerAndUpdateItem). Claiming before the write left a
-      // crash window where the ledger recorded a movement that never applied —
-      // a permanently-skipped decrement (phantom stock).
+      // FAIL-CLOSED LADDER (reconciles origin 188f4b7 with the atomic-claim
+      // restructure): (1) sales events MUST carry an idempotency ref — refuse
+      // the movement otherwise; (2) the ref is computed here but CLAIMED
+      // atomically WITH the stock write below (claimLedgerAndUpdateItem —
+      // claiming before the write left a crash window that recorded a movement
+      // which never applied: a permanently-skipped decrement / phantom stock);
+      // (3) at the write site the ladder degrades atomic → sequential-claim
+      // (test/dev harnesses only) → FAIL CLOSED when no claim method exists.
+      const requiresIdempotency = this.requiresIdempotency(params);
       const idempotencyRef = this.getIdempotencyRef(params);
+      if (requiresIdempotency && !idempotencyRef) {
+        return {
+          success: false,
+          itemId: params.itemId,
+          sku: item.sku,
+          beforeQty: beforeState.onHand,
+          afterQty: beforeState.onHand,
+          quantityChanged: 0,
+          error: `${params.eventType} requires an idempotency reference before stock can move`,
+        };
+      }
 
       let updates: {
         hildaleQty?: number;
@@ -480,14 +496,27 @@ export class InventoryMovement {
           };
           let claimResult: { claimed: boolean };
           if (typeof (this.storage as any).claimLedgerAndUpdateItem === "function") {
+            // Rung 1 (production path): claim + write in ONE db transaction.
             claimResult = await this.storage.claimLedgerAndUpdateItem(claim, params.itemId, updates);
           } else if (typeof (this.storage as any).claimInventoryMovementLedger === "function") {
+            // Rung 2 (test/dev harnesses ONLY): sequential claim → write.
+            // startup-checks asserts the prod storage never lands here.
             const claimed = await this.storage.claimInventoryMovementLedger(claim);
             if (claimed) await this.storage.updateItem(params.itemId, updates);
             claimResult = { claimed };
           } else {
-            await this.storage.updateItem(params.itemId, updates);
-            claimResult = { claimed: true };
+            // Rung 3: FAIL CLOSED (origin 188f4b7). A storage with no claim
+            // method may not mutate claimed-event stock — refusing beats a
+            // silent unledgered write reopening the double-apply window.
+            return {
+              success: false,
+              itemId: params.itemId,
+              sku: item.sku,
+              beforeQty: beforeState.onHand,
+              afterQty: beforeState.onHand,
+              quantityChanged: 0,
+              error: "Inventory movement ledger claim method is unavailable; refusing to mutate stock",
+            };
           }
           if (!claimResult.claimed) {
             await this.logDedupSkip(params, item, beforeState, idempotencyRef);
@@ -658,6 +687,8 @@ export class InventoryMovement {
           poId: params.poId,
           returnId: params.returnId,
           salesOrderLineId: params.salesOrderLineId,
+          idempotencyRef: this.getIdempotencyRef(params),
+          externalRef: params.externalRef,
           notes: params.notes,
         },
         performedByUserId: params.userId?.toString(),
@@ -674,11 +705,11 @@ export class InventoryMovement {
     // The key is claimed before any item update so webhook redelivery,
     // reconciliation backfills, or concurrent handlers cannot decrement/restore
     // the same movement twice.
-    if (
-      params.eventType !== "SALES_ORDER_CREATED" &&
-      params.eventType !== "SALES_ORDER_CANCELLED" &&
-      params.eventType !== "BOM_CONSUMPTION"
-    ) {
+    // Claimable events = mandatory sales events PLUS BOM_CONSUMPTION (optional:
+    // production draws claim on their production log when one exists, but a
+    // missing log does not refuse the movement — requiresIdempotency() stays
+    // sales-only so legacy BOM callers keep working).
+    if (!this.requiresIdempotency(params) && params.eventType !== "BOM_CONSUMPTION") {
       return null;
     }
 
@@ -697,6 +728,14 @@ export class InventoryMovement {
     if (params.salesOrderLineId) return `${params.orderId ?? "order"}:${params.salesOrderLineId}`;
     if (params.orderId) return params.orderId;
     return null;
+  }
+
+  // Mandatory-ref events (origin 188f4b7): sales movements may NEVER apply
+  // unclaimed. BOM_CONSUMPTION claims opportunistically (see getIdempotencyRef)
+  // but is not mandatory.
+  private requiresIdempotency(params: InventoryMovementParams): boolean {
+    return params.eventType === "SALES_ORDER_CREATED" ||
+      params.eventType === "SALES_ORDER_CANCELLED";
   }
 
   // Audit-noise cap: at most ONE DEDUP_SKIP row per (ref, item) per MT day.

@@ -7728,7 +7728,9 @@ TOTAL: $${subtotal.toFixed(2)}
                     salesOrderLineId: createdLine.id,
                     // Same canonical ref as the webhook path: one physical
                     // movement claims one ledger key no matter which ingest
-                    // path fires first (webhook, sync, or backfill).
+                    // path fires first (webhook, sync, or backfill). NOT the
+                    // internal createdLine.id — each path mints its own line
+                    // rows, so internal ids can never dedup across paths.
                     externalRef: `SHOPIFY:${orderData.externalOrderId}:${(lineItem as any).externalLineId ?? lineItem.sku}`,
                     channel: "SHOPIFY",
                     notes: `Shopify order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
@@ -8979,6 +8981,7 @@ TOTAL: $${subtotal.toFixed(2)}
                     // Deterministic per (order, sku): Amazon order ids are
                     // globally unique and Amazon orders don't repeat SKUs per
                     // line, so re-syncs/replays claim the same ledger key.
+                    // NOT createdLine.id — internal ids differ per ingest path.
                     externalRef: `AMAZON:${orderData.externalOrderId}:${lineItem.sku}`,
                     channel: "AMAZON",
                     notes: `Amazon order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
@@ -21951,9 +21954,9 @@ Generate only the email body text, no subject line.`;
           source: "USER",
           orderId: createdOrder.id,
           salesOrderLineId: line.id,
-          // Manual creates have no external id; the internal order+line pair is
-          // deterministic for this single-path flow (retries re-POST = new order).
-          externalRef: `MANUAL:${createdOrder.id}:${line.id}`,
+          // Channel-aware ref (origin's richer form): a manual POST that carries
+          // an externalOrderId keys on it, matching channel-cancel ref shapes.
+          externalRef: `${validatedOrder.channel || "MANUAL"}:${createdOrder.externalOrderId || createdOrder.id}:${line.id}`,
           channel: validatedOrder.channel,
           userId: req.session.userId,
           userName: user?.email,
@@ -24796,6 +24799,24 @@ Generate only the email body text, no subject line.`;
       const rec = reconcileMarketingSnapshot(active as any, { platform, periodStart, periodEnd, spend: Number(f.spend) || 0, sourceHash });
       const entityKey = `${platform} ${periodStart ?? "?"}..${periodEnd ?? "?"}`;
 
+      if (platform === "META") {
+        const { isFreshMetaDirectProtectedForPeriod } = await import("./services/meta-ads-client");
+        const guard = await isFreshMetaDirectProtectedForPeriod(periodStart, periodEnd);
+        if (guard.protected) {
+          await storage.createDataReconciliationLog([{
+            dataType: "marketing_spend",
+            entityKey,
+            action: "DISREGARDED",
+            field: "spend",
+            oldValue: null,
+            newValue: String(Number(f.spend) || 0),
+            reason: `${guard.reason} Latest direct period_end=${guard.latestPeriodEnd}.`,
+            source,
+          }]).catch(() => {});
+          return res.json({ success: true, action: "DISREGARDED", reconciliation: [{ action: "DISREGARDED", reason: guard.reason }], message: guard.reason });
+        }
+      }
+
       // Identical re-upload → log + no-op (don't add a duplicate row).
       if (rec.action === "DISREGARDED") {
         await storage.createDataReconciliationLog([{ dataType: "marketing_spend", entityKey, action: "DISREGARDED", field: null, oldValue: null, newValue: null, reason: rec.decision.reason, source }]);
@@ -26020,6 +26041,15 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  app.get("/api/marketing/meta-direct/feed-confidence", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getMetaDirectFeedConfidence } = await import("./services/meta-ads-client");
+      res.json({ success: true, confidence: await getMetaDirectFeedConfidence() });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || "Failed to compute Meta feed confidence" });
+    }
+  });
+
   app.get("/api/finances/inventory-reconciliation", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");
@@ -26310,6 +26340,21 @@ Generate only the email body text, no subject line.`;
         s.periodStart && s.periodEnd &&
         s.periodStart <= parsed.periodEnd! && s.periodEnd >= parsed.periodStart!,
       );
+      const { isFreshMetaDirectProtectedForPeriod } = await import("./services/meta-ads-client");
+      const directGuard = await isFreshMetaDirectProtectedForPeriod(parsed.periodStart, parsed.periodEnd);
+      if (directGuard.protected) {
+        const entityKey = `META ${parsed.periodStart}..${parsed.periodEnd}`;
+        await storage.createDataReconciliationLog([{
+          dataType: "marketing_spend", entityKey,
+          action: "DISREGARDED",
+          field: "spend",
+          oldValue: null,
+          newValue: String(parsed.totalSpend),
+          reason: `${directGuard.reason} Latest direct period_end=${directGuard.latestPeriodEnd}.`,
+          source: "manual:meta-tracker",
+        }]).catch(() => {});
+        return res.json({ success: true, action: "DISREGARDED", message: directGuard.reason, ingested: { ...parsed, superseded: 0 } });
+      }
       if (overlapping.length) {
         await storage.markMarketingSpendSnapshotsSuperseded(overlapping.map((s: any) => s.id), "manual:meta-tracker");
       }
@@ -26870,6 +26915,20 @@ Generate only the email body text, no subject line.`;
           String(s.platform || "").toUpperCase() === "META" &&
           s.periodStart && s.periodEnd &&
           s.periodStart <= parsed.periodEnd! && s.periodEnd >= parsed.periodStart!);
+        const { isFreshMetaDirectProtectedForPeriod } = await import("./services/meta-ads-client");
+        const directGuard = await isFreshMetaDirectProtectedForPeriod(parsed.periodStart, parsed.periodEnd);
+        if (directGuard.protected) {
+          const entityKey = `META ${parsed.periodStart}..${parsed.periodEnd}`;
+          await storage.createDataReconciliationLog([{
+            dataType: "marketing_spend", entityKey,
+            action: "DISREGARDED", field: "spend",
+            oldValue: null,
+            newValue: String(parsed.totalSpend),
+            reason: `${directGuard.reason} Latest direct period_end=${directGuard.latestPeriodEnd}.`,
+            source: `upload:${fileName}`,
+          }]).catch(() => {});
+          return res.json({ success: true, month: result.month, campaigns: result.inserted, totalSpend: parsed.totalSpend, rollupSuperseded: 0, rollupAction: "DISREGARDED", message: directGuard.reason });
+        }
         if (overlapping.length) {
           await storage.markMarketingSpendSnapshotsSuperseded(overlapping.map((s: any) => s.id), `upload:${fileName}`);
         }
@@ -27925,6 +27984,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Marketing Analytics Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Marketing Analytics Scheduler:", error);
+  });
+
+  import("./services/meta-direct-feed-scheduler").then(({ initializeMetaDirectFeedScheduler }) => {
+    initializeMetaDirectFeedScheduler();
+    console.log("[Server] Meta Direct Feed Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Meta Direct Feed Scheduler:", error);
   });
 
   import("./services/system-integrity-scheduler").then(({ initializeSystemIntegrityScheduler }) => {

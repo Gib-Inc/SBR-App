@@ -130,6 +130,13 @@ async function buildSalesReport(asOfDate: Date): Promise<SalesReport> {
     storage.getDailySalesSnapshotsInRange(monthAgoStr, tomorrowStr),
   ]);
   
+  // Data-quality note (P2-6): daily_sales_snapshots has NO status/quality
+  // column — `source` is provenance only (the scheduler always writes
+  // 'SALES_ORDERS'), so there is no DATA_GAPPED marker to exclude from these
+  // sums. A day the sync missed is indistinguishable from a real $0 day in
+  // this table. Do NOT zero-fill or invent a marker here; if a status column
+  // is ever added, exclude gapped rows from these sums AND surface
+  // "N gapped day(s) excluded" in the prompt string.
   const aggregateSalesSnapshots = (snapshots: any[]): SalesReportPeriod => {
     if (!snapshots || snapshots.length === 0) {
       return { orders: 0, revenue: 0, units: 0, refunds: 0, netRevenue: 0 };

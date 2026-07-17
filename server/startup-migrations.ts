@@ -424,6 +424,58 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "qb_categorization_proposals.status_idx",
     sql: `CREATE INDEX IF NOT EXISTS qb_cat_proposals_status_idx ON qb_categorization_proposals (status, confidence DESC)`,
   },
+
+  // P2-6 negative-stock tripwire (DB layer). Warehouse stock fields must never
+  // go negative — the InventoryMovement gateway guards/clamps them, but a write
+  // that bypasses the gateway (raw updateItem, imports, ad-hoc SQL) could still
+  // drive them below zero silently. CHECK ... NOT VALID is the additive-safe
+  // form: it is NOT validated against existing rows at ADD time (boot never
+  // fails on legacy negatives) and enforces NEW writes only. Note the standard
+  // NOT VALID semantics: a legacy row that is already negative will refuse
+  // further UPDATEs until reviewed (Inventory Integrity Review/Fix mode) —
+  // that is the tripwire doing its job, not a bug.
+  // current_stock deliberately has NO constraint: BOM_CONSUMPTION drives
+  // component current_stock negative BY DESIGN (build-ahead shortage draw —
+  // see inventory-movement.ts) and clamping it would desync stock from the
+  // audit ledger.
+  // ALTER TABLE ADD CONSTRAINT has no IF NOT EXISTS, so each entry guards via
+  // a pg_constraint lookup in a DO block (idempotent; runs every boot).
+  {
+    name: "items.hildale_qty_nonneg_check",
+    sql: `DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint
+              WHERE conname = 'items_hildale_qty_nonneg' AND conrelid = 'items'::regclass
+            ) THEN
+              ALTER TABLE items ADD CONSTRAINT items_hildale_qty_nonneg CHECK (hildale_qty >= 0) NOT VALID;
+            END IF;
+          END $$`,
+  },
+  {
+    name: "items.pivot_qty_nonneg_check",
+    sql: `DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint
+              WHERE conname = 'items_pivot_qty_nonneg' AND conrelid = 'items'::regclass
+            ) THEN
+              ALTER TABLE items ADD CONSTRAINT items_pivot_qty_nonneg CHECK (pivot_qty >= 0) NOT VALID;
+            END IF;
+          END $$`,
+  },
+  {
+    name: "items.available_for_sale_qty_nonneg_check",
+    sql: `DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint
+              WHERE conname = 'items_available_for_sale_qty_nonneg' AND conrelid = 'items'::regclass
+            ) THEN
+              ALTER TABLE items ADD CONSTRAINT items_available_for_sale_qty_nonneg CHECK (available_for_sale_qty >= 0) NOT VALID;
+            END IF;
+          END $$`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

@@ -24,7 +24,12 @@ export interface InventoryIntegritySummary {
   totals: {
     finishedProducts: number;
     components: number;
+    /** Warehouse fields (hildale/pivot/afs) below zero — must never happen. */
     negativeRows: number;
+    /** current_stock < 0 — BOM build-ahead, negative BY DESIGN (info only). */
+    componentsBelowZero: number;
+    /** sales_order_lines with product_id NULL (unresolvable SKUs). */
+    orphanedOrderLines: number;
     mappedExtensivItems: number;
     recentlySyncedExtensivItems: number;
     openOrders: number;
@@ -118,13 +123,17 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
     ledgerStatsRes,
     ledgerDriftRes,
     accuracyRes,
+    componentsBelowZeroRes,
+    orphanLinesRes,
   ] = await Promise.all([
     db.execute(sql`
       SELECT
         count(*) FILTER (WHERE type = 'finished_product')::int AS finished_products,
         count(*) FILTER (WHERE type = 'component')::int AS components,
+        -- Warehouse fields only. current_stock < 0 is counted separately
+        -- (components_below_zero): BOM_CONSUMPTION drives it negative BY DESIGN.
         count(*) FILTER (
-          WHERE current_stock < 0 OR hildale_qty < 0 OR pivot_qty < 0 OR available_for_sale_qty < 0
+          WHERE hildale_qty < 0 OR pivot_qty < 0 OR available_for_sale_qty < 0
         )::int AS negative_rows
       FROM items
     `),
@@ -173,10 +182,17 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       ORDER BY abs(hildale_qty) + abs(pivot_qty) + abs(available_for_sale_qty) DESC, sku
       LIMIT 25
     `),
+    // P2-6 negative-stock tripwire: WAREHOUSE fields only. These must never go
+    // negative — the movement gateway guards/clamps them and NOT VALID CHECK
+    // constraints (startup-migrations) reject new negative writes. Rows here
+    // are legacy negatives or a write that bypassed the gateway. current_stock
+    // is deliberately EXCLUDED: BOM_CONSUMPTION preserves the actual material
+    // draw instead of clamping to zero (inventory-movement.ts), so components
+    // go negative BY DESIGN on build-ahead shortages — counted separately below.
     db.execute(sql`
       SELECT id, sku, name, type, current_stock, hildale_qty, pivot_qty, available_for_sale_qty
       FROM items
-      WHERE current_stock < 0 OR hildale_qty < 0 OR pivot_qty < 0 OR available_for_sale_qty < 0
+      WHERE hildale_qty < 0 OR pivot_qty < 0 OR available_for_sale_qty < 0
       ORDER BY sku
       LIMIT 25
     `),
@@ -367,6 +383,36 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
              AND a.timestamp > now()-interval '90 days'
              AND a.details ? 'quantityChanged') AS drift_absorbed_value_90d
     `),
+    // P2-6: components below zero (build-ahead). current_stock < 0 is legal —
+    // BOM_CONSUMPTION records the true material draw on a shortage instead of
+    // clamping — so this is an INFO count (replenish, don't "fix"), kept out of
+    // the negative-stock warning above. Window count rides along with a top-5
+    // sample of the deepest shortages.
+    db.execute(sql`
+      SELECT id, sku, name, type, current_stock,
+             count(*) OVER ()::int AS total_below_zero
+      FROM items
+      WHERE current_stock < 0
+      ORDER BY current_stock ASC, sku
+      LIMIT 5
+    `),
+    // P2-6: orphaned order lines. sales_order_lines.sales_order_id already has
+    // FK ON DELETE CASCADE (order deletion can't strand lines) — the REAL
+    // orphan class is product_id IS NULL: a SKU none of the 7 resolution keys
+    // could match (order-line-resolution-service heals what it can nightly in
+    // the daily company report). These lines are invisible to COGS,
+    // contribution and open-unit math. Total count + top-5 SKUs by line count.
+    db.execute(sql`
+      SELECT sku,
+             count(*)::int AS line_count,
+             sum(coalesce(qty_ordered, 0))::int AS units,
+             (sum(count(*)) OVER ())::int AS total_orphan_lines
+      FROM sales_order_lines
+      WHERE product_id IS NULL
+      GROUP BY sku
+      ORDER BY count(*) DESC, sku
+      LIMIT 5
+    `),
   ]);
 
   const totalsRow = rows(totalsRes)[0] ?? {};
@@ -386,6 +432,10 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
   const ledgerStatsRow = rows(ledgerStatsRes)[0] ?? {};
   const ledgerDrift = rows(ledgerDriftRes);
   const accuracyRow = rows(accuracyRes)[0] ?? {};
+  const componentsBelowZero = rows(componentsBelowZeroRes);
+  const componentsBelowZeroCount = num(componentsBelowZero[0]?.total_below_zero);
+  const orphanLines = rows(orphanLinesRes);
+  const orphanLineCount = num(orphanLines[0]?.total_orphan_lines);
 
   const ledger = {
     trackedItems: num(ledgerStatsRow.tracked_items),
@@ -406,7 +456,12 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
   };
 
   const issues = [
-    makeIssue("critical", "NEGATIVE_STOCK", "Negative stock rows", negativeRows.length, "A stock field is below zero. Fulfillment and reorder decisions are unsafe until reviewed.", negativeRows),
+    // P2-6: warehouse-field negatives (hildale/pivot/afs). current_stock is
+    // deliberately excluded — BOM_CONSUMPTION drives component current_stock
+    // negative BY DESIGN (build-ahead), reported separately as info below.
+    makeIssue("warning", "NEGATIVE_WAREHOUSE_STOCK", "Negative warehouse stock", negativeRows.length, "hildale_qty / pivot_qty / available_for_sale_qty is below zero. These fields must never go negative (the movement gateway guards them; NOT VALID CHECK constraints reject new negative writes), so these rows are legacy negatives or a write that bypassed InventoryMovement. Fulfillment and reorder decisions on them are unsafe until reviewed. current_stock is deliberately excluded: BOM consumption legitimately drives components below zero (build-ahead).", negativeRows),
+    makeIssue("info", "COMPONENTS_BELOW_ZERO", "Components below zero (build-ahead)", componentsBelowZeroCount, `${componentsBelowZeroCount} item(s) have current_stock below zero. BOM consumption preserves the actual material draw instead of clamping to zero, so a build can legitimately reveal a component shortage. This is a replenishment signal, not drift — do not zero it away.`, componentsBelowZero),
+    makeIssue("warning", "ORPHANED_ORDER_LINES", "Order lines with unresolvable SKUs", orphanLineCount, `${orphanLineCount} sales_order_lines have product_id NULL, making them invisible to COGS/contribution/open-unit math. sales_order_id already cascades on order delete, so product_id-NULL (an unresolvable SKU) is the real orphan class here. The 7-key order-line resolution service re-joins what it can nightly; these lines matched none of the 7 keys. Top SKUs: ${orphanLines.map((r: any) => `${r.sku} (${num(r.line_count)} line${num(r.line_count) === 1 ? "" : "s"})`).join(", ") || "none"}.`, orphanLines),
     makeIssue("critical", "EXTENSIV_STALE", "Extensiv sync stale", staleExtensiv.length, "Mapped Pyvott/Extensiv items have not synced within the expected hourly window.", staleExtensiv),
     makeIssue("warning", "AFS_DRIFT", "Sellable stock drift", drift.length, "available_for_sale_qty should roughly equal pivot_qty minus open unshipped units. Large differences need review.", drift),
     makeIssue("warning", "FINISHED_CURRENT_STOCK", "Finished products have current_stock", wrongFinishedCurrent.length, "Finished products should use Hildale/Pyvott fields, not current_stock.", wrongFinishedCurrent),
@@ -430,6 +485,8 @@ export async function getInventoryIntegritySummary(): Promise<InventoryIntegrity
       finishedProducts: num(totalsRow.finished_products),
       components: num(totalsRow.components),
       negativeRows: num(totalsRow.negative_rows),
+      componentsBelowZero: componentsBelowZeroCount,
+      orphanedOrderLines: orphanLineCount,
       mappedExtensivItems: num(freshnessRow.mapped_items),
       recentlySyncedExtensivItems: num(freshnessRow.recently_synced),
       openOrders: num(openOrderRow.open_orders),

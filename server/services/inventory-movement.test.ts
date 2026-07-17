@@ -23,6 +23,7 @@ import { InventoryMovement } from "./inventory-movement";
  */
 class FakeStorage {
   private items = new Map<string, Item>();
+  private movementClaims = new Set<string>();
 
   seed(partial: Partial<Item> & { id: string; sku: string; type: string }): Item {
     const item = {
@@ -47,6 +48,17 @@ class FakeStorage {
     const next = { ...cur, ...data } as Item;
     this.items.set(id, next);
     return next;
+  }
+
+  async claimInventoryMovementLedger(input: {
+    movementType: string;
+    externalRef: string;
+    itemId: string;
+  }): Promise<boolean> {
+    const key = `${input.movementType}:${input.externalRef}:${input.itemId}`;
+    if (this.movementClaims.has(key)) return false;
+    this.movementClaims.add(key);
+    return true;
   }
 
   // Costing surfaces (FinOps Pillar 2). Tests seed these directly.
@@ -112,6 +124,36 @@ describe("SALES_ORDER_CREATED", () => {
       location: "PIVOT", source: "SYSTEM",
     });
     expect(storage.get("FG1").availableForSaleQty).toBe(0);
+  });
+
+  it("is idempotent for repeated external sales-order movements", async () => {
+    finished({ availableForSaleQty: 100, pivotQty: 100, hildaleQty: 0 });
+
+    const first = await engine.apply({
+      eventType: "SALES_ORDER_CREATED",
+      itemId: "FG1",
+      quantity: 7,
+      location: "PIVOT",
+      source: "SHOPIFY",
+      orderId: "so-1",
+      salesOrderLineId: "line-1",
+      externalRef: "SHOPIFY:15953:line-1",
+    });
+    const second = await engine.apply({
+      eventType: "SALES_ORDER_CREATED",
+      itemId: "FG1",
+      quantity: 7,
+      location: "PIVOT",
+      source: "SHOPIFY",
+      orderId: "so-1",
+      salesOrderLineId: "line-1",
+      externalRef: "SHOPIFY:15953:line-1",
+    });
+
+    expect(first.quantityChanged).toBe(-7);
+    expect(second.success).toBe(true);
+    expect(second.quantityChanged).toBe(0);
+    expect(storage.get("FG1").availableForSaleQty).toBe(93);
   });
 });
 

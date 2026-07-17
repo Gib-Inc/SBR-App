@@ -45,6 +45,14 @@ const h = vi.hoisted(() => {
       Object.assign(it, data);
       return it;
     },
+    async claimInventoryMovementLedger(input: any) {
+      const key = `${input.movementType}:${input.externalRef}:${input.itemId}`;
+      const claims = (storage as any).__movementClaims ?? new Set<string>();
+      (storage as any).__movementClaims = claims;
+      if (claims.has(key)) return false;
+      claims.add(key);
+      return true;
+    },
     async getUser() {
       return { id: "u1", email: "test@example.com" };
     },
@@ -66,7 +74,7 @@ vi.mock("../services/bom-consumption-service", () => ({
   consumeBomForFulfilledOrder: vi.fn().mockResolvedValue({ componentsSubtracted: 0, warnings: [], errors: [] }),
 }));
 
-import { handleOrderCancelled, handleOrderFulfilled } from "./webhook-handlers";
+import { handleOrderCancelled, handleOrderFulfilled, handleOrderUpdated } from "./webhook-handlers";
 import { consumeBomForFulfilledOrder } from "../services/bom-consumption-service";
 
 const ctx = {} as any;
@@ -75,6 +83,7 @@ beforeEach(() => {
   h.orders.clear();
   h.linesByOrder.clear();
   h.items.clear();
+  (h.storage as any).__movementClaims = new Set<string>();
   vi.clearAllMocks();
 });
 
@@ -141,5 +150,31 @@ describe("handleOrderFulfilled (C3 fulfillment trigger)", () => {
     expect(callArgs[0]).toEqual([{ sku: "FG-SHOP", qtyFulfilled: 3 }]);
     expect(callArgs[1]).toBe("6001");
     expect(callArgs[2]).toBe("SHOPIFY");
+  });
+});
+
+describe("handleOrderUpdated shipped-line reconciliation", () => {
+  it("marks existing lines shipped when Shopify sends a fulfilled update", async () => {
+    seedOpenOrder("7001", "so20", [{
+      id: "l1",
+      productId: "FG1",
+      sku: "FG-1",
+      qtyOrdered: 4,
+      qtyAllocated: 4,
+      qtyShipped: 0,
+      qtyFulfilled: 0,
+      backorderQty: 0,
+    }]);
+
+    const res = await handleOrderUpdated(
+      { id: 7001, name: "#3001", financial_status: "paid", fulfillment_status: "fulfilled", fulfillments: [], updated_at: "2026-07-17T00:00:00Z" } as any,
+      ctx,
+      "u1",
+    );
+
+    expect(res.success).toBe(true);
+    expect(h.orders.get("7001").status).toBe("SHIPPED");
+    expect(h.linesByOrder.get("so20")![0].qtyShipped).toBe(4);
+    expect(h.linesByOrder.get("so20")![0].qtyFulfilled).toBe(4);
   });
 });

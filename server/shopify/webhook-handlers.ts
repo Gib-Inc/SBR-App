@@ -101,6 +101,7 @@ export async function handleOrderCreated(
     let fulfillmentSource: 'HILDALE' | 'PIVOT_EXTENSIV' = 'PIVOT_EXTENSIV';
     
     const lineItemsWithProducts: Array<{
+      shopifyLineItemId: string;
       sku: string;
       productId: string | null;
       productName: string;
@@ -132,6 +133,7 @@ export async function handleOrderCreated(
           const productName = lineItem.title || lineItem.name || sku;
           
           lineItemsWithProducts.push({
+            shopifyLineItemId: String(lineItem.id ?? sku),
             sku,
             productId: item?.id || null,
             productName,
@@ -301,7 +303,7 @@ export async function handleOrderCreated(
       // is correct from the start rather than counting it as open.
       const lineFulfilled = (orderStatus === 'SHIPPED' || orderStatus === 'DELIVERED') ? lineItem.qtyOrdered : 0;
       // ALWAYS create sales order line (even for unmapped SKUs)
-      await storage.createSalesOrderLine({
+      const salesOrderLine = await storage.createSalesOrderLine({
         salesOrderId: salesOrder.id,
         productId: lineItem.productId || null,
         sku: lineItem.sku,
@@ -325,6 +327,9 @@ export async function handleOrderCreated(
             location: 'PIVOT',
             source: 'SHOPIFY',
             orderId: salesOrder.id,
+            salesOrderLineId: salesOrderLine.id,
+            externalRef: `SHOPIFY:${orderId}:${lineItem.shopifyLineItemId}`,
+            channel: 'SHOPIFY',
             notes: `Shopify order ${orderName}`,
             userId,
           });
@@ -487,6 +492,20 @@ export async function handleOrderUpdated(
         console.log(`[Shopify Webhook] Updated order ${existingOrder.id} status: ${previousStatus} -> ${newStatus}`);
       } else {
         console.log(`[Shopify Webhook] Skipped order ${existingOrder.id} update — ${decision.reason}`);
+      }
+
+      const effectiveStatus = shouldUpdate ? newStatus : previousStatus;
+      if (effectiveStatus === 'SHIPPED' || effectiveStatus === 'DELIVERED') {
+        const lines = await storage.getSalesOrderLines(existingOrder.id);
+        for (const line of lines) {
+          if ((line.qtyShipped ?? 0) < (line.qtyOrdered ?? 0) || (line.qtyFulfilled ?? 0) < (line.qtyOrdered ?? 0)) {
+            await storage.updateSalesOrderLine(line.id, {
+              qtyShipped: line.qtyOrdered,
+              qtyFulfilled: line.qtyOrdered,
+              backorderQty: 0,
+            });
+          }
+        }
       }
       
       return {

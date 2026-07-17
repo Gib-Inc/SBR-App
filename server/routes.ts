@@ -23275,6 +23275,12 @@ Generate only the email body text, no subject line.`;
       if (!po) {
         return res.status(404).json({ success: false, error: 'Purchase order not found' });
       }
+      if (!["APPROVED", "SENT", "PARTIALLY_RECEIVED", "RECEIVED", "CLOSED"].includes(String(po.status || "").toUpperCase())) {
+        return res.status(409).json({
+          success: false,
+          error: `PO must be approved/sent/received before creating a QuickBooks Bill (current status: ${po.status})`,
+        });
+      }
       
       const poLines = await storage.getPurchaseOrderLinesByPOId(id);
       if (!poLines.length) {
@@ -25874,6 +25880,20 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Reconciliation] error:", error);
       res.status(500).json({ success: false, error: error.message || "Failed to build reconciliation" });
+    }
+  });
+
+  // CFO Truth Audit — deterministic anti-hallucination gate for finance/ROAS
+  // surfaces. Read-only: it labels missing/stale/broken inputs so AI can narrate
+  // only verified query results and never fill spreadsheet gaps with guesses.
+  app.get("/api/finances/truth-audit", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeFinanceTruthAudit } = await import("./services/finance-truth-audit-service");
+      res.json(await computeFinanceTruthAudit(db));
+    } catch (error: any) {
+      console.error("[Finance Truth Audit] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build finance truth audit" });
     }
   });
 

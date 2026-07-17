@@ -587,6 +587,15 @@ export interface IStorage {
 
   // Audit Logs
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
+  claimInventoryMovementLedger(input: {
+    movementType: string;
+    externalRef: string;
+    itemId: string;
+    source?: string;
+    orderId?: string;
+    salesOrderLineId?: string;
+    quantity?: number;
+  }): Promise<boolean>;
   getAuditLogs(options?: { 
     limit?: number; 
     offset?: number; 
@@ -861,6 +870,7 @@ export class MemStorage implements IStorage {
   private salesOrderLines: Map<string, SalesOrderLine>;
   private backorderSnapshots: Map<string, BackorderSnapshot>;
   private auditLogs: Map<string, AuditLog>;
+  private inventoryMovementLedgerClaims: Set<string>;
   private adPlatformConfigs: Map<string, AdPlatformConfig>;
   private adSkuMappings: Map<string, AdSkuMapping>;
   private adMetricsDaily: Map<string, AdMetricsDaily>;
@@ -899,6 +909,7 @@ export class MemStorage implements IStorage {
     this.salesOrderLines = new Map();
     this.backorderSnapshots = new Map();
     this.auditLogs = new Map();
+    this.inventoryMovementLedgerClaims = new Set();
     this.adPlatformConfigs = new Map();
     this.adSkuMappings = new Map();
     this.adMetricsDaily = new Map();
@@ -3521,6 +3532,21 @@ export class MemStorage implements IStorage {
     };
     this.auditLogs.set(id, auditLog);
     return auditLog;
+  }
+
+  async claimInventoryMovementLedger(input: {
+    movementType: string;
+    externalRef: string;
+    itemId: string;
+    source?: string;
+    orderId?: string;
+    salesOrderLineId?: string;
+    quantity?: number;
+  }): Promise<boolean> {
+    const key = `${input.movementType}:${input.externalRef}:${input.itemId}`;
+    if (this.inventoryMovementLedgerClaims.has(key)) return false;
+    this.inventoryMovementLedgerClaims.add(key);
+    return true;
   }
 
   async getAuditLogs(options?: { 
@@ -7051,6 +7077,40 @@ export class PostgresStorage implements IStorage {
   async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
     const results = await this.db.insert(schema.auditLogs).values(log).returning();
     return results[0];
+  }
+
+  async claimInventoryMovementLedger(input: {
+    movementType: string;
+    externalRef: string;
+    itemId: string;
+    source?: string;
+    orderId?: string;
+    salesOrderLineId?: string;
+    quantity?: number;
+  }): Promise<boolean> {
+    const result = await this.db.execute(drizzleSql`
+      INSERT INTO inventory_movement_ledger (
+        movement_type,
+        external_ref,
+        item_id,
+        source,
+        order_id,
+        sales_order_line_id,
+        quantity
+      )
+      VALUES (
+        ${input.movementType},
+        ${input.externalRef},
+        ${input.itemId},
+        ${input.source ?? null},
+        ${input.orderId ?? null},
+        ${input.salesOrderLineId ?? null},
+        ${input.quantity ?? null}
+      )
+      ON CONFLICT (movement_type, external_ref, item_id) DO NOTHING
+      RETURNING id
+    `);
+    return (result as any).rows?.length > 0;
   }
 
   async getAuditLogs(options?: { 

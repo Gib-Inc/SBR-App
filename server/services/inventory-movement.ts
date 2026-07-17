@@ -116,6 +116,7 @@ export interface InventoryMovementParams {
   returnId?: string;
   poId?: string;
   salesOrderLineId?: string;
+  externalRef?: string;
   channel?: string;
   userId?: string | number;
   userName?: string;
@@ -180,6 +181,31 @@ export class InventoryMovement {
       const isFinished = item.type === "finished_product";
       const location = params.location || (isFinished ? "PIVOT" : "N/A");
       const isPivotFulfilled = location === "PIVOT";
+
+      const idempotencyRef = this.getIdempotencyRef(params);
+      if (idempotencyRef) {
+        const claimed = await this.storage.claimInventoryMovementLedger({
+          movementType: params.eventType,
+          externalRef: idempotencyRef,
+          itemId: params.itemId,
+          source: params.source,
+          orderId: params.orderId,
+          salesOrderLineId: params.salesOrderLineId,
+          quantity: params.quantity,
+        });
+
+        if (!claimed) {
+          await this.logDedupSkip(params, item, beforeState, idempotencyRef);
+          return {
+            success: true,
+            itemId: params.itemId,
+            sku: item.sku,
+            beforeQty: beforeState.onHand,
+            afterQty: beforeState.onHand,
+            quantityChanged: 0,
+          };
+        }
+      }
       
       let updates: {
         hildaleQty?: number;
@@ -620,6 +646,65 @@ export class InventoryMovement {
       });
     } catch (error) {
       console.warn("[InventoryMovement] Failed to log movement:", error);
+    }
+  }
+
+  private getIdempotencyRef(params: InventoryMovementParams): string | null {
+    // These event types are externally replay-prone and mutate sellable stock.
+    // The key is claimed before any item update so webhook redelivery,
+    // reconciliation backfills, or concurrent handlers cannot decrement/restore
+    // the same movement twice.
+    if (
+      params.eventType !== "SALES_ORDER_CREATED" &&
+      params.eventType !== "SALES_ORDER_CANCELLED"
+    ) {
+      return null;
+    }
+
+    if (params.externalRef) return params.externalRef;
+    if (params.salesOrderLineId) return `${params.orderId ?? "order"}:${params.salesOrderLineId}`;
+    if (params.orderId) return params.orderId;
+    return null;
+  }
+
+  private async logDedupSkip(
+    params: InventoryMovementParams,
+    item: Item,
+    state: InventoryState,
+    idempotencyRef: string,
+  ): Promise<void> {
+    try {
+      const source: AuditSource = params.source === "USER" || params.source === "SYSTEM"
+        ? params.source as AuditSource
+        : "SYSTEM";
+
+      await AuditLogger.logEvent({
+        eventType: "INVENTORY_UPDATED",
+        entityType: "SALES_ORDER",
+        entityId: params.orderId || params.itemId,
+        entityLabel: item.sku,
+        source,
+        status: "INFO",
+        description: `Inventory movement deduped: ${params.eventType} for ${item.sku}`,
+        details: {
+          dedupAction: "DEDUP_SKIP",
+          idempotencyRef,
+          itemId: params.itemId,
+          sku: item.sku,
+          eventType: params.eventType,
+          quantity: params.quantity,
+          orderId: params.orderId,
+          salesOrderLineId: params.salesOrderLineId,
+          externalRef: params.externalRef,
+          before: state,
+          after: state,
+          notes: params.notes,
+        },
+        performedByUserId: params.userId?.toString(),
+        performedByName: params.userName,
+      });
+    } catch (error) {
+      console.warn("[InventoryMovement] Failed to log dedup skip:", error);
     }
   }
 

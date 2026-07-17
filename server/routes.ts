@@ -7519,11 +7519,21 @@ TOTAL: $${subtotal.toFixed(2)}
               shipToZip: orderData.shipToZip,
               shipToCountry: orderData.shipToCountry,
             });
-            
+
+            // P0-3: sync is a SHIPPED/DELIVERED transition path too — reconcile
+            // line qty_shipped/qty_fulfilled like the webhook path does
+            // (per-fulfillment quantities preferred; never decreases).
+            if (orderData.status === 'SHIPPED' || orderData.status === 'DELIVERED') {
+              const { reconcileShippedLines } = await import('./services/fulfillment-line-reconciler');
+              await reconcileShippedLines(storage, existingOrder.id, {
+                fulfillments: (orderData.rawPayload as any)?.fulfillments,
+              });
+            }
+
             // Only count as updated if there were real changes
             if (hasRealChanges) {
               updatedCount++;
-            
+
               // Track updated record
               syncedRecords.push({
                 id: orderData.externalOrderId,
@@ -7685,14 +7695,22 @@ TOTAL: $${subtotal.toFixed(2)}
                 const qtyAllocated = Math.min(lineItem.qtyOrdered, product.availableForSaleQty || 0);
                 const backorderQty = lineItem.qtyOrdered - qtyAllocated;
 
+                // P0-3: orders first seen already SHIPPED/DELIVERED get their
+                // lines recorded as shipped from the start (mirrors the
+                // webhook path's lineFulfilled fill).
+                const lineShipped = (orderData.status === 'SHIPPED' || orderData.status === 'DELIVERED')
+                  ? lineItem.qtyOrdered
+                  : 0;
+
                 const createdLine = await storage.createSalesOrderLine({
                   salesOrderId: salesOrder.id,
                   productId: product.id,
                   sku: lineItem.sku,
                   qtyOrdered: lineItem.qtyOrdered,
                   qtyAllocated,
-                  qtyShipped: 0,
-                  backorderQty,
+                  qtyShipped: lineShipped,
+                  qtyFulfilled: lineShipped,
+                  backorderQty: lineShipped > 0 ? 0 : backorderQty,
                   unitPrice: lineItem.unitPrice,
                 });
 
@@ -8479,6 +8497,16 @@ TOTAL: $${subtotal.toFixed(2)}
                 deliveredAt: order.deliveredAt,
                 externalOrderId: order.externalOrderId,
               });
+
+              // P0-3: orders that land SHIPPED/DELIVERED via full-order-sync
+              // must reconcile line qty_shipped/qty_fulfilled too (idempotent;
+              // never decreases what POST /ship recorded).
+              if (order.status === 'SHIPPED' || order.status === 'DELIVERED') {
+                const { reconcileShippedLines } = await import('./services/fulfillment-line-reconciler');
+                await reconcileShippedLines(storage, existingOrder.id, {
+                  fulfillments: (order.rawPayload as any)?.fulfillments,
+                });
+              }
               ordersUpdated++;
             } else {
               // Create new order
@@ -8510,12 +8538,19 @@ TOTAL: $${subtotal.toFixed(2)}
                   continue;
                 }
                 const item = await storage.getItemBySku(line.sku);
+                // P0-3: historical orders arrive already SHIPPED/DELIVERED —
+                // record their lines as shipped from the start.
+                const lineShipped = (order.status === 'SHIPPED' || order.status === 'DELIVERED')
+                  ? (line.qtyOrdered ?? 0)
+                  : 0;
                 await storage.createSalesOrderLine({
                   salesOrderId: newOrder.id,
                   productId: item?.id,
                   sku: line.sku,
                   productName: line.name,
                   qtyOrdered: line.qtyOrdered,
+                  qtyShipped: lineShipped,
+                  qtyFulfilled: lineShipped,
                   unitPrice: line.unitPrice,
                 });
               }
@@ -8733,6 +8768,22 @@ TOTAL: $${subtotal.toFixed(2)}
               shipToZip,
               shipToCountry,
             });
+
+            // P0-3: reconcile line qty_shipped from Amazon's authoritative
+            // per-line QuantityShipped whenever the order is in a shipped
+            // state. mapStatus() yields SHIPPED only for PARTIALLY shipped
+            // Amazon orders (fully shipped → DELIVERED), so the qtyOrdered
+            // fill for SKUs missing per-line data applies only on DELIVERED.
+            if (isNowShipped) {
+              const { reconcileShippedLines } = await import('./services/fulfillment-line-reconciler');
+              await reconcileShippedLines(storage, existingOrder.id, {
+                amazonLines: orderData.lineItems.map((li: any) => ({
+                  sku: li.sku,
+                  qtyShipped: li.qtyShipped ?? 0,
+                })),
+                fillToOrdered: orderData.status === 'DELIVERED',
+              });
+            }
             updatedCount++;
             
             // Track updated record
@@ -8893,14 +8944,23 @@ TOTAL: $${subtotal.toFixed(2)}
                 const qtyAllocated = Math.min(lineItem.qtyOrdered, product.availableForSaleQty || 0);
                 const backorderQty = lineItem.qtyOrdered - qtyAllocated;
 
+                // P0-3: Amazon lines carry an authoritative per-line shipped
+                // count (SP-API OrderItems[].QuantityShipped) — record it at
+                // create instead of the old hardcoded 0.
+                const amzShipped = Math.min(
+                  lineItem.qtyOrdered,
+                  Math.max(0, (lineItem as any).qtyShipped ?? 0),
+                );
+
                 const createdLine = await storage.createSalesOrderLine({
                   salesOrderId: salesOrder.id,
                   productId: product.id,
                   sku: lineItem.sku,
                   qtyOrdered: lineItem.qtyOrdered,
                   qtyAllocated,
-                  qtyShipped: 0,
-                  backorderQty,
+                  qtyShipped: amzShipped,
+                  qtyFulfilled: amzShipped,
+                  backorderQty: amzShipped >= lineItem.qtyOrdered ? 0 : backorderQty,
                   unitPrice: lineItem.unitPrice,
                 });
 
@@ -21952,6 +22012,19 @@ Generate only the email body text, no subject line.`;
       const updatedOrder = await storage.updateSalesOrder(id, validatedData);
       if (!updatedOrder) {
         return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      // P0-3: a manual status flip to SHIPPED/DELIVERED is a fulfillment
+      // transition like any other — reconcile line qty_shipped/qty_fulfilled
+      // (idempotent; never decreases what POST /ship already recorded).
+      if (
+        validatedData.status &&
+        (updatedOrder.status === 'SHIPPED' || updatedOrder.status === 'DELIVERED')
+      ) {
+        const { reconcileShippedLines } = await import('./services/fulfillment-line-reconciler');
+        await reconcileShippedLines(storage, id, {
+          fulfillments: (updatedOrder.rawPayload as any)?.fulfillments,
+        });
       }
 
       res.json(updatedOrder);

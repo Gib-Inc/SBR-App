@@ -74,7 +74,7 @@ vi.mock("../services/bom-consumption-service", () => ({
   consumeBomForFulfilledOrder: vi.fn().mockResolvedValue({ componentsSubtracted: 0, warnings: [], errors: [] }),
 }));
 
-import { handleOrderCancelled, handleOrderFulfilled, handleOrderUpdated } from "./webhook-handlers";
+import { handleOrderCancelled, handleOrderFulfilled, handleOrderPartiallyFulfilled, handleOrderUpdated } from "./webhook-handlers";
 import { consumeBomForFulfilledOrder } from "../services/bom-consumption-service";
 
 const ctx = {} as any;
@@ -150,6 +150,93 @@ describe("handleOrderFulfilled (C3 fulfillment trigger)", () => {
     expect(callArgs[0]).toEqual([{ sku: "FG-SHOP", qtyFulfilled: 3 }]);
     expect(callArgs[1]).toBe("6001");
     expect(callArgs[2]).toBe("SHOPIFY");
+  });
+});
+
+describe("handleOrderFulfilled shipped-line reconciliation (P0-3)", () => {
+  it("fills line qty_shipped/qty_fulfilled when the order is fulfilled", async () => {
+    seedOpenOrder("6002", "so11", [
+      { id: "l1", productId: "FG1", sku: "FG-1", qtyOrdered: 3, qtyAllocated: 3, qtyShipped: 0, qtyFulfilled: 0, backorderQty: 0 },
+      { id: "l2", productId: "FG2", sku: "FG-2", qtyOrdered: 2, qtyAllocated: 2, qtyShipped: 0, qtyFulfilled: 0, backorderQty: 1 },
+    ]);
+
+    const res = await handleOrderFulfilled(
+      {
+        id: 6002,
+        name: "#2002",
+        line_items: [{ sku: "FG-1", quantity: 3 }, { sku: "FG-2", quantity: 2 }],
+        fulfillments: [{
+          status: "success",
+          shipment_status: "in_transit",
+          line_items: [{ sku: "FG-1", quantity: 3 }, { sku: "FG-2", quantity: 2 }],
+        }],
+      } as any,
+      ctx,
+      "u1",
+    );
+
+    expect(res.success).toBe(true);
+    expect(h.orders.get("6002").status).toBe("SHIPPED");
+    const lines = h.linesByOrder.get("so11")!;
+    expect(lines[0]).toMatchObject({ qtyShipped: 3, qtyFulfilled: 3, backorderQty: 0 });
+    expect(lines[1]).toMatchObject({ qtyShipped: 2, qtyFulfilled: 2, backorderQty: 0 });
+  });
+
+  it("falls back to the qtyOrdered fill when the payload has no fulfillment line detail", async () => {
+    seedOpenOrder("6003", "so12", [
+      { id: "l1", productId: "FG1", sku: "FG-1", qtyOrdered: 4, qtyAllocated: 4, qtyShipped: 0, qtyFulfilled: 0, backorderQty: 0 },
+    ]);
+
+    await handleOrderFulfilled(
+      { id: 6003, name: "#2003", line_items: [{ sku: "FG-1", quantity: 4 }], fulfillments: [] } as any,
+      ctx,
+      "u1",
+    );
+
+    const line = h.linesByOrder.get("so12")![0];
+    expect(line.qtyShipped).toBe(4);
+    expect(line.qtyFulfilled).toBe(4);
+  });
+});
+
+describe("handleOrderPartiallyFulfilled shipped-line reconciliation (P0-3)", () => {
+  it("records only the fulfilled quantity — open remainder = ordered − fulfilled-sum", async () => {
+    seedOpenOrder("6004", "so13", [
+      { id: "l1", productId: "FG1", sku: "FG-1", qtyOrdered: 4, qtyAllocated: 4, qtyShipped: 0, qtyFulfilled: 0, backorderQty: 0 },
+    ]);
+
+    const res = await handleOrderPartiallyFulfilled(
+      {
+        id: 6004,
+        name: "#2004",
+        fulfillments: [{
+          status: "success",
+          shipment_status: "in_transit",
+          line_items: [{ sku: "FG-1", quantity: 1 }],
+        }],
+      } as any,
+      ctx,
+      "u1",
+    );
+
+    expect(res.success).toBe(true);
+    const line = h.linesByOrder.get("so13")![0];
+    expect(line.qtyShipped).toBe(1); // NOT filled to 4
+    expect(line.qtyFulfilled).toBe(1);
+  });
+
+  it("never fabricates shipment when the partial payload carries no line detail", async () => {
+    seedOpenOrder("6005", "so14", [
+      { id: "l1", productId: "FG1", sku: "FG-1", qtyOrdered: 4, qtyAllocated: 4, qtyShipped: 0, qtyFulfilled: 0, backorderQty: 0 },
+    ]);
+
+    await handleOrderPartiallyFulfilled(
+      { id: 6005, name: "#2005", fulfillments: [{ status: "success", shipment_status: "in_transit" }] } as any,
+      ctx,
+      "u1",
+    );
+
+    expect(h.linesByOrder.get("so14")![0].qtyShipped).toBe(0);
   });
 });
 

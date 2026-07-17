@@ -81,9 +81,14 @@ async function openUnshippedBySku(): Promise<Map<string, number>> {
     SELECT sol.sku, sum(greatest(coalesce(sol.qty_ordered,0) - coalesce(sol.qty_shipped,0), 0))::int AS open
     FROM sales_order_lines sol
     JOIN sales_orders so ON so.id = sol.sales_order_id
-    -- SHIPPED excluded: qty_shipped is not populated on shipped lines, so without
-    -- this every shipped-not-delivered unit counts as "open" and pushes afs
-    -- corrections too low (audit H3).
+    -- SHIPPED excluded: historically qty_shipped was not populated on shipped
+    -- lines, so without this every shipped-not-delivered unit counted as "open"
+    -- and pushed afs corrections too low (audit H3). P0-3 (Jul 2026) now fills
+    -- qty_shipped on every SHIPPED/DELIVERED transition via
+    -- fulfillment-line-reconciler + the guarded scripts/backfill-qty-shipped.ts,
+    -- so once the backfill has run and the fill has proven reliable in prod this
+    -- exclusion can be revisited (SHIPPED lines would then contribute
+    -- qty_ordered − qty_shipped = 0 naturally instead of being blanket-excluded).
     WHERE upper(coalesce(so.status,'')) NOT IN ('SHIPPED','FULFILLED','CANCELLED','DELIVERED','REFUNDED','PENDING_REFUND')
     GROUP BY sol.sku`);
   const map = new Map<string, number>();

@@ -25833,6 +25833,20 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Accounting Spine Health — PO -> QuickBooks Bill reconciliation. Read-only:
+  // tells the operator whether eligible POs are in QBO exactly once, draft POs
+  // have not leaked to QBO, and local Bill rows match their PO accounting stamp.
+  app.get("/api/finances/accounting-spine", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getAccountingSpineHealth } = await import("./services/accounting-spine-health-service");
+      res.json(await getAccountingSpineHealth(db));
+    } catch (error: any) {
+      console.error("[Accounting Spine Health] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build accounting spine health" });
+    }
+  });
+
   // Marketing Truth — the hero-tile payload: blended MER + contribution MER vs
   // breakevens, with the feed-confidence layer. Composes the canonical engines
   // (governor / contribution-margin / reconciliation); no math of its own.

@@ -86,9 +86,9 @@ beforeEach(() => {
 });
 
 function seedPO(id: string, extra: Record<string, any> = {}) {
-  // Default APPROVED: the sync refuses POs that aren't approved/sent/received
-  // (status guard added on origin main) — fixtures assume an eligible PO.
-  h.pos.set(id, { id, poNumber: `PO-${id}`, supplierId: `sup-${id}`, status: "APPROVED", ...extra });
+  // Default SENT (PR #4's merged convention): the sync refuses POs that aren't
+  // approved/sent/received — fixtures assume an eligible PO.
+  h.pos.set(id, { id, poNumber: `PO-${id}`, supplierId: `sup-${id}`, status: "SENT", ...extra });
   h.suppliers.set(`sup-${id}`, { id: `sup-${id}`, name: `Vendor ${id}` });
   h.linesByPo.set(id, [{ id: `l-${id}`, itemId: `i-${id}`, qtyOrdered: 2, unitCost: 5 }]);
   h.items.push({ id: `i-${id}`, sku: `SKU-${id}`, name: `Item ${id}` });
@@ -106,6 +106,14 @@ describe("syncApprovedPOToQuickBooks (auto-push on PO send)", () => {
     const res = await syncApprovedPOToQuickBooks("missing", "u1");
     expect(res.success).toBe(false);
     expect(res.error).toBe("Purchase order not found");
+  });
+
+  it("skips draft/unapproved POs before creating a QuickBooks Bill", async () => {
+    seedPO("po1", { status: "DRAFT" });
+    const res = await syncApprovedPOToQuickBooks("po1", "u1");
+    expect(res).toMatchObject({ success: false, skipped: true });
+    expect(res.reason).toMatch(/approved\/sent\/received/i);
+    expect(h.createBill).not.toHaveBeenCalled();
   });
 
   it("is idempotent: skips if the PO already links a QuickBooks Bill", async () => {
@@ -258,5 +266,73 @@ describe("markPOBillAsPaidInQuickBooks", () => {
     expect(res.success).toBe(false);
     expect(res.error).toBe("no bank account");
     expect(h.bills.get("po1").status).toBe("CREATED");
+  });
+});
+
+describe("raw QBO payload capture (accounting-spine evidence)", () => {
+  it("stores the full QBO Bill API response as rawPayload on the created bill row", async () => {
+    // The harness above mocks ./quickbooks-client for the orchestrator tests;
+    // pull in the REAL client here so this exercises the actual bill-row writer
+    // that runs at sync time. Its network/auth surface is stubbed per-instance —
+    // no QuickBooks API calls are made.
+    const { QuickBooksClient: RealQuickBooksClient } = await vi.importActual<
+      typeof import("./quickbooks-client")
+    >("./quickbooks-client");
+
+    const created: any[] = [];
+    const clientStorage = {
+      getQuickbooksBillByPurchaseOrderId: vi.fn().mockResolvedValue(null),
+      createQuickbooksBill: vi.fn(async (bill: any) => {
+        created.push(bill);
+        return { id: "row1", ...bill };
+      }),
+    };
+
+    const client: any = new RealQuickBooksClient(clientStorage as any, "u1");
+    client.initialize = vi.fn().mockResolvedValue(true);
+    client.findOrCreateVendor = vi.fn().mockResolvedValue("VEND-1");
+    client.findItemOrFallback = vi.fn().mockResolvedValue({ itemId: "QBI-1", useAccount: false });
+
+    const qboBillResponse = {
+      Id: "QB123",
+      DocNumber: "B-1",
+      VendorRef: { value: "VEND-1", name: "Vendor po1" },
+      TxnDate: "2026-07-01",
+      TotalAmt: 10,
+      Line: [
+        {
+          Id: "1",
+          Amount: 10,
+          Description: "Item po1 (SKU-po1)",
+          DetailType: "ItemBasedExpenseLineDetail",
+          ItemBasedExpenseLineDetail: { ItemRef: { value: "QBI-1" }, Qty: 2, UnitPrice: 5 },
+        },
+      ],
+    };
+    client.apiRequest = vi.fn().mockResolvedValue({ Bill: qboBillResponse });
+
+    const po = {
+      id: "po1",
+      poNumber: "PO-po1",
+      supplierId: "sup-po1",
+      status: "APPROVED",
+      orderDate: new Date("2026-07-01T00:00:00Z"),
+      expectedDate: null,
+    };
+    const poLines = [{ id: "l-po1", itemId: "i-po1", qtyOrdered: 2, unitCost: 5 }];
+    const supplier = { id: "sup-po1", name: "Vendor po1" };
+    const items = new Map([["i-po1", { id: "i-po1", sku: "SKU-po1", name: "Item po1" }]]);
+
+    const res = await client.createBillFromPurchaseOrder(po, poLines, supplier, items);
+
+    expect(res).toMatchObject({ success: true, billId: "QB123", billNumber: "B-1" });
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      purchaseOrderId: "po1",
+      quickbooksBillId: "QB123",
+      status: "CREATED",
+    });
+    // The created bill row captured the QBO response object verbatim.
+    expect(created[0].rawPayload).toEqual(qboBillResponse);
   });
 });

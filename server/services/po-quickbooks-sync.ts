@@ -258,7 +258,12 @@ export async function markPOBillAsPaidInQuickBooks(
       return { success: false, error: result.error || 'BillPayment creation failed' };
     }
 
-    await storage.updateQuickbooksBill(billRecord.id, { status: 'PAID' });
+    // Persist the fresh QBO Bill response fetched during payment (when present)
+    // so raw_payload stays the authoritative evidence for the spine classifier.
+    await storage.updateQuickbooksBill(billRecord.id, {
+      status: 'PAID',
+      ...(result.bill ? { rawPayload: result.bill } : {}),
+    });
 
     return {
       success: true,

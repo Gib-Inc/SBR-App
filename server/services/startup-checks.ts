@@ -322,6 +322,8 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     // as-rendered so Friday variance review can compare "what we believed then"
     // against actual bank/QBO outcomes without reconstructing stale assumptions.
     `CREATE TABLE IF NOT EXISTS forecast_snapshots (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), as_of date NOT NULL, forecast_type text NOT NULL, payload jsonb NOT NULL, generated_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())`,
+    `ALTER TABLE forecast_snapshots ADD COLUMN IF NOT EXISTS forecast_type text NOT NULL DEFAULT 'cash_forecast'`,
+    `ALTER TABLE forecast_snapshots ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()`,
     `CREATE UNIQUE INDEX IF NOT EXISTS forecast_snapshots_asof_type_uidx ON forecast_snapshots(as_of, forecast_type)`,
     // Operator-entered BANK-CONFIRMED available balance — the source of truth for cash on
     // hand. QuickBooks' Account.CurrentBalance lags the live bank (feed delay + book-vs-bank),

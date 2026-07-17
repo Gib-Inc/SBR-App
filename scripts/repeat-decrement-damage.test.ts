@@ -6,6 +6,9 @@
 import { describe, it, expect } from "vitest";
 import {
   aggregateRepeatDecrementDamage,
+  cappedRestore,
+  liveShortfall,
+  normalizeSku,
   type DupFireLineRow,
 } from "./repeat-decrement-damage";
 
@@ -111,5 +114,85 @@ describe("aggregateRepeatDecrementDamage", () => {
       row({ sku: null, qtyOrdered: 2 }),
     ]);
     expect(out[0].sku).toBe("(no sku)");
+  });
+});
+
+describe("cappedRestore (--capped true-up mode)", () => {
+  it("live cap wins when the shortfall is smaller than the audit bound", () => {
+    // pivot 120 − open 17 − afs 100 = shortfall 3 < audit bound 9
+    expect(
+      cappedRestore({ auditBound: 9, pivot: 120, openUnshipped: 17, afs: 100 }),
+    ).toBe(3);
+  });
+
+  it("audit bound wins when it is smaller than the live shortfall", () => {
+    // pivot 50 − open 5 − afs 30 = shortfall 15 > audit bound 4
+    expect(
+      cappedRestore({ auditBound: 4, pivot: 50, openUnshipped: 5, afs: 30 }),
+    ).toBe(4);
+  });
+
+  it("floors at 0 when afs already sits at or above pivot − openUnshipped", () => {
+    // afs == pivot − open exactly → nothing missing
+    expect(
+      cappedRestore({ auditBound: 10, pivot: 40, openUnshipped: 10, afs: 30 }),
+    ).toBe(0);
+    // afs ABOVE pivot − open → still 0, never a negative "restore"
+    expect(
+      cappedRestore({ auditBound: 10, pivot: 40, openUnshipped: 10, afs: 45 }),
+    ).toBe(0);
+  });
+
+  it("never exceeds pivot − openUnshipped − afs (hard invariant, grid check)", () => {
+    for (const auditBound of [0, 1, 3, 7, 50]) {
+      for (const pivot of [0, 5, 20, 100]) {
+        for (const openUnshipped of [0, 3, 25, 120]) {
+          for (const afs of [0, 4, 19, 100]) {
+            const restore = cappedRestore({ auditBound, pivot, openUnshipped, afs });
+            const headroom = Math.max(0, pivot - openUnshipped - afs);
+            expect(restore).toBeGreaterThanOrEqual(0);
+            expect(restore).toBeLessThanOrEqual(headroom);
+            expect(restore).toBeLessThanOrEqual(auditBound);
+            // Applying the restore can never push afs above pivot − openUnshipped.
+            expect(afs + restore).toBeLessThanOrEqual(
+              Math.max(afs, pivot - openUnshipped),
+            );
+          }
+        }
+      }
+    }
+  });
+
+  it("clamps malformed negative openUnshipped to 0 instead of inflating the shortfall", () => {
+    // open = −10 must NOT become pivot + 10 headroom
+    expect(
+      cappedRestore({ auditBound: 100, pivot: 20, openUnshipped: -10, afs: 15 }),
+    ).toBe(5);
+  });
+
+  it("clamps malformed negative or fractional audit bounds to whole non-negative units", () => {
+    expect(
+      cappedRestore({ auditBound: -3, pivot: 100, openUnshipped: 0, afs: 0 }),
+    ).toBe(0);
+    expect(
+      cappedRestore({ auditBound: 2.9, pivot: 100, openUnshipped: 0, afs: 0 }),
+    ).toBe(2);
+  });
+});
+
+describe("liveShortfall", () => {
+  it("is pivot − openUnshipped − afs floored at 0", () => {
+    expect(liveShortfall({ pivot: 30, openUnshipped: 10, afs: 5 })).toBe(15);
+    expect(liveShortfall({ pivot: 30, openUnshipped: 10, afs: 25 })).toBe(0);
+    expect(liveShortfall({ pivot: 0, openUnshipped: 0, afs: 0 })).toBe(0);
+  });
+});
+
+describe("normalizeSku (must mirror inventory-drift-resolver.ts norm)", () => {
+  it("strips the SKU: prefix, punctuation, and uppercases", () => {
+    expect(normalizeSku("SKU: sbr-36")).toBe("SBR36");
+    expect(normalizeSku("sbr 36 / v2")).toBe("SBR36V2");
+    expect(normalizeSku(null)).toBe("");
+    expect(normalizeSku(undefined)).toBe("");
   });
 });

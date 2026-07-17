@@ -38,6 +38,56 @@ export interface SkuDamage {
 }
 
 /**
+ * SKU normalization — MUST stay identical to `norm` in
+ * server/services/inventory-drift-resolver.ts (openUnshippedBySku keys its map
+ * with it). Replicated here instead of imported so this module stays free of
+ * server/DB imports (the resolver pulls in storage + drizzle at module load).
+ */
+export const normalizeSku = (s: string | null | undefined): string =>
+  (s ?? "").replace(/^SKU:\s*/i, "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+
+// ─── Capped true-up math (--capped mode) ───
+
+export interface CappedRestoreInput {
+  /** Audit-derived upper bound: overDecrementedUnits for the SKU. */
+  auditBound: number;
+  /** items.pivot_qty — Extensiv sellable mirror, read at run time. */
+  pivot: number;
+  /** Open unshipped units for the SKU (openUnshippedBySku semantics). */
+  openUnshipped: number;
+  /** items.available_for_sale_qty, read at run time. */
+  afs: number;
+}
+
+/**
+ * Live shortfall: how far afs currently sits BELOW where open orders say it
+ * should be (pivot − openUnshipped), floored at 0. A zero means afs is already
+ * at or above the pivot − open baseline — nothing is missing right now.
+ */
+export function liveShortfall(
+  input: Pick<CappedRestoreInput, "pivot" | "openUnshipped" | "afs">,
+): number {
+  const open = Math.max(0, input.openUnshipped ?? 0);
+  return Math.max(0, (input.pivot ?? 0) - open - (input.afs ?? 0));
+}
+
+/**
+ * Capped restoration for one SKU: min(audit bound, live shortfall).
+ *
+ * INVARIANT (by construction): the returned restore can never push afs above
+ * pivot − openUnshipped, because restore ≤ liveShortfall = max(0,
+ * pivot − open − afs). The audit bound is an UPPER bound (Math.max clamping and
+ * per-line audit rows inflate it), so the live shortfall wins whenever the
+ * world has already absorbed part of the damage (Extensiv sync, cancellations,
+ * later restorative movements). Malformed inputs are clamped, never inverted:
+ * a negative/fractional audit bound floors to 0 units restored.
+ */
+export function cappedRestore(input: CappedRestoreInput): number {
+  const bound = Math.max(0, Math.floor(input.auditBound ?? 0));
+  return Math.min(bound, liveShortfall(input));
+}
+
+/**
  * Aggregate per-item over-decrement damage from dup-order line rows.
  *
  * Semantics match the audit SQL: SUM(extra_fires × qty_ordered) GROUP BY item,

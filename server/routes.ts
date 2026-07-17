@@ -24605,6 +24605,24 @@ Generate only the email body text, no subject line.`;
       const rec = reconcileMarketingSnapshot(active as any, { platform, periodStart, periodEnd, spend: Number(f.spend) || 0, sourceHash });
       const entityKey = `${platform} ${periodStart ?? "?"}..${periodEnd ?? "?"}`;
 
+      if (platform === "META") {
+        const { isFreshMetaDirectProtectedForPeriod } = await import("./services/meta-ads-client");
+        const guard = await isFreshMetaDirectProtectedForPeriod(periodStart, periodEnd);
+        if (guard.protected) {
+          await storage.createDataReconciliationLog([{
+            dataType: "marketing_spend",
+            entityKey,
+            action: "DISREGARDED",
+            field: "spend",
+            oldValue: null,
+            newValue: String(Number(f.spend) || 0),
+            reason: `${guard.reason} Latest direct period_end=${guard.latestPeriodEnd}.`,
+            source,
+          }]).catch(() => {});
+          return res.json({ success: true, action: "DISREGARDED", reconciliation: [{ action: "DISREGARDED", reason: guard.reason }], message: guard.reason });
+        }
+      }
+
       // Identical re-upload → log + no-op (don't add a duplicate row).
       if (rec.action === "DISREGARDED") {
         await storage.createDataReconciliationLog([{ dataType: "marketing_spend", entityKey, action: "DISREGARDED", field: null, oldValue: null, newValue: null, reason: rec.decision.reason, source }]);
@@ -25829,6 +25847,15 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  app.get("/api/marketing/meta-direct/feed-confidence", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getMetaDirectFeedConfidence } = await import("./services/meta-ads-client");
+      res.json({ success: true, confidence: await getMetaDirectFeedConfidence() });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || "Failed to compute Meta feed confidence" });
+    }
+  });
+
   app.get("/api/finances/inventory-reconciliation", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");
@@ -26103,6 +26130,21 @@ Generate only the email body text, no subject line.`;
         s.periodStart && s.periodEnd &&
         s.periodStart <= parsed.periodEnd! && s.periodEnd >= parsed.periodStart!,
       );
+      const { isFreshMetaDirectProtectedForPeriod } = await import("./services/meta-ads-client");
+      const directGuard = await isFreshMetaDirectProtectedForPeriod(parsed.periodStart, parsed.periodEnd);
+      if (directGuard.protected) {
+        const entityKey = `META ${parsed.periodStart}..${parsed.periodEnd}`;
+        await storage.createDataReconciliationLog([{
+          dataType: "marketing_spend", entityKey,
+          action: "DISREGARDED",
+          field: "spend",
+          oldValue: null,
+          newValue: String(parsed.totalSpend),
+          reason: `${directGuard.reason} Latest direct period_end=${directGuard.latestPeriodEnd}.`,
+          source: "manual:meta-tracker",
+        }]).catch(() => {});
+        return res.json({ success: true, action: "DISREGARDED", message: directGuard.reason, ingested: { ...parsed, superseded: 0 } });
+      }
       if (overlapping.length) {
         await storage.markMarketingSpendSnapshotsSuperseded(overlapping.map((s: any) => s.id), "manual:meta-tracker");
       }
@@ -26651,6 +26693,20 @@ Generate only the email body text, no subject line.`;
           String(s.platform || "").toUpperCase() === "META" &&
           s.periodStart && s.periodEnd &&
           s.periodStart <= parsed.periodEnd! && s.periodEnd >= parsed.periodStart!);
+        const { isFreshMetaDirectProtectedForPeriod } = await import("./services/meta-ads-client");
+        const directGuard = await isFreshMetaDirectProtectedForPeriod(parsed.periodStart, parsed.periodEnd);
+        if (directGuard.protected) {
+          const entityKey = `META ${parsed.periodStart}..${parsed.periodEnd}`;
+          await storage.createDataReconciliationLog([{
+            dataType: "marketing_spend", entityKey,
+            action: "DISREGARDED", field: "spend",
+            oldValue: null,
+            newValue: String(parsed.totalSpend),
+            reason: `${directGuard.reason} Latest direct period_end=${directGuard.latestPeriodEnd}.`,
+            source: `upload:${fileName}`,
+          }]).catch(() => {});
+          return res.json({ success: true, month: result.month, campaigns: result.inserted, totalSpend: parsed.totalSpend, rollupSuperseded: 0, rollupAction: "DISREGARDED", message: directGuard.reason });
+        }
         if (overlapping.length) {
           await storage.markMarketingSpendSnapshotsSuperseded(overlapping.map((s: any) => s.id), `upload:${fileName}`);
         }
@@ -27706,6 +27762,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Marketing Analytics Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Marketing Analytics Scheduler:", error);
+  });
+
+  import("./services/meta-direct-feed-scheduler").then(({ initializeMetaDirectFeedScheduler }) => {
+    initializeMetaDirectFeedScheduler();
+    console.log("[Server] Meta Direct Feed Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Meta Direct Feed Scheduler:", error);
   });
 
   import("./services/system-integrity-scheduler").then(({ initializeSystemIntegrityScheduler }) => {

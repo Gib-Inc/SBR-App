@@ -43,17 +43,47 @@ describe("summarizeAccountingSpine", () => {
     });
   });
 
-  it("warns when a linked PO and local QBO Bill amount differ", () => {
+  it("warns when a linked PO and local QBO Bill amount differ without a local explanation", () => {
     const health = summarizeAccountingSpine({
       ...clean,
-      amountMismatches: [{ po_number: "PO-2026-0020", po_total: 825, qb_total: 800, diff: 25 }],
+      amountMismatches: [{ po_number: "PO-2026-0020", po_total: 825, qb_total: 800, diff: 25, classification: "unexplained" }],
     });
 
     expect(health.overall).toBe("warn");
     expect(health.accountingPolicy).toBe("review_before_close");
-    expect(health.checks.find((c) => c.id === "po_bill_amount_mismatch")).toMatchObject({
+    expect(health.checks.find((c) => c.id === "po_bill_unexplained_amount_mismatch")).toMatchObject({
       severity: "warn",
       status: "drift",
+      value: 1,
+    });
+  });
+
+  it("keeps known freight/tax header adjustments visible without warning", () => {
+    const health = summarizeAccountingSpine({
+      ...clean,
+      amountMismatches: [{
+        po_number: "PO-2026-0006",
+        po_line_total: 714,
+        shipping_cost: 20.4,
+        taxes: 0,
+        po_total: 734.4,
+        qb_total: 714,
+        diff: 20.4,
+        line_diff: 0,
+        header_adjustment: 20.4,
+        classification: "known_header_adjustment",
+      }],
+    });
+
+    expect(health.overall).toBe("pass");
+    expect(health.accountingPolicy).toBe("books_pipe_healthy");
+    expect(health.checks.find((c) => c.id === "po_bill_unexplained_amount_mismatch")).toMatchObject({
+      severity: "pass",
+      value: 0,
+    });
+    expect(health.checks.find((c) => c.id === "po_bill_known_amount_adjustments")).toMatchObject({
+      severity: "pass",
+      status: "healthy",
       value: 1,
     });
   });

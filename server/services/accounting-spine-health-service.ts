@@ -79,6 +79,10 @@ function checkFromCount(opts: {
   };
 }
 
+function amountMismatchClassification(row: any): string {
+  return String(row?.classification ?? row?.amountMismatchClassification ?? "unexplained");
+}
+
 export function summarizeAccountingSpine(input: {
   eligibleMissingBill: any[];
   draftLeakedToQbo: any[];
@@ -90,6 +94,8 @@ export function summarizeAccountingSpine(input: {
   quickbooksHealth: any | null;
 }): AccountingSpineHealth {
   const checks: AccountingSpineCheck[] = [];
+  const unexplainedAmountMismatches = input.amountMismatches.filter((row) => amountMismatchClassification(row) === "unexplained");
+  const explainedAmountAdjustments = input.amountMismatches.filter((row) => amountMismatchClassification(row) !== "unexplained");
 
   checks.push(checkFromCount({
     id: "eligible_po_missing_qbo_bill",
@@ -122,15 +128,30 @@ export function summarizeAccountingSpine(input: {
   }));
 
   checks.push(checkFromCount({
-    id: "po_bill_amount_mismatch",
-    label: "PO total vs QuickBooks Bill amount",
-    count: input.amountMismatches.length,
+    id: "po_bill_unexplained_amount_mismatch",
+    label: "Unexplained PO vs QuickBooks Bill amount mismatch",
+    count: unexplainedAmountMismatches.length,
     block: false,
     healthyDetail: "Linked PO totals match local QuickBooks Bill totals within $1.",
-    driftDetail: `${input.amountMismatches.length} linked PO(s) differ from their QuickBooks Bill total by more than $1.`,
-    nextAction: "Compare PO lines, shipping, taxes, and vendor invoice totals for these POs.",
-    sample: input.amountMismatches.slice(0, 10),
+    driftDetail: `${unexplainedAmountMismatches.length} linked PO(s) differ from their QuickBooks Bill total by more than $1 without a local shipping/tax/invoice explanation.`,
+    nextAction: "Compare PO lines against the vendor invoice/QBO Bill and classify the adjustment or repair the local record.",
+    sample: unexplainedAmountMismatches.slice(0, 10),
   }));
+
+  checks.push({
+    id: "po_bill_known_amount_adjustments",
+    label: "Known PO→QBO amount adjustments",
+    severity: "pass",
+    status: "healthy",
+    value: explainedAmountAdjustments.length,
+    detail: explainedAmountAdjustments.length > 0
+      ? `${explainedAmountAdjustments.length} linked PO(s) differ from QBO by a locally explained header or invoice adjustment.`
+      : "No known PO→QBO header/invoice adjustments are currently present.",
+    nextAction: explainedAmountAdjustments.length > 0
+      ? "No close blocker. Review only if Roger says the freight/tax/invoice handling is wrong."
+      : "No action needed.",
+    sample: explainedAmountAdjustments.slice(0, 10),
+  });
 
   checks.push(checkFromCount({
     id: "quickbooks_bill_error_rows",
@@ -220,10 +241,34 @@ export async function getAccountingSpineHealth(db: any): Promise<AccountingSpine
     limit 50`));
 
   const amountMismatches = rows(await db.execute(sql`
-    select po.id, po.po_number, po.total as po_total, qb.total_amount as qb_total,
-           round((coalesce(po.total,0) - coalesce(qb.total_amount,0))::numeric, 2)::float8 as diff
+    with line_totals as (
+      select purchase_order_id,
+             round(sum(coalesce(line_total, qty_ordered * unit_cost, 0))::numeric, 2)::float8 as po_line_total
+      from purchase_order_lines
+      group by purchase_order_id
+    )
+    select po.id,
+           po.po_number,
+           coalesce(lt.po_line_total, 0)::float8 as po_line_total,
+           coalesce(po.shipping_cost, 0)::float8 as shipping_cost,
+           coalesce(po.taxes, 0)::float8 as taxes,
+           po.invoice_total as invoice_total,
+           po.total as po_total,
+           qb.total_amount as qb_total,
+           round((coalesce(po.total,0) - coalesce(qb.total_amount,0))::numeric, 2)::float8 as diff,
+           round((coalesce(lt.po_line_total,0) - coalesce(qb.total_amount,0))::numeric, 2)::float8 as line_diff,
+           round((coalesce(po.shipping_cost,0) + coalesce(po.taxes,0))::numeric, 2)::float8 as header_adjustment,
+           case
+             when abs(coalesce(lt.po_line_total,0) - coalesce(qb.total_amount,0)) <= 1
+              and abs((coalesce(po.total,0) - coalesce(qb.total_amount,0)) - (coalesce(po.shipping_cost,0) + coalesce(po.taxes,0))) <= 1
+               then 'known_header_adjustment'
+             when po.invoice_total is not null and abs(coalesce(po.invoice_total,0) - coalesce(qb.total_amount,0)) <= 1
+               then 'invoice_total_matches_qbo'
+             else 'unexplained'
+           end as classification
     from purchase_orders po
     join quickbooks_bills qb on qb.purchase_order_id = po.id
+    left join line_totals lt on lt.purchase_order_id = po.id
     where abs(coalesce(po.total,0) - coalesce(qb.total_amount,0)) > 1
     order by abs(coalesce(po.total,0) - coalesce(qb.total_amount,0)) desc
     limit 50`));
@@ -275,8 +320,12 @@ export async function getAccountingSpineHealth(db: any): Promise<AccountingSpine
   // Attach rounded numeric diffs for samples that carry money.
   for (const check of result.checks) {
     check.sample = check.sample.map((row) => {
-      if (row?.diff != null) return { ...row, diff: r2(num(row.diff) ?? 0) };
-      return row;
+      const moneyFields = ["diff", "po_line_total", "shipping_cost", "taxes", "invoice_total", "po_total", "qb_total", "line_diff", "header_adjustment"];
+      const next = { ...row };
+      for (const field of moneyFields) {
+        if (next?.[field] != null) next[field] = r2(num(next[field]) ?? 0);
+      }
+      return next;
     });
   }
 

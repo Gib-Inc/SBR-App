@@ -6,7 +6,9 @@
  *
  * PER-CHANNEL PRECEDENCE (each channel resolves independently so one gap never
  * pollutes another):
- *  - GOOGLE   = QuickBooks qb_pl_detail (vendor/account Google). Zo's Google Ads
+ *  - GOOGLE   = QuickBooks qb_pl_detail (vendor/account Google), RESTRICTED to
+ *               advertising/marketing accounts — Google Workspace charges booked to
+ *               "Memberships, Dues & Subscriptions" are NOT ad spend. Zo's Google Ads
  *               export VALIDATES QB (~$3.7-11K/mo); ad_metrics_daily Google is ~3x
  *               inflated (SKU/campaign double-count) — NOT used as the spine.
  *  - META     = QB Facebook vendor through the daily-card era (≤ 2026-04, high
@@ -39,6 +41,19 @@ const num = (v: any): number => {
   return Number.isFinite(n) ? n : 0;
 };
 const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Pure: resolve a QB FILTERed channel sum for one month. `sum(...) FILTER` returns
+ * NULL when the month has qb_pl_detail rows but none match the channel filter. For a
+ * CLOSED month that is plausibly a real "$0 booked" (keep the historical behavior);
+ * for the CURRENT in-progress month it only means QB hasn't booked the channel yet —
+ * that must stay a gap (null), never be coerced into a confident $0 while real spend
+ * runs (the false-confident-zero bug, Jul 2026).
+ */
+export function resolveQbChannelSum(raw: unknown, month: string, currentMonth: string): number | null {
+  if (raw == null) return month >= currentMonth ? null : 0;
+  return num(raw);
+}
 
 // Meta's daily-charged-card era ends here; after this it's on a credit line and
 // QB stops booking it as Facebook advertising expense.
@@ -128,6 +143,7 @@ export interface MonthInputs {
   pinterest?: number | null;
   booked?: number | null; // total QB Advertising
   marketingLabor?: number | null; // allowlisted labor outside Advertising (MARKETING_LABOR_VENDORS)
+  isCurrentMonth?: boolean; // in-progress month: QB absence = "not booked yet", never a confident $0
 }
 
 /** Pure: resolve one month's per-channel spend + totals from the gathered inputs. */
@@ -135,10 +151,13 @@ export function assembleMonth(month: string, inp: MonthInputs): MonthSpend {
   const isClosedDailyCard = month < META_QB_CUTOFF_MONTH; // Meta still on the daily card
   const has = (v: number | null | undefined) => v != null && Number.isFinite(v);
 
-  // GOOGLE — QB is the validated spine.
+  // GOOGLE — QB is the validated spine. A gap in the CURRENT month means "QB hasn't
+  // booked it yet" while spend is likely running (understated), not "genuinely $0".
   const google: ChannelSpend = has(inp.qbGoogle)
     ? { spend: r2(inp.qbGoogle as number), source: "quickbooks", confidence: "high", understated: false }
-    : { spend: null, source: "none", confidence: "low", understated: false, gapReason: "no QB Google spend booked" };
+    : inp.isCurrentMonth
+      ? { spend: null, source: "none", confidence: "low", understated: true, gapReason: "in-progress month — QB has not booked Google spend yet" }
+      : { spend: null, source: "none", confidence: "low", understated: false, gapReason: "no QB Google spend booked" };
 
   // META — QB-Facebook for the daily-card era, compliant snapshots after the credit-line switch.
   let meta: ChannelSpend;
@@ -218,9 +237,13 @@ async function _computeCanonicalMonthlySpendByChannel(db: any, monthsBack: numbe
 
   // QB per-vendor monthly (Google + Facebook/Meta). Meta only counts the daily-card
   // era — credit-line charges post untagged, so we don't trust QB Facebook past then.
+  // Google requires an advertising/marketing account alongside the vendor match:
+  // Google Workspace charges land in "Memberships, Dues & Subscriptions" and are NOT
+  // ad spend (they leaked $348.25 into June 2026 before this filter).
   const qb = rows(await db.execute(sql`
     SELECT to_char(date_trunc('month', txn_date), 'YYYY-MM') AS mo,
-      sum(amount) FILTER (WHERE vendor_or_payee ILIKE '%google%' OR account_name ILIKE '%google%') AS qb_google,
+      sum(amount) FILTER (WHERE (vendor_or_payee ILIKE '%google%' OR account_name ILIKE '%google%')
+        AND (account_name ILIKE '%advertis%' OR account_name ILIKE '%marketing%')) AS qb_google,
       sum(amount) FILTER (WHERE vendor_or_payee ILIKE '%facebook%' OR vendor_or_payee ILIKE '%meta%') AS qb_meta
     FROM qb_pl_detail WHERE txn_date >= ${cutStr}::date GROUP BY 1`));
   const qbMap = new Map<string, any>(qb.map((r) => [r.mo, r]));
@@ -271,15 +294,19 @@ async function _computeCanonicalMonthlySpendByChannel(db: any, monthsBack: numbe
     ].filter((m) => m >= cutStr.slice(0, 7)),
   );
 
+  const nowMo = `${dNow.getFullYear()}-${String(dNow.getMonth() + 1).padStart(2, "0")}`;
   return Array.from(allMonths).sort().map((mo) =>
     assembleMonth(mo, {
-      qbGoogle: qbMap.has(mo) ? num(qbMap.get(mo).qb_google) : null,
+      // resolveQbChannelSum: a NULL FILTERed sum in the CURRENT month stays a gap
+      // (QB just hasn't booked it yet) instead of coercing to a confident $0.
+      qbGoogle: qbMap.has(mo) ? resolveQbChannelSum(qbMap.get(mo).qb_google, mo, nowMo) : null,
       qbMeta: qbMap.has(mo) ? num(qbMap.get(mo).qb_meta) : null,
       metaSnap: metaSnapMap.has(mo) ? metaSnapMap.get(mo)! : null,
       amazon: admMap.has(mo) ? num(admMap.get(mo).amazon) : null,
       pinterest: admMap.has(mo) ? num(admMap.get(mo).pinterest) : null,
       booked: bookedMap.has(mo) ? bookedMap.get(mo)! : null,
       marketingLabor: laborMap.has(mo) ? laborMap.get(mo)! : null,
+      isCurrentMonth: mo === nowMo,
     }),
   );
 }

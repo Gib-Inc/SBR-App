@@ -143,6 +143,21 @@ describe("monthRangeOverlapFraction", () => {
   });
 });
 
+describe("monthRangeOverlapFraction — in-progress month (dataEnd clamps the spend span)", () => {
+  it("counts an in-progress month IN FULL when the window covers its whole data span", () => {
+    // July's spend covers Jul 1-9 only; a 30d window ending Jul 9 fully contains it → 1, NOT 9/31
+    expect(monthRangeOverlapFraction("2026-07", "2026-06-10", "2026-07-09", "2026-07-09")).toBe(1);
+  });
+  it("prorates against the DATA span, not the calendar month", () => {
+    // window covers Jul 1-5 of a Jul 1-9 data span → 5/9 (not 5/31)
+    expect(monthRangeOverlapFraction("2026-07", "2026-07-01", "2026-07-05", "2026-07-09")).toBeCloseTo(5 / 9, 6);
+  });
+  it("a dataEnd at/after month-end leaves closed months untouched", () => {
+    expect(monthRangeOverlapFraction("2026-06", "2026-06-01", "2026-06-30", "2026-07-09")).toBe(1);
+    expect(monthRangeOverlapFraction("2026-05", "2026-05-30", "2026-06-28", "2026-07-09")).toBeCloseTo(2 / 31, 6);
+  });
+});
+
 describe("prorateMonthsToRange", () => {
   const months = [
     { month: "2026-03", byChannel: { GOOGLE: { spend: 5000 }, META: { spend: 63164 }, AMAZON: { spend: null } } },
@@ -169,6 +184,22 @@ describe("prorateMonthsToRange", () => {
     const out = prorateMonthsToRange(months, "2026-03-30", "2026-03-31");
     expect(out.GOOGLE).toBeCloseTo(5000 * (2 / 31), 2);
     expect(out.META).toBeCloseTo(63164 * (2 / 31), 2);
+  });
+
+  it("counts an in-progress month's fully-window-covered spend IN FULL (the July 9/31 bug)", () => {
+    // July Meta $7,286.43 booked over Jul 1-9; a 30d window that fully contains
+    // Jul 1-9 must take all of it — the old full-calendar-month proration took
+    // only 9/31 (~$2,116) of real spend the window entirely covers.
+    const july = [{ month: "2026-07", byChannel: { META: { spend: 7286.43 }, GOOGLE: { spend: null } } }];
+    const out = prorateMonthsToRange(july, "2026-06-10", "2026-07-09", "2026-07-09");
+    expect(out.META).toBeCloseTo(7286.43, 2);
+    expect(out.GOOGLE).toBeUndefined(); // null stays a gap even with dataEnd
+  });
+
+  it("dataEnd does not disturb closed months in the same window", () => {
+    const out = prorateMonthsToRange(months, "2026-03-01", "2026-04-30", "2026-07-09");
+    expect(out.GOOGLE).toBeCloseTo(9059, 2);
+    expect(out.META).toBeCloseTo(120328, 2);
   });
 });
 

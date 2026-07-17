@@ -50,37 +50,46 @@ export function daysInMonth(month: string): number {
 }
 
 /**
- * Fraction (0..1) of calendar `month` (YYYY-MM) that lies within the inclusive
- * window [start, end] (YYYY-MM-DD). A month fully inside → 1; fully outside → 0;
- * a partial month → its in-window day count ÷ days-in-month.
+ * Fraction (0..1) of `month`'s SPEND SPAN that lies within the inclusive window
+ * [start, end] (YYYY-MM-DD). The spend span is month-start → min(month-end,
+ * `dataEnd`): an in-progress month's spend only covers month-start → today, so
+ * treating it as spread over the FULL calendar month made a window that fully
+ * contains the data span count only span÷days-in-month of it (e.g. July's Jul 1-9
+ * spend × 9/31 inside a 30d window that contains all of Jul 1-9). Span fully
+ * inside → 1; fully outside → 0; partial → in-window span days ÷ span days.
  */
-export function monthRangeOverlapFraction(month: string, start: string, end: string): number {
+export function monthRangeOverlapFraction(month: string, start: string, end: string, dataEnd?: string): number {
   const dim = daysInMonth(month);
   const mStart = `${month}-01`;
-  const mEnd = `${month}-${String(dim).padStart(2, "0")}`;
+  let mEnd = `${month}-${String(dim).padStart(2, "0")}`;
+  if (dataEnd && dataEnd < mEnd) mEnd = dataEnd < mStart ? mStart : dataEnd;
+  const spanDays = Math.round((Date.parse(mEnd + "T00:00:00Z") - Date.parse(mStart + "T00:00:00Z")) / 86400000) + 1;
   const lo = start > mStart ? start : mStart;
   const hi = end < mEnd ? end : mEnd;
   if (hi < lo) return 0;
   const days = Math.round((Date.parse(hi + "T00:00:00Z") - Date.parse(lo + "T00:00:00Z")) / 86400000) + 1;
-  return Math.max(0, Math.min(1, days / dim));
+  return Math.max(0, Math.min(1, days / spanDays));
 }
 
 /**
  * Pure: day-prorate canonical MONTHLY per-channel spend onto an arbitrary window
- * [start, end]. Each month contributes its per-channel spend × the fraction of the
- * month that falls inside the window. null channel-months contribute nothing
- * (FLAG-DON'T-FABRICATE — a gap stays a gap, never a fabricated 0). Returns UPPER
- * channel keys. This is what makes the range view a faithful slice of the same
- * canonical truth the monthly Summary shows — never a second, disagreeing engine.
+ * [start, end]. Each month contributes its per-channel spend × the fraction of its
+ * SPEND SPAN (month-start → min(month-end, dataEnd)) that falls inside the window,
+ * so an in-progress month fully covered by the window contributes in FULL. null
+ * channel-months contribute nothing (FLAG-DON'T-FABRICATE — a gap stays a gap,
+ * never a fabricated 0). Returns UPPER channel keys. This is what makes the range
+ * view a faithful slice of the same canonical truth the monthly Summary shows —
+ * never a second, disagreeing engine.
  */
 export function prorateMonthsToRange(
   months: Array<{ month: string; byChannel: Record<string, { spend: number | null } | undefined> }>,
   start: string,
   end: string,
+  dataEnd?: string,
 ): Record<string, number> {
   const acc: Record<string, number> = {};
   for (const m of months) {
-    const frac = monthRangeOverlapFraction(m.month, start, end);
+    const frac = monthRangeOverlapFraction(m.month, start, end, dataEnd);
     if (frac <= 0) continue;
     for (const ch of Object.keys(m.byChannel)) {
       const sp = m.byChannel[ch]?.spend;
@@ -194,7 +203,9 @@ export async function getCorrectedAdSpendRange(
     // months is free and never silently truncates a wide window's early months).
     const monthsBack = Math.max(14, monthsSinceStart(start) + 1);
     const months = await getCanonicalMonthlySpendByChannel(db, monthsBack);
-    canonical = prorateMonthsToRange(months, start, end);
+    // dataEnd = today: the current month's spend only spans month-start → today, so
+    // a window covering that whole span takes the month's spend in full (not ×n/31).
+    canonical = prorateMonthsToRange(months, start, end, isoDaysAgo(0, Date.now()));
   } catch {
     /* canonical unavailable → fall back to live ad_metrics below (never empty) */
   }

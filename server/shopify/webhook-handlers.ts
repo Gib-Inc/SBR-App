@@ -562,6 +562,10 @@ export async function handleOrderCancelled(
             source: 'SHOPIFY',
             orderId: existingOrder.id,
             salesOrderLineId: line.id,
+            // Anchored on Shopify's order id so a redelivered orders/cancelled
+            // webhook claims the same ledger key (line-zeroing above is the
+            // first guard; the ledger is the hard stop).
+            externalRef: `SHOPIFY:${orderId}:${line.id}`,
             channel: 'SHOPIFY',
             userId,
             notes: `Shopify order ${orderName} cancelled: released ${allocated} allocated`,

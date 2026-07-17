@@ -522,6 +522,10 @@ export class ShopifyClient {
 
     const lineItems = order.line_items.map(item => ({
       sku: item.sku || `SHOPIFY-${item.id}`,
+      // Shopify's own line-item id — carried through so the sync path claims the
+      // SAME idempotency ref (SHOPIFY:{orderId}:{lineItemId}) as the webhook
+      // path. One physical movement = one ledger key across every ingest path.
+      externalLineId: String(item.id),
       qtyOrdered: item.quantity,
       unitPrice: parseFloat(item.price),
     }));

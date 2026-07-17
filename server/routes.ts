@@ -7620,6 +7620,18 @@ TOTAL: $${subtotal.toFixed(2)}
               }
             }
 
+            // Duplicate-creation guard: createSalesOrder 23505-recovers to the
+            // canonical order when a webhook won the insert race — in that case
+            // this "create branch" is really an update and must NOT add a second
+            // set of lines or re-decrement stock. (The ledger claim below is the
+            // hard backstop; this guard keeps the lines table clean.)
+            const preexistingLines = await storage.getSalesOrderLines(salesOrder.id);
+            if (preexistingLines.length > 0) {
+              console.log(`[Shopify] Order ${orderData.externalOrderId} already has ${preexistingLines.length} line(s) — skipping line creation (create raced an earlier ingest)`);
+              createdCount++;
+              continue;
+            }
+
             // Create order lines
             for (const lineItem of orderData.lineItems) {
               try {
@@ -7696,6 +7708,10 @@ TOTAL: $${subtotal.toFixed(2)}
                     source: "SYSTEM",
                     orderId: salesOrder.id,
                     salesOrderLineId: createdLine.id,
+                    // Same canonical ref as the webhook path: one physical
+                    // movement claims one ledger key no matter which ingest
+                    // path fires first (webhook, sync, or backfill).
+                    externalRef: `SHOPIFY:${orderData.externalOrderId}:${(lineItem as any).externalLineId ?? lineItem.sku}`,
                     channel: "SHOPIFY",
                     notes: `Shopify order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
                   });
@@ -8814,6 +8830,16 @@ TOTAL: $${subtotal.toFixed(2)}
               }
             }
 
+            // Duplicate-creation guard: createSalesOrder 23505-recovers to the
+            // canonical order when another ingest won the insert race — do NOT
+            // add a second set of lines or re-decrement stock in that case.
+            const preexistingAmzLines = await storage.getSalesOrderLines(salesOrder.id);
+            if (preexistingAmzLines.length > 0) {
+              console.log(`[Amazon] Order ${orderData.externalOrderId} already has ${preexistingAmzLines.length} line(s) — skipping line creation (create raced an earlier ingest)`);
+              createdCount++;
+              continue;
+            }
+
             // Create order lines
             for (const lineItem of orderData.lineItems) {
               try {
@@ -8890,6 +8916,10 @@ TOTAL: $${subtotal.toFixed(2)}
                     source: "SYSTEM",
                     orderId: salesOrder.id,
                     salesOrderLineId: createdLine.id,
+                    // Deterministic per (order, sku): Amazon order ids are
+                    // globally unique and Amazon orders don't repeat SKUs per
+                    // line, so re-syncs/replays claim the same ledger key.
+                    externalRef: `AMAZON:${orderData.externalOrderId}:${lineItem.sku}`,
                     channel: "AMAZON",
                     notes: `Amazon order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
                   });
@@ -21861,6 +21891,9 @@ Generate only the email body text, no subject line.`;
           source: "USER",
           orderId: createdOrder.id,
           salesOrderLineId: line.id,
+          // Manual creates have no external id; the internal order+line pair is
+          // deterministic for this single-path flow (retries re-POST = new order).
+          externalRef: `MANUAL:${createdOrder.id}:${line.id}`,
           channel: validatedOrder.channel,
           userId: req.session.userId,
           userName: user?.email,
@@ -21969,6 +22002,9 @@ Generate only the email body text, no subject line.`;
               source: "USER",
               orderId: id,
               salesOrderLineId: line.id,
+              // Same key shape as webhook/service cancels: a delete racing a
+              // channel cancel restores stock exactly once.
+              externalRef: `${order.channel}:${order.externalOrderId ?? order.id}:${line.id}`,
               channel: order.channel,
               userId: req.session.userId,
               userName: user?.email,

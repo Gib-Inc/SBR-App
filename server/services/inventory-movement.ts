@@ -182,31 +182,12 @@ export class InventoryMovement {
       const location = params.location || (isFinished ? "PIVOT" : "N/A");
       const isPivotFulfilled = location === "PIVOT";
 
+      // Idempotency ref is computed here but CLAIMED atomically with the stock
+      // write below (claimLedgerAndUpdateItem). Claiming before the write left a
+      // crash window where the ledger recorded a movement that never applied —
+      // a permanently-skipped decrement (phantom stock).
       const idempotencyRef = this.getIdempotencyRef(params);
-      if (idempotencyRef) {
-        const claimed = await this.storage.claimInventoryMovementLedger({
-          movementType: params.eventType,
-          externalRef: idempotencyRef,
-          itemId: params.itemId,
-          source: params.source,
-          orderId: params.orderId,
-          salesOrderLineId: params.salesOrderLineId,
-          quantity: params.quantity,
-        });
 
-        if (!claimed) {
-          await this.logDedupSkip(params, item, beforeState, idempotencyRef);
-          return {
-            success: true,
-            itemId: params.itemId,
-            sku: item.sku,
-            beforeQty: beforeState.onHand,
-            afterQty: beforeState.onHand,
-            quantityChanged: 0,
-          };
-        }
-      }
-      
       let updates: {
         hildaleQty?: number;
         pivotQty?: number;
@@ -482,7 +463,46 @@ export class InventoryMovement {
 
       if (Object.keys(updates).length > 0) {
         updates.forecastDirty = true;
-        await this.storage.updateItem(params.itemId, updates);
+        if (idempotencyRef) {
+          // Claim + stock write in ONE transaction (PostgresStorage runs both
+          // inside db.transaction). Unique-conflict on the ledger → no stock
+          // change, one capped DEDUP_SKIP log row, deduplicated result.
+          // Partial storage stubs (test harnesses) may lack the atomic method;
+          // fall back to sequential claim→write so the gateway still dedups.
+          const claim = {
+            movementType: params.eventType,
+            externalRef: idempotencyRef,
+            itemId: params.itemId,
+            source: params.source,
+            orderId: params.orderId,
+            salesOrderLineId: params.salesOrderLineId,
+            quantity: params.quantity,
+          };
+          let claimResult: { claimed: boolean };
+          if (typeof (this.storage as any).claimLedgerAndUpdateItem === "function") {
+            claimResult = await this.storage.claimLedgerAndUpdateItem(claim, params.itemId, updates);
+          } else if (typeof (this.storage as any).claimInventoryMovementLedger === "function") {
+            const claimed = await this.storage.claimInventoryMovementLedger(claim);
+            if (claimed) await this.storage.updateItem(params.itemId, updates);
+            claimResult = { claimed };
+          } else {
+            await this.storage.updateItem(params.itemId, updates);
+            claimResult = { claimed: true };
+          }
+          if (!claimResult.claimed) {
+            await this.logDedupSkip(params, item, beforeState, idempotencyRef);
+            return {
+              success: true,
+              itemId: params.itemId,
+              sku: item.sku,
+              beforeQty: beforeState.onHand,
+              afterQty: beforeState.onHand,
+              quantityChanged: 0,
+            };
+          }
+        } else {
+          await this.storage.updateItem(params.itemId, updates);
+        }
         // Realtime broadcast: only the fields we actually mutated. forecastDirty
         // is a bookkeeping flag and not relevant to the UI, so we strip it.
         const changedFields = Object.keys(updates).filter((f) => f !== "forecastDirty");
@@ -656,8 +676,20 @@ export class InventoryMovement {
     // the same movement twice.
     if (
       params.eventType !== "SALES_ORDER_CREATED" &&
-      params.eventType !== "SALES_ORDER_CANCELLED"
+      params.eventType !== "SALES_ORDER_CANCELLED" &&
+      params.eventType !== "BOM_CONSUMPTION"
     ) {
+      return null;
+    }
+
+    // BOM_CONSUMPTION: fulfillment-time draw is a no-op (C3 fix in
+    // bom-consumption-service.ts); the live draw is production-build only.
+    // Claim on the production log so a re-fired build event (retry, replayed
+    // request, future scheduler) can never draw the same log's components twice.
+    // The ledger unique key includes item_id, so per-component claims are distinct.
+    if (params.eventType === "BOM_CONSUMPTION") {
+      if (params.externalRef) return params.externalRef;
+      if (params.productionLogId) return `PRODUCTION:${params.productionLogId}`;
       return null;
     }
 
@@ -667,6 +699,20 @@ export class InventoryMovement {
     return null;
   }
 
+  // Audit-noise cap: at most ONE DEDUP_SKIP row per (ref, item) per MT day.
+  // A webhook redelivery storm must be provable from the audit log, not drown it.
+  // Process-lifetime map; resets on deploy, which only means one extra row/day.
+  private static dedupLogSeen = new Map<string, string>();
+
+  private shouldLogDedupSkip(idempotencyRef: string, itemId: string): boolean {
+    const day = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+    const key = `${idempotencyRef}:${itemId}`;
+    if (InventoryMovement.dedupLogSeen.get(key) === day) return false;
+    InventoryMovement.dedupLogSeen.set(key, day);
+    if (InventoryMovement.dedupLogSeen.size > 50_000) InventoryMovement.dedupLogSeen.clear();
+    return true;
+  }
+
   private async logDedupSkip(
     params: InventoryMovementParams,
     item: Item,
@@ -674,6 +720,7 @@ export class InventoryMovement {
     idempotencyRef: string,
   ): Promise<void> {
     try {
+      if (!this.shouldLogDedupSkip(idempotencyRef, params.itemId)) return;
       const source: AuditSource = params.source === "USER" || params.source === "SYSTEM"
         ? params.source as AuditSource
         : "SYSTEM";

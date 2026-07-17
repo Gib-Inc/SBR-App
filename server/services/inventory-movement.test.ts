@@ -61,6 +61,18 @@ class FakeStorage {
     return true;
   }
 
+  // Atomic claim+write twin (PostgresStorage runs both in one db.transaction).
+  async claimLedgerAndUpdateItem(
+    claim: { movementType: string; externalRef: string; itemId: string },
+    itemId: string,
+    updates: Partial<Item>,
+  ): Promise<{ claimed: boolean; item?: Item }> {
+    const claimed = await this.claimInventoryMovementLedger(claim);
+    if (!claimed) return { claimed: false };
+    const item = await this.updateItem(itemId, updates);
+    return { claimed: true, item };
+  }
+
   // Costing surfaces (FinOps Pillar 2). Tests seed these directly.
   poLines: any[] = [];
   bom: any[] = [];
@@ -448,5 +460,90 @@ describe("weighted-average cost maintenance", () => {
     expect(storage.reconLogs[0].action).toBe("SHRINKAGE");
     expect(storage.reconLogs[0].newValue).toBe("-15"); // -5 × $3 WAC
     expect(storage.reconLogs[0].dataType).toBe("inventory_valuation");
+  });
+});
+
+// ── P0-1 work order: idempotency ledger gap-closes (fix/number-integrity) ──
+describe("idempotency ledger — work-order regression suite", () => {
+  it("webhook 3x + reconciliation + backfill on one order → exactly ONE decrement", async () => {
+    finished({ availableForSaleQty: 100 });
+    const fire = (salesOrderLineId: string) =>
+      engine.apply({
+        eventType: "SALES_ORDER_CREATED", itemId: "FG1", quantity: 4,
+        location: "PIVOT", source: "SHOPIFY", orderId: "so-1",
+        salesOrderLineId,
+        // Canonical cross-path ref: webhook + sync + backfill all derive the
+        // SAME key from the Shopify order + line-item ids, even when their
+        // INTERNAL line ids differ (racing creates mint different line rows).
+        externalRef: "SHOPIFY:9001:li-77",
+      });
+    await fire("line-A"); // webhook delivery 1
+    await fire("line-A"); // webhook redelivery
+    await fire("line-A"); // webhook redelivery
+    await fire("line-B"); // reconciliation pass minted a different internal line
+    await fire("line-C"); // backfill pass
+    expect(storage.get("FG1").availableForSaleQty).toBe(96);
+  });
+
+  it("10x redelivery storm → one decrement, and DEDUP_SKIP audit noise is capped to one row", async () => {
+    const { AuditLogger } = await import("./audit-logger");
+    (AuditLogger.logEvent as any).mockClear();
+    finished({ availableForSaleQty: 50 });
+    for (let i = 0; i < 10; i++) {
+      await engine.apply({
+        eventType: "SALES_ORDER_CREATED", itemId: "FG1", quantity: 3,
+        location: "PIVOT", source: "SHOPIFY", orderId: "so-storm",
+        salesOrderLineId: "line-1", externalRef: "SHOPIFY:9002:li-1",
+      });
+    }
+    expect(storage.get("FG1").availableForSaleQty).toBe(47);
+    const dedupRows = (AuditLogger.logEvent as any).mock.calls
+      .filter((c: any[]) => c[0]?.details?.dedupAction === "DEDUP_SKIP");
+    expect(dedupRows.length).toBe(1); // 9 skips, ONE audit row per (ref,item,day)
+  });
+
+  it("BOM_CONSUMPTION re-fired for the same production log consumes components once", async () => {
+    component({ currentStock: 40 });
+    const draw = () =>
+      engine.apply({
+        eventType: "BOM_CONSUMPTION", itemId: "C1", quantity: 6,
+        location: "N/A", source: "USER", productionLogId: "plog-1",
+      });
+    await draw();
+    await draw(); // replayed build event
+    expect((storage.get("C1") as any).currentStock).toBe(34);
+  });
+
+  it("cancel-after-create restores once; redelivered cancel does not double-restore", async () => {
+    finished({ availableForSaleQty: 100 });
+    await engine.apply({
+      eventType: "SALES_ORDER_CREATED", itemId: "FG1", quantity: 10,
+      location: "PIVOT", source: "SHOPIFY", orderId: "so-2",
+      salesOrderLineId: "line-1", externalRef: "SHOPIFY:9003:li-1",
+    });
+    expect(storage.get("FG1").availableForSaleQty).toBe(90);
+    const cancel = () =>
+      engine.apply({
+        eventType: "SALES_ORDER_CANCELLED", itemId: "FG1", quantity: 10,
+        location: "PIVOT", source: "SHOPIFY", orderId: "so-2",
+        salesOrderLineId: "line-1", externalRef: "SHOPIFY:9003:line-1",
+      });
+    await cancel();
+    expect(storage.get("FG1").availableForSaleQty).toBe(100);
+    await cancel(); // webhook redelivery of orders/cancelled
+    expect(storage.get("FG1").availableForSaleQty).toBe(100);
+  });
+
+  it("claim is NOT burned when the movement produces no stock update (atomicity contract)", async () => {
+    // PURCHASE_ORDER_RECEIVED on finished product = warn-and-no-op; it is not a
+    // claimed event type, so the ledger stays empty and nothing is recorded.
+    finished({ availableForSaleQty: 10, hildaleQty: 5 });
+    const res = await engine.apply({
+      eventType: "PURCHASE_ORDER_RECEIVED", itemId: "FG1", quantity: 99,
+      location: "HILDALE", source: "SYSTEM", poId: "po-1",
+    });
+    expect(res.success).toBe(true);
+    expect(storage.get("FG1").availableForSaleQty).toBe(10);
+    expect(storage.get("FG1").hildaleQty).toBe(5);
   });
 });

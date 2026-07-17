@@ -1518,7 +1518,9 @@ export class QuickBooksClient {
 
       const newBill = createResult.Bill;
 
-      // Store bill record
+      // Store bill record — including the full QBO Bill API response, so the
+      // accounting-spine classifier can later prove line-level explanations
+      // from the authoritative payload instead of inferring them.
       await this.storage.createQuickbooksBill({
         purchaseOrderId: po.id,
         quickbooksBillId: newBill.Id,
@@ -1526,6 +1528,7 @@ export class QuickBooksClient {
         status: 'CREATED',
         totalAmount: newBill.TotalAmt,
         dueDate: po.expectedDate,
+        rawPayload: newBill,
       });
 
       // Log success
@@ -1596,6 +1599,8 @@ export class QuickBooksClient {
   async markBillAsPaid(quickbooksBillId: string): Promise<{
     success: boolean;
     billPaymentId?: string;
+    /** Fresh QBO Bill response fetched during payment — callers persist it as raw_payload. */
+    bill?: QBBill;
     error?: string;
   }> {
     try {
@@ -1665,7 +1670,7 @@ export class QuickBooksClient {
         },
       });
 
-      return { success: true, billPaymentId: newPayment.Id };
+      return { success: true, billPaymentId: newPayment.Id, bill };
     } catch (error: any) {
       await AuditLogger.logEvent({
         source: 'QUICKBOOKS',

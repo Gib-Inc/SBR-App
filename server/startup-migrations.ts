@@ -411,6 +411,15 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "qb_categorization_proposals.status_idx",
     sql: `CREATE INDEX IF NOT EXISTS qb_cat_proposals_status_idx ON qb_categorization_proposals (status, confidence DESC)`,
   },
+
+  // quickbooks_bills.raw_payload — full QBO Bill API response stored at sync
+  // time (PO→QBO Bill create, and updates that receive a fresh QBO response).
+  // Evidence source so the accounting-spine classifier can later prove
+  // line-level explanations instead of inferring them.
+  {
+    name: "quickbooks_bills.raw_payload",
+    sql: `ALTER TABLE quickbooks_bills ADD COLUMN IF NOT EXISTS raw_payload jsonb`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

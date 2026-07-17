@@ -134,7 +134,7 @@ describe("handleOrderCancelled (H2)", () => {
 });
 
 describe("handleOrderFulfilled (C3 fulfillment trigger)", () => {
-  it("triggers BOM consumption at fulfillment time with the fulfilled line items", async () => {
+  it("calls the shared no-op BOM service contract with the fulfilled line items", async () => {
     seedOpenOrder("6001", "so10", []);
 
     await handleOrderFulfilled(
@@ -143,8 +143,6 @@ describe("handleOrderFulfilled (C3 fulfillment trigger)", () => {
       "u1",
     );
 
-    // This is the second BOM draw that, combined with production-time consumption,
-    // constitutes the C3 double-consume.
     expect(consumeBomForFulfilledOrder).toHaveBeenCalledTimes(1);
     const callArgs = (consumeBomForFulfilledOrder as any).mock.calls[0];
     expect(callArgs[0]).toEqual([{ sku: "FG-SHOP", qtyFulfilled: 3 }]);

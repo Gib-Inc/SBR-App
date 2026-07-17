@@ -182,8 +182,32 @@ export class InventoryMovement {
       const location = params.location || (isFinished ? "PIVOT" : "N/A");
       const isPivotFulfilled = location === "PIVOT";
 
+      const requiresIdempotency = this.requiresIdempotency(params);
       const idempotencyRef = this.getIdempotencyRef(params);
+      if (requiresIdempotency && !idempotencyRef) {
+        return {
+          success: false,
+          itemId: params.itemId,
+          sku: item.sku,
+          beforeQty: beforeState.onHand,
+          afterQty: beforeState.onHand,
+          quantityChanged: 0,
+          error: `${params.eventType} requires an idempotency reference before stock can move`,
+        };
+      }
       if (idempotencyRef) {
+        if (typeof this.storage.claimInventoryMovementLedger !== "function") {
+          return {
+            success: false,
+            itemId: params.itemId,
+            sku: item.sku,
+            beforeQty: beforeState.onHand,
+            afterQty: beforeState.onHand,
+            quantityChanged: 0,
+            error: "Inventory movement ledger claim method is unavailable; refusing to mutate stock",
+          };
+        }
+
         const claimed = await this.storage.claimInventoryMovementLedger({
           movementType: params.eventType,
           externalRef: idempotencyRef,
@@ -638,6 +662,8 @@ export class InventoryMovement {
           poId: params.poId,
           returnId: params.returnId,
           salesOrderLineId: params.salesOrderLineId,
+          idempotencyRef: this.getIdempotencyRef(params),
+          externalRef: params.externalRef,
           notes: params.notes,
         },
         performedByUserId: params.userId?.toString(),
@@ -654,10 +680,7 @@ export class InventoryMovement {
     // The key is claimed before any item update so webhook redelivery,
     // reconciliation backfills, or concurrent handlers cannot decrement/restore
     // the same movement twice.
-    if (
-      params.eventType !== "SALES_ORDER_CREATED" &&
-      params.eventType !== "SALES_ORDER_CANCELLED"
-    ) {
+    if (!this.requiresIdempotency(params)) {
       return null;
     }
 
@@ -665,6 +688,11 @@ export class InventoryMovement {
     if (params.salesOrderLineId) return `${params.orderId ?? "order"}:${params.salesOrderLineId}`;
     if (params.orderId) return params.orderId;
     return null;
+  }
+
+  private requiresIdempotency(params: InventoryMovementParams): boolean {
+    return params.eventType === "SALES_ORDER_CREATED" ||
+      params.eventType === "SALES_ORDER_CANCELLED";
   }
 
   private async logDedupSkip(

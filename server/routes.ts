@@ -7696,6 +7696,7 @@ TOTAL: $${subtotal.toFixed(2)}
                     source: "SYSTEM",
                     orderId: salesOrder.id,
                     salesOrderLineId: createdLine.id,
+                    externalRef: `SHOPIFY:${orderData.externalOrderId}:${createdLine.id}`,
                     channel: "SHOPIFY",
                     notes: `Shopify order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
                   });
@@ -8890,6 +8891,7 @@ TOTAL: $${subtotal.toFixed(2)}
                     source: "SYSTEM",
                     orderId: salesOrder.id,
                     salesOrderLineId: createdLine.id,
+                    externalRef: `AMAZON:${orderData.externalOrderId}:${createdLine.id}`,
                     channel: "AMAZON",
                     notes: `Amazon order ${orderData.externalOrderId}: ${qtyAllocated} ${lineItem.sku} allocated, ${backorderQty} backordered`,
                   });
@@ -21861,6 +21863,7 @@ Generate only the email body text, no subject line.`;
           source: "USER",
           orderId: createdOrder.id,
           salesOrderLineId: line.id,
+          externalRef: `${validatedOrder.channel || "MANUAL"}:${createdOrder.externalOrderId || createdOrder.id}:${line.id}`,
           channel: validatedOrder.channel,
           userId: req.session.userId,
           userName: user?.email,

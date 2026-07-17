@@ -108,7 +108,7 @@ describe("SALES_ORDER_CREATED", () => {
     finished({ availableForSaleQty: 100, pivotQty: 100, hildaleQty: 30 });
     const res = await engine.apply({
       eventType: "SALES_ORDER_CREATED", itemId: "FG1", quantity: 10,
-      location: "PIVOT", source: "SYSTEM",
+      location: "PIVOT", source: "SYSTEM", orderId: "so-1", salesOrderLineId: "line-1",
     });
     expect(res.success).toBe(true);
     const fg = storage.get("FG1");
@@ -121,9 +121,25 @@ describe("SALES_ORDER_CREATED", () => {
     finished({ availableForSaleQty: 6 });
     await engine.apply({
       eventType: "SALES_ORDER_CREATED", itemId: "FG1", quantity: 10,
-      location: "PIVOT", source: "SYSTEM",
+      location: "PIVOT", source: "SYSTEM", orderId: "so-2", salesOrderLineId: "line-1",
     });
     expect(storage.get("FG1").availableForSaleQty).toBe(0);
+  });
+
+  it("fails closed when a sales movement has no idempotency reference", async () => {
+    finished({ availableForSaleQty: 100 });
+
+    const res = await engine.apply({
+      eventType: "SALES_ORDER_CREATED",
+      itemId: "FG1",
+      quantity: 4,
+      location: "PIVOT",
+      source: "SYSTEM",
+    });
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/requires an idempotency reference/i);
+    expect(storage.get("FG1").availableForSaleQty).toBe(100);
   });
 
   it("is idempotent for repeated external sales-order movements", async () => {
@@ -165,7 +181,7 @@ describe("SALES_ORDER_CANCELLED", () => {
     // actually decremented), so a 10-unit order with only 6 allocated restores 6.
     await engine.apply({
       eventType: "SALES_ORDER_CANCELLED", itemId: "FG1", quantity: 6,
-      location: "PIVOT", source: "USER",
+      location: "PIVOT", source: "USER", orderId: "so-cancel-1", salesOrderLineId: "line-1",
     });
     const fg = storage.get("FG1");
     expect(fg.availableForSaleQty).toBe(96);
@@ -174,8 +190,8 @@ describe("SALES_ORDER_CANCELLED", () => {
 
   it("create then cancel the same qty is a round-trip (no drift)", async () => {
     finished({ availableForSaleQty: 50 });
-    await engine.apply({ eventType: "SALES_ORDER_CREATED", itemId: "FG1", quantity: 8, location: "PIVOT", source: "SYSTEM" });
-    await engine.apply({ eventType: "SALES_ORDER_CANCELLED", itemId: "FG1", quantity: 8, location: "PIVOT", source: "USER" });
+    await engine.apply({ eventType: "SALES_ORDER_CREATED", itemId: "FG1", quantity: 8, location: "PIVOT", source: "SYSTEM", orderId: "so-round", salesOrderLineId: "line-1" });
+    await engine.apply({ eventType: "SALES_ORDER_CANCELLED", itemId: "FG1", quantity: 8, location: "PIVOT", source: "USER", orderId: "so-round", salesOrderLineId: "line-1" });
     expect(storage.get("FG1").availableForSaleQty).toBe(50);
   });
 });
@@ -349,7 +365,14 @@ describe("invariants", () => {
       storage = new FakeStorage();
       engine = new InventoryMovement(storage as unknown as IStorage);
       finished({ hildaleQty: 20, availableForSaleQty: 20, pivotQty: 77 });
-      await engine.apply({ ...e, itemId: "FG1", source: "USER" });
+      await engine.apply({
+        ...e,
+        itemId: "FG1",
+        source: "USER",
+        ...(e.eventType === "SALES_ORDER_CREATED" || e.eventType === "SALES_ORDER_CANCELLED"
+          ? { orderId: `so-${e.eventType}`, salesOrderLineId: "line-1" }
+          : {}),
+      });
       expect(storage.get("FG1").pivotQty, `pivotQty must not move on ${e.eventType}`).toBe(77);
     }
   });

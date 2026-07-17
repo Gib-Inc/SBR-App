@@ -32,6 +32,20 @@
  *                        gateway, printing before/after per line. Aborts on
  *                        the first error. Never touches SKUs outside the
  *                        damage set.
+ *   --capped           — cap each SKU's restore at its LIVE shortfall:
+ *                        restore = min(audit_bound, pivot_qty − openUnshipped −
+ *                        available_for_sale_qty), floored at 0, computed AT RUN
+ *                        TIME. openUnshipped replicates inventory-drift-resolver's
+ *                        openUnshippedBySku exactly (status exclusions,
+ *                        qty_ordered − qty_shipped, SKU normalization).
+ *                        HARD INVARIANT: a capped restore may never push afs
+ *                        above pivot_qty − openUnshipped — recomputed and
+ *                        re-clamped right before every --apply write.
+ *                        SKUs with a stale pivot (extensiv_last_sync_at older
+ *                        than 24h, or never synced) are HARD-SKIPPED with a
+ *                        named line — never zero-filled or guessed. Works with
+ *                        both dry-run and --apply. Without --capped the
+ *                        original uncapped plan is unchanged (for comparison).
  *   --sku=X            — restrict the report and the plan to one SKU.
  *
  * Required environment variables:
@@ -40,7 +54,9 @@
  * Usage:
  *   npx tsx scripts/incident-2026-07-repeat-decrement.ts             (dry-run)
  *   npx tsx scripts/incident-2026-07-repeat-decrement.ts --sku=SBR-36
+ *   npx tsx scripts/incident-2026-07-repeat-decrement.ts --capped    (capped dry-run)
  *   npx tsx scripts/incident-2026-07-repeat-decrement.ts --apply     (writes!)
+ *   npx tsx scripts/incident-2026-07-repeat-decrement.ts --capped --apply  (capped writes!)
  *
  * All reads go through a dedicated pg Pool (with an error handler — a dropped
  * idle connection must not crash the process). Writes go ONLY through
@@ -52,6 +68,9 @@
 import pg from "pg";
 import {
   aggregateRepeatDecrementDamage,
+  cappedRestore,
+  liveShortfall,
+  normalizeSku,
   type DupFireLineRow,
   type SkuDamage,
 } from "./repeat-decrement-damage";
@@ -59,9 +78,12 @@ import {
 // ─── CLI / configuration ───
 
 const APPLY = process.argv.includes("--apply");
+const CAPPED = process.argv.includes("--capped");
 const skuArg = process.argv.find((a) => a.startsWith("--sku="));
 const SKU_FILTER = skuArg ? skuArg.slice("--sku=".length) : null;
 const WINDOW_DAYS = 30;
+/** --capped: pivots synced longer ago than this are HARD-SKIPPED, never used. */
+const STALE_PIVOT_HOURS = 24;
 const NOTES_PREFIX = "INCIDENT-2026-07-REPEAT-DECREMENT";
 
 function banner(): void {
@@ -74,6 +96,12 @@ function banner(): void {
   } else {
     console.log("  INCIDENT-2026-07-REPEAT-DECREMENT — DRY RUN (read-only, NO writes)");
     console.log("  This prints the complete true-up plan and exits. Pass --apply to execute.");
+  }
+  if (CAPPED) {
+    console.log(
+      "  Mode: --capped — each restore = min(audit bound, live shortfall); stale",
+    );
+    console.log("  pivots (>24h / never synced) and components are HARD-SKIPPED.");
   }
   if (SKU_FILTER) console.log(`  SKU filter: ${SKU_FILTER}`);
   console.log(line);
@@ -114,6 +142,63 @@ function buildTrueUpNote(d: SkuDamage): string {
     `for ${d.sku} — audit replays showed ${d.totalExtraFires} extra SALES_ORDER_CREATED fire(s) ` +
     `across ${d.affectedOrders} order(s) in the last ${WINDOW_DAYS} days (upper-bound estimate; ` +
     `Math.max(0,·) clamping may have absorbed part of it)`
+  );
+}
+
+// ─── --capped mode helpers ───
+
+/** Days representation for the stale-pivot skip line ("pivot stale 1.5d"). */
+function staleDays(ageHours: number): string {
+  return `${(ageHours / 24).toFixed(1)}d`;
+}
+
+/**
+ * Open unshipped units per NORMALIZED SKU. Replicates
+ * server/services/inventory-drift-resolver.ts openUnshippedBySku() EXACTLY —
+ * same status exclusions, same greatest(qty_ordered − qty_shipped, 0) math,
+ * same SKU normalization (normalizeSku mirrors the resolver's `norm`) — but
+ * through this script's read pool so dry-run never constructs the server
+ * storage layer. If the resolver's query changes, change this one with it.
+ */
+async function fetchOpenUnshippedBySku(pool: pg.Pool): Promise<Map<string, number>> {
+  const res = await pool.query(
+    `SELECT sol.sku, sum(greatest(coalesce(sol.qty_ordered,0) - coalesce(sol.qty_shipped,0), 0))::int AS open
+     FROM sales_order_lines sol
+     JOIN sales_orders so ON so.id = sol.sales_order_id
+     WHERE upper(coalesce(so.status,'')) NOT IN ('SHIPPED','FULFILLED','CANCELLED','DELIVERED','REFUNDED','PENDING_REFUND')
+     GROUP BY sol.sku`,
+  );
+  const map = new Map<string, number>();
+  for (const r of res.rows) {
+    const n = normalizeSku(r.sku);
+    if (n) map.set(n, (map.get(n) ?? 0) + Number(r.open || 0));
+  }
+  return map;
+}
+
+/** The live numbers behind one capped restore (plan time or re-clamp time). */
+interface CappedCalc {
+  auditBound: number;
+  pivot: number;
+  openUnshipped: number;
+  afs: number;
+  shortfall: number;
+  restore: number;
+}
+
+interface CappedPlanLine extends CappedCalc {
+  damage: SkuDamage;
+  /** Which side of min(audit bound, live shortfall) determined the restore. */
+  winner: string;
+}
+
+function buildCappedTrueUpNote(d: SkuDamage, c: CappedCalc): string {
+  return (
+    `${NOTES_PREFIX} (capped): restore ${c.restore} unit(s) to availableForSaleQty for ${d.sku} ` +
+    `— min(audit bound ${c.auditBound}, live shortfall ${c.shortfall}) where shortfall = ` +
+    `pivot ${c.pivot} − openUnshipped ${c.openUnshipped} − afs ${c.afs}, floored at 0; audit ` +
+    `replays showed ${d.totalExtraFires} extra SALES_ORDER_CREATED fire(s) across ` +
+    `${d.affectedOrders} order(s) in the last ${WINDOW_DAYS} days`
   );
 }
 
@@ -343,30 +428,144 @@ async function main(): Promise<void> {
     console.log("");
 
     // ── True-up plan ────────────────────────────────────────────────────────
-    console.log("TRUE-UP PLAN — one PROPOSED line per damaged SKU");
-    console.log(
-      "  Restoration uses MANUAL_COUNT (signed difference) via InventoryMovement.apply().",
-    );
-    console.log(
-      "  NEVER SALES_ORDER_CREATED/CANCELLED — their idempotency-ledger claims already",
-    );
-    console.log("  exist, so the gateway would no-op them.");
-    console.log("");
+    // --capped needs the live open-unshipped view; fetched once for the plan
+    // and re-fetched before every apply write (hard-invariant re-clamp).
+    const openBySku = CAPPED ? await fetchOpenUnshippedBySku(pool) : new Map<string, number>();
+    const cappedPlan: CappedPlanLine[] = [];
 
-    if (damages.length === 0) {
-      console.log("  (nothing to true up)");
-    }
-    for (const d of damages) {
-      const isFinished = d.itemType === "finished_product";
-      const target = isFinished ? "availableForSaleQty" : "currentStock";
-      // MANUAL_COUNT semantics (inventory-movement.ts): finished + location !==
-      // HILDALE → availableForSaleQty; components ignore location (N/A) → currentStock.
-      const location = isFinished ? "PIVOT" : "N/A";
+    if (CAPPED) {
+      console.log("TRUE-UP PLAN (CAPPED) — restore = min(audit_bound, live_shortfall) per SKU");
       console.log(
-        `  PROPOSED  ${pad(d.sku, 20)} ${signed(d.overDecrementedUnits)} → ${target}` +
-          `  (MANUAL_COUNT, location=${location}, item=${d.itemId})`,
+        "  live_shortfall = pivot_qty − openUnshipped − available_for_sale_qty (floored",
       );
-      console.log(`            notes: "${buildTrueUpNote(d)}"`);
+      console.log(
+        "  at 0), computed at run time. openUnshipped replicates inventory-drift-resolver's",
+      );
+      console.log(
+        "  openUnshippedBySku (status exclusions, qty_ordered − qty_shipped, SKU norm).",
+      );
+      console.log(
+        "  HARD INVARIANT: a restore never pushes afs above pivot − openUnshipped —",
+      );
+      console.log(
+        "  recomputed and re-clamped again immediately before every --apply write.",
+      );
+      console.log(
+        "  Stale pivots (extensiv_last_sync_at > 24h, or never synced) are HARD-SKIPPED.",
+      );
+      console.log(
+        "  Restoration uses MANUAL_COUNT (signed difference) via InventoryMovement.apply().",
+      );
+      console.log("");
+
+      if (damages.length === 0) {
+        console.log("  (nothing to true up)");
+      }
+      for (const d of damages) {
+        if (d.itemType !== "finished_product") {
+          console.log(
+            `  SKIPPED (component — no Extensiv pivot baseline): ${d.sku} — capped math is ` +
+              "finished-goods only; use the uncapped plan after a physical count",
+          );
+          continue;
+        }
+        if (d.sku === "(no sku)") {
+          console.log(
+            `  SKIPPED (item has no SKU): item ${d.itemId} — cannot match open unshipped ` +
+              "order lines; never guessed",
+          );
+          continue;
+        }
+        const drift = driftByItem.get(d.itemId);
+        if (!drift) {
+          console.log(
+            `  SKIPPED (not in items view — item missing/type changed): ${d.sku} — cannot ` +
+              "compute a live shortfall",
+          );
+          continue;
+        }
+        if (drift.ageHours === null || drift.ageHours > STALE_PIVOT_HOURS) {
+          const staleness =
+            drift.ageHours === null
+              ? "pivot never synced"
+              : `pivot stale ${staleDays(drift.ageHours)}`;
+          console.log(`  SKIPPED (${staleness}): ${d.sku} — re-run after Extensiv refresh`);
+          continue;
+        }
+
+        const open = openBySku.get(normalizeSku(d.sku)) ?? 0;
+        const shortfall = liveShortfall({
+          pivot: drift.pivot,
+          openUnshipped: open,
+          afs: drift.afs,
+        });
+        const restore = cappedRestore({
+          auditBound: d.overDecrementedUnits,
+          pivot: drift.pivot,
+          openUnshipped: open,
+          afs: drift.afs,
+        });
+        const winner =
+          shortfall < d.overDecrementedUnits
+            ? "live cap won"
+            : shortfall > d.overDecrementedUnits
+              ? "audit bound won"
+              : "tie (bound = cap)";
+        const calc: CappedCalc = {
+          auditBound: d.overDecrementedUnits,
+          pivot: drift.pivot,
+          openUnshipped: open,
+          afs: drift.afs,
+          shortfall,
+          restore,
+        };
+        cappedPlan.push({ ...calc, damage: d, winner });
+
+        const label = restore > 0 ? "PROPOSED " : "NO-OP    ";
+        console.log(
+          `  ${label} ${pad(d.sku, 20)} ${restore > 0 ? signed(restore) : "0"} → ` +
+            `availableForSaleQty  (MANUAL_COUNT, location=PIVOT, item=${d.itemId})`,
+        );
+        console.log(
+          `            audit_bound=${calc.auditBound}  pivot=${calc.pivot}  ` +
+            `openUnshipped=${calc.openUnshipped}  afs=${calc.afs}  ` +
+            `live_shortfall=${calc.shortfall}  → restore ${restore} (${winner})`,
+        );
+        if (restore > 0) {
+          console.log(`            notes: "${buildCappedTrueUpNote(d, calc)}"`);
+        } else {
+          console.log(
+            "            nothing to restore — afs already at/above pivot − openUnshipped " +
+              "(or audit bound is 0); no write will be made.",
+          );
+        }
+      }
+    } else {
+      console.log("TRUE-UP PLAN — one PROPOSED line per damaged SKU");
+      console.log(
+        "  Restoration uses MANUAL_COUNT (signed difference) via InventoryMovement.apply().",
+      );
+      console.log(
+        "  NEVER SALES_ORDER_CREATED/CANCELLED — their idempotency-ledger claims already",
+      );
+      console.log("  exist, so the gateway would no-op them.");
+      console.log("");
+
+      if (damages.length === 0) {
+        console.log("  (nothing to true up)");
+      }
+      for (const d of damages) {
+        const isFinished = d.itemType === "finished_product";
+        const target = isFinished ? "availableForSaleQty" : "currentStock";
+        // MANUAL_COUNT semantics (inventory-movement.ts): finished + location !==
+        // HILDALE → availableForSaleQty; components ignore location (N/A) → currentStock.
+        const location = isFinished ? "PIVOT" : "N/A";
+        console.log(
+          `  PROPOSED  ${pad(d.sku, 20)} ${signed(d.overDecrementedUnits)} → ${target}` +
+            `  (MANUAL_COUNT, location=${location}, item=${d.itemId})`,
+        );
+        console.log(`            notes: "${buildTrueUpNote(d)}"`);
+      }
     }
     console.log("");
 
@@ -379,13 +578,22 @@ async function main(): Promise<void> {
     }
 
     // ── APPLY mode ──────────────────────────────────────────────────────────
-    if (damages.length === 0) {
-      console.log("  APPLY mode: damage set is empty — nothing executed.");
+    const executableCapped = cappedPlan.filter((l) => l.restore > 0);
+    if (CAPPED ? executableCapped.length === 0 : damages.length === 0) {
+      console.log(
+        CAPPED
+          ? "  APPLY mode (capped): no executable restore lines (all skipped, capped to 0, or empty) — nothing executed."
+          : "  APPLY mode: damage set is empty — nothing executed.",
+      );
       return;
     }
 
     console.log("═".repeat(74));
-    console.log("  APPLYING TRUE-UP via InventoryMovement.apply() — abort on first error");
+    console.log(
+      CAPPED
+        ? "  APPLYING CAPPED TRUE-UP via InventoryMovement.apply() — abort on first error"
+        : "  APPLYING TRUE-UP via InventoryMovement.apply() — abort on first error",
+    );
     console.log("═".repeat(74));
     console.log("");
 
@@ -393,6 +601,131 @@ async function main(): Promise<void> {
     const { storage } = await import("../server/storage");
     const { InventoryMovement } = await import("../server/services/inventory-movement");
     const movement = new InventoryMovement(storage);
+
+    if (CAPPED) {
+      let applied = 0;
+      let skippedAtWrite = 0;
+      for (const line of executableCapped) {
+        const d = line.damage;
+
+        // HARD INVARIANT: recompute pivot / afs / openUnshipped from the live
+        // DB immediately before the write and re-clamp — the restore may never
+        // push afs above pivot − openUnshipped, even if the world moved since
+        // the plan was printed.
+        const freshRes = await pool.query(
+          `SELECT available_for_sale_qty, pivot_qty, extensiv_last_sync_at
+           FROM items WHERE id = $1`,
+          [d.itemId],
+        );
+        if (freshRes.rows.length === 0) {
+          console.error(`  ❌ ABORT: item ${d.itemId} (${d.sku}) not found at apply time.`);
+          process.exit(1);
+        }
+        const fresh = freshRes.rows[0];
+        const freshAfs = fresh.available_for_sale_qty ?? 0;
+        const freshPivot = fresh.pivot_qty ?? 0;
+        const freshAge = fresh.extensiv_last_sync_at
+          ? (Date.now() - new Date(fresh.extensiv_last_sync_at).getTime()) / 3_600_000
+          : null;
+        if (freshAge === null || freshAge > STALE_PIVOT_HOURS) {
+          const staleness =
+            freshAge === null ? "pivot never synced" : `pivot stale ${staleDays(freshAge)}`;
+          console.log(
+            `  ⏭  SKIPPED at write time (${staleness}): ${d.sku} — re-run after Extensiv refresh`,
+          );
+          skippedAtWrite++;
+          continue;
+        }
+        const freshOpenBySku = await fetchOpenUnshippedBySku(pool);
+        const freshOpen = freshOpenBySku.get(normalizeSku(d.sku)) ?? 0;
+        const freshShortfall = liveShortfall({
+          pivot: freshPivot,
+          openUnshipped: freshOpen,
+          afs: freshAfs,
+        });
+        const restore = cappedRestore({
+          auditBound: line.auditBound,
+          pivot: freshPivot,
+          openUnshipped: freshOpen,
+          afs: freshAfs,
+        });
+        if (restore !== line.restore) {
+          console.log(
+            `  ↻ re-clamped ${d.sku}: planned ${line.restore} → ${restore} ` +
+              `(fresh pivot=${freshPivot}, openUnshipped=${freshOpen}, afs=${freshAfs}, ` +
+              `live_shortfall=${freshShortfall})`,
+          );
+        }
+        if (restore <= 0) {
+          console.log(
+            `  ⏭  ${d.sku}: shortfall fully absorbed since planning — no write made.`,
+          );
+          skippedAtWrite++;
+          continue;
+        }
+
+        const freshCalc: CappedCalc = {
+          auditBound: line.auditBound,
+          pivot: freshPivot,
+          openUnshipped: freshOpen,
+          afs: freshAfs,
+          shortfall: freshShortfall,
+          restore,
+        };
+        const result = await movement.apply({
+          eventType: "MANUAL_COUNT",
+          itemId: d.itemId,
+          quantity: restore, // signed difference; positive capped restore
+          location: "PIVOT",
+          source: "SYSTEM",
+          userName: "incident-2026-07-repeat-decrement.ts",
+          notes: buildCappedTrueUpNote(d, freshCalc),
+        });
+        if (!result.success) {
+          console.error(
+            `  ❌ ABORT on ${d.sku}: ${result.error ?? "InventoryMovement.apply failed"}. ` +
+              "No further lines executed.",
+          );
+          process.exit(1);
+        }
+
+        const after = await storage.getItem(d.itemId);
+        const afterAfs = after ? after.availableForSaleQty ?? 0 : freshAfs + restore;
+        console.log(
+          `  ✅ ${pad(d.sku, 20)} availableForSaleQty: ${freshAfs} → ${afterAfs} ` +
+            `(restore ${signed(restore)} = min(audit ${line.auditBound}, ` +
+            `shortfall ${freshShortfall}); onHand ${result.beforeQty} → ${result.afterQty})`,
+        );
+        // Post-write invariant audit: afs must never exceed pivot − openUnshipped.
+        if (afterAfs > freshPivot - freshOpen) {
+          console.error(
+            `  ❌ ABORT: invariant breached AFTER write on ${d.sku} — afs ${afterAfs} > ` +
+              `pivot ${freshPivot} − openUnshipped ${freshOpen}. A concurrent movement changed ` +
+              "afs between the re-clamp read and the write. The write above already landed; " +
+              "no further lines executed — investigate before re-running.",
+          );
+          process.exit(1);
+        }
+        applied++;
+      }
+
+      console.log("");
+      console.log("═".repeat(74));
+      console.log(
+        `  CAPPED APPLY complete: ${applied} SKU(s) trued up` +
+          (skippedAtWrite ? `, ${skippedAtWrite} skipped at write time` : "") +
+          ". Each restoration",
+      );
+      console.log(
+        "  wrote its own MANUAL_COUNT audit row + WAC overage reconciliation entry.",
+      );
+      console.log(
+        "  Re-run with --capped (no --apply) or inventory-drift-report.js to verify.",
+      );
+      console.log("═".repeat(74));
+      console.log("");
+      return;
+    }
 
     for (const d of damages) {
       const isFinished = d.itemType === "finished_product";

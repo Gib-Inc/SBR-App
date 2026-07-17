@@ -86,7 +86,7 @@ beforeEach(() => {
 });
 
 function seedPO(id: string, extra: Record<string, any> = {}) {
-  h.pos.set(id, { id, poNumber: `PO-${id}`, supplierId: `sup-${id}`, ...extra });
+  h.pos.set(id, { id, poNumber: `PO-${id}`, supplierId: `sup-${id}`, status: "SENT", ...extra });
   h.suppliers.set(`sup-${id}`, { id: `sup-${id}`, name: `Vendor ${id}` });
   h.linesByPo.set(id, [{ id: `l-${id}`, itemId: `i-${id}`, qtyOrdered: 2, unitCost: 5 }]);
   h.items.push({ id: `i-${id}`, sku: `SKU-${id}`, name: `Item ${id}` });
@@ -104,6 +104,14 @@ describe("syncApprovedPOToQuickBooks (auto-push on PO send)", () => {
     const res = await syncApprovedPOToQuickBooks("missing", "u1");
     expect(res.success).toBe(false);
     expect(res.error).toBe("Purchase order not found");
+  });
+
+  it("skips draft/unapproved POs before creating a QuickBooks Bill", async () => {
+    seedPO("po1", { status: "DRAFT" });
+    const res = await syncApprovedPOToQuickBooks("po1", "u1");
+    expect(res).toMatchObject({ success: false, skipped: true });
+    expect(res.reason).toMatch(/approved\/sent\/received/i);
+    expect(h.createBill).not.toHaveBeenCalled();
   });
 
   it("is idempotent: skips if the PO already links a QuickBooks Bill", async () => {

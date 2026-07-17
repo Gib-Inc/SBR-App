@@ -325,6 +325,12 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE forecast_snapshots ADD COLUMN IF NOT EXISTS forecast_type text NOT NULL DEFAULT 'cash_forecast'`,
     `ALTER TABLE forecast_snapshots ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()`,
     `CREATE UNIQUE INDEX IF NOT EXISTS forecast_snapshots_asof_type_uidx ON forecast_snapshots(as_of, forecast_type)`,
+    // Idempotency ledger for inventory-changing events. This is the hard stop
+    // against Shopify webhook redelivery / reconciliation echoes decrementing
+    // sellable stock more than once for the same external movement.
+    `CREATE TABLE IF NOT EXISTS inventory_movement_ledger (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), movement_type text NOT NULL, external_ref text NOT NULL, item_id varchar NOT NULL, source text, order_id varchar, sales_order_line_id varchar, quantity numeric, created_at timestamptz NOT NULL DEFAULT now())`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS inventory_movement_ledger_unique_idx ON inventory_movement_ledger(movement_type, external_ref, item_id)`,
+    `CREATE INDEX IF NOT EXISTS inventory_movement_ledger_order_idx ON inventory_movement_ledger(order_id)`,
     // Operator-entered BANK-CONFIRMED available balance — the source of truth for cash on
     // hand. QuickBooks' Account.CurrentBalance lags the live bank (feed delay + book-vs-bank),
     // so cash read straight from QB silently under-reports. Roger/Stacy enter the bank-share

@@ -22,6 +22,7 @@ import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
 import { DataHealthCard } from "@/components/data-health-card";
 import { QuickBooksLiveCard, type QbLive } from "@/components/quickbooks-live-card";
 import { CfoVerdictCard } from "@/components/cfo-verdict-card";
+import { CfoApprovalQueueCard } from "@/components/cfo-approval-queue-card";
 import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone, ArrowRight, UploadCloud } from "lucide-react";
 import { Link } from "wouter";
 
@@ -168,6 +169,9 @@ export default function Finances() {
 
           {/* Daily CFO Verdict — the provenance-stamped morning picture (canonical modules only) */}
           <CfoVerdictCard />
+
+          {/* Approval Queue — every pending human decision, one-tap via existing gates */}
+          <CfoApprovalQueueCard />
 
           {/* Live from QuickBooks — real-time cash, receivables, bills due (+ aging) */}
           <QuickBooksLiveCard qbLive={data?.qbLive ?? null} netCashPosition={data?.netCashPosition ?? null} expectedPayouts={data?.expectedPayouts ?? null} />

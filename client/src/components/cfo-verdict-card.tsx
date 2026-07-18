@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
 import {
-  Gauge, Wallet, Hourglass, Megaphone, Percent, Droplets, Boxes, ListChecks, ArrowRight,
+  Gauge, Wallet, Hourglass, Megaphone, Percent, Droplets, Boxes, ListChecks, ArrowRight, Scale,
 } from "lucide-react";
 
 type VerdictStatus = "ok" | "amber" | "red" | "gap";
@@ -35,6 +35,10 @@ interface CfoVerdict {
   runway: Stamp<number> & { basis: string; burnRatePerDay: number | null; cashFlowPositive: boolean; debtServiceMonthly: number | null; debtBlindBalance: number | null };
   mer: Stamp<number> & { gate: number; measuredBreakeven: number | null; contributionMer: number | null; confidence: string; confidenceReasons: string[]; feeds: FeedChip[] };
   contribution: Stamp<number> & { marginPctDisplay: string | null; cogsPlugShare: number | null; caveats: string[] };
+  workingCapital: Stamp<number> & {
+    itemsCosted: number; itemsUncosted: number; unitsUncosted: number;
+    daysOnHand: Stamp<number>; turns: Stamp<number>;
+  };
   cashLeaks: Stamp<number> & { leaks: LeakLine[]; awaiting: string[] };
   inventory: Stamp<number> & { topMovers: InventoryRiskLine[]; pushSignal: PushSignalLine | null };
   decisions: Stamp<number> & { items: DecisionItem[] };
@@ -142,6 +146,21 @@ export function CfoVerdictCard() {
             sub={v.runway.basis}
             section={v.runway} testId="cfo-runway"
           />
+
+          {/* WORKING CAPITAL — inventory turns + days-on-hand beside runway */}
+          <Tile
+            icon={<Scale className="h-3.5 w-3.5" />} label="Working capital (inventory)"
+            value={v.workingCapital.daysOnHand.value != null ? `${v.workingCapital.daysOnHand.value} days on hand` : "gapped"}
+            sub={[
+              v.workingCapital.value != null ? `${money(v.workingCapital.value)} at WAC` : "value unavailable",
+              v.workingCapital.turns.value != null ? `${v.workingCapital.turns.value} turns/yr` : null,
+            ].filter(Boolean).join(" · ")}
+            section={v.workingCapital} testId="cfo-working-capital"
+          >
+            {v.workingCapital.daysOnHand.note && v.workingCapital.daysOnHand.note !== v.workingCapital.note && (
+              <div className="text-[11px] leading-snug text-muted-foreground">{v.workingCapital.daysOnHand.note}</div>
+            )}
+          </Tile>
 
           {/* MER */}
           <Tile

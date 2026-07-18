@@ -11,7 +11,10 @@
  *      the auto-cap; same ledger, dataType 'inventory_drift') — evidence is the
  *      resolver's own check output.
  *   3. Draft POs awaiting approval (status DRAFT / APPROVAL_PENDING) — evidence is
- *      the line math + supplier + total + the >$25K Stacy-approval flag.
+ *      the line math + supplier + total + the >$25K Stacy-approval flag + the
+ *      cash-out date (expected payment date from EXISTING fields only: PO payment
+ *      terms anchored on received_at/expected_date/order_date; no terms on file →
+ *      order_date + 30d explicitly LABELED as assumed Net-30 — never silent).
  *   4. Stale bank-confirmed balance (>3 days) — an action item pointing at the
  *      EXISTING bank-balance entry flow (no one-tap can invent a bank number).
  *   5. Latest truth_reports WARN/FAIL checks that name a human action.
@@ -241,6 +244,96 @@ export interface PoLineEvidence {
   lineTotal: number;
 }
 
+/** When a PO carries no payment terms, cash-out assumes Net-30 — ALWAYS labeled, never silent. */
+export const ASSUMED_NET_TERMS_DAYS = 30;
+
+/** Pure: days from the terms text. "Net 30"/"net-45" → N; due-on-receipt/COD/prepaid → 0;
+ *  anything else on file → null (unparseable — the CALLER must state it, never guess silently). */
+export function parsePaymentTermsDays(terms: string | null | undefined): number | null {
+  const t = String(terms ?? "").trim();
+  if (!t) return null;
+  const net = t.match(/net[\s-]*(\d+)/i);
+  if (net) return parseInt(net[1], 10);
+  if (/due\s+(?:on|upon)\s+receipt|due\s+immediately|cash\s+on\s+delivery|\bcod\b|prepaid|paid\s+in\s+advance/i.test(t)) return 0;
+  return null;
+}
+
+export interface PoCashOut {
+  /** ISO date (YYYY-MM-DD) the cash leaves — null = stated gap, never a guessed date. */
+  date: string | null;
+  /** ALWAYS states the derivation: which terms, which anchor field, or which assumption. */
+  basis: string;
+  /** true when Net-30 was assumed rather than read from terms on file. */
+  assumed: boolean;
+}
+
+const toDateOrNull = (v: unknown): Date | null => {
+  if (!v) return null;
+  const d = v instanceof Date ? v : new Date(String(v));
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
+const plusDays = (d: Date, days: number): Date => new Date(d.getTime() + days * 86_400_000);
+
+/**
+ * Pure: the PO's expected payment date from EXISTING fields only.
+ *   terms on file + parseable → anchor (received_at ▸ expected_date ▸ order_date) + terms days;
+ *   no terms                 → order_date + 30d, LABELED "assumed Net-30 — terms not on file";
+ *   terms unparseable        → assumed Net-30 with the verbatim terms named in the label;
+ *   no usable date           → null with the gap stated. Nothing is ever invented silently.
+ */
+export function poCashOutDate(po: {
+  paymentTerms?: string | null;
+  orderDate?: string | Date | null;
+  expectedDate?: string | Date | null;
+  receivedAt?: string | Date | null;
+}): PoCashOut {
+  const terms = String(po.paymentTerms ?? "").trim();
+  const termsDays = parsePaymentTermsDays(terms);
+  const received = toDateOrNull(po.receivedAt);
+  const expected = toDateOrNull(po.expectedDate);
+  const ordered = toDateOrNull(po.orderDate);
+
+  if (termsDays != null) {
+    const anchor = received
+      ? { d: received, field: "received_at" }
+      : expected
+        ? { d: expected, field: "expected_date" }
+        : ordered
+          ? { d: ordered, field: "order_date" }
+          : null;
+    if (anchor) {
+      return {
+        date: isoDay(plusDays(anchor.d, termsDays)),
+        basis: `terms "${terms}" (${termsDays}d) from ${anchor.field} ${isoDay(anchor.d)}`,
+        assumed: false,
+      };
+    }
+    return {
+      date: null,
+      basis: `terms "${terms}" on file but no received/expected/order date to anchor them — cash-out date unavailable`,
+      assumed: false,
+    };
+  }
+
+  if (ordered) {
+    return {
+      date: isoDay(plusDays(ordered, ASSUMED_NET_TERMS_DAYS)),
+      basis: terms
+        ? `terms "${terms}" on file but unparseable — assumed Net-30 from order_date ${isoDay(ordered)}`
+        : `assumed Net-30 — terms not on file (order_date ${isoDay(ordered)} + ${ASSUMED_NET_TERMS_DAYS}d)`,
+      assumed: true,
+    };
+  }
+  return {
+    date: null,
+    basis: terms
+      ? `terms "${terms}" unparseable and no order date on file — cash-out date unavailable`
+      : "no payment terms and no order date on file — cash-out date unavailable",
+    assumed: true,
+  };
+}
+
 /**
  * Pure: one queue item per PO stuck at a human decision.
  *   APPROVAL_PENDING → EXISTING approve endpoint (requireRole 'owner' — the SoD
@@ -255,6 +348,7 @@ export function poQueueItem(po: any, lines: PoLineEvidence[]): ApprovalQueueItem
   const total = num(po.total);
   const lineSum = r2(lines.reduce((t, l) => t + num(l.lineTotal), 0));
   const stacyApprovalRequired = total > STACY_APPROVAL_THRESHOLD;
+  const cashOut = poCashOutDate(po);
   const evidence: Record<string, unknown> = {
     poNumber: po.poNumber ?? po.id,
     supplier: po.supplierName ?? null,
@@ -265,6 +359,9 @@ export function poQueueItem(po: any, lines: PoLineEvidence[]): ApprovalQueueItem
     shippingCost: num(po.shippingCost),
     taxes: num(po.taxes),
     total,
+    cashOutDate: cashOut.date,      // expected payment date (ISO) — null = stated gap
+    cashOutBasis: cashOut.basis,    // ALWAYS states the derivation; assumptions never silent
+    cashOutAssumed: cashOut.assumed,
     stacyApprovalRequired,
     ...(stacyApprovalRequired
       ? { stacyApprovalNote: `total $${Math.round(total).toLocaleString()} exceeds the $${STACY_APPROVAL_THRESHOLD.toLocaleString()} threshold — Stacy must sign off before approval` }

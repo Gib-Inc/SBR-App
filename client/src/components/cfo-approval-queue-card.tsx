@@ -136,6 +136,16 @@ function QueueRow({ item, onDismiss }: { item: QueueItem; onDismiss: (id: string
         )}
       </div>
 
+      {/* PO cash-out date beside the landed cost — the basis is ALWAYS stated (assumed terms never silent) */}
+      {item.kind === "po_draft" && item.evidence.cashOutBasis != null && (
+        <div className="text-[11px] leading-snug text-muted-foreground" data-testid={`cashout-${item.id}`}>
+          <span className="font-medium">Cash out:</span>{" "}
+          <span className="tabular-nums">{item.evidence.cashOutDate != null ? String(item.evidence.cashOutDate) : "date unavailable"}</span>
+          {typeof item.evidence.total === "number" && ` · landed $${Math.round(item.evidence.total).toLocaleString()}`}
+          {" — "}{String(item.evidence.cashOutBasis)}
+        </div>
+      )}
+
       <details className="text-[11px]">
         <summary className="cursor-pointer text-muted-foreground select-none">Evidence</summary>
         <div className="mt-1 rounded border bg-muted/30 p-2">

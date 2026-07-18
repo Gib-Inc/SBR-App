@@ -16,6 +16,10 @@ import {
   windsorFreshness,
   classifyMer,
   composeContributionSection,
+  unitCostFor,
+  onHandFor,
+  computeInventoryValueAtWac,
+  composeWorkingCapitalSection,
   composeLeaksSection,
   daysLeftFor,
   classifyDaysLeft,
@@ -180,6 +184,111 @@ describe("composeContributionSection", () => {
   });
 });
 
+// ─── working capital (inventory value → days-on-hand → turns) ────────────────
+
+describe("unitCostFor / onHandFor / computeInventoryValueAtWac", () => {
+  it("finished goods value the hildale+afs buckets (pivot/currentStock ignored); components use current_stock", () => {
+    const r = computeInventoryValueAtWac([
+      { type: "finished_product", hildaleQty: 5, availableForSaleQty: 12, pivotQty: 85, currentStock: 999, wacUnitCost: 20 },
+      { type: "component", currentStock: 40, hildaleQty: 7, availableForSaleQty: 9, defaultPurchaseCost: 2.5 },
+    ]);
+    expect(r.value).toBe(17 * 20 + 40 * 2.5); // 340 + 100 = 440
+    expect(r.itemsCosted).toBe(2);
+    expect(r.itemsUncosted).toBe(0);
+  });
+  it("cost ladder: WAC first, purchase-cost fallback; non-positive/absent = NO cost (never $0)", () => {
+    expect(unitCostFor({ wacUnitCost: 12, defaultPurchaseCost: 99 })).toBe(12);
+    expect(unitCostFor({ wacUnitCost: 0, defaultPurchaseCost: 5 })).toBe(5);
+    expect(unitCostFor({ wacUnitCost: null, defaultPurchaseCost: null })).toBeNull();
+    expect(unitCostFor({})).toBeNull();
+  });
+  it("bucket helper per type", () => {
+    expect(onHandFor({ type: "finished_product", hildaleQty: 3, availableForSaleQty: 4, currentStock: 50 })).toBe(7);
+    expect(onHandFor({ type: "component", currentStock: 50, hildaleQty: 3, availableForSaleQty: 4 })).toBe(50);
+  });
+  it("GAP-NOT-ZERO: stocked items with no cost are EXCLUDED and reported, never valued at $0", () => {
+    const r = computeInventoryValueAtWac([
+      { type: "component", currentStock: 10, wacUnitCost: 4 },
+      { type: "component", currentStock: 50 },              // stocked, uncosted → coverage gap
+      { type: "component", currentStock: 0 },               // zero stock, uncosted → irrelevant
+    ]);
+    expect(r.value).toBe(40);
+    expect(r.itemsCosted).toBe(1);
+    expect(r.itemsUncosted).toBe(1);
+    expect(r.unitsUncosted).toBe(50);
+  });
+});
+
+describe("composeWorkingCapitalSection", () => {
+  it("days-on-hand = value ÷ (30d COGS ÷ 30); turns = 365 ÷ days-on-hand; plug share carried as a caveat", () => {
+    const s = composeWorkingCapitalSection(
+      [{ type: "component", currentStock: 100, wacUnitCost: 26 }], // $2,600
+      CM, // cogs 52000 over 30d → $1,733.33/day
+      NOW.toISOString(),
+    );
+    expect(s.value).toBe(2600);
+    expect(s.status).toBe("ok");
+    expect(s.daysOnHand.value).toBe(1.5);
+    expect(s.turns.value).toBeCloseTo(243.33, 2);
+    expect(s.daysOnHand.note).toContain("8% of the 30d COGS proxy"); // 4000/52000 of the plug
+    expect(s.daysOnHand.source).toContain("contribution-margin-service");
+    expect(s.turns.source).toContain("365");
+  });
+  it("a COGS proxy that is ENTIRELY the 35% plug carries the caveat in the field's status (amber)", () => {
+    const s = composeWorkingCapitalSection(
+      [{ type: "component", currentStock: 100, wacUnitCost: 26 }],
+      { ...CM, cogsCosted: 0, cogsPlug: 52000 },
+      NOW.toISOString(),
+    );
+    expect(s.daysOnHand.status).toBe("amber");
+    expect(s.daysOnHand.note).toMatch(/ENTIRELY the 35% QB plug/);
+    expect(s.turns.status).toBe("amber");
+    expect(s.status).toBe("amber"); // section rolls the caveat up
+    expect(s.daysOnHand.value).toBe(1.5); // still used — with the caveat, not withheld
+  });
+  it("coverage gap: uncosted stocked items are excluded, reported, and turn the value amber (understated, not $0-filled)", () => {
+    const s = composeWorkingCapitalSection(
+      [
+        { type: "component", currentStock: 10, wacUnitCost: 4 },
+        { type: "component", currentStock: 50 },
+      ],
+      CM,
+      NOW.toISOString(),
+    );
+    expect(s.value).toBe(40);
+    expect(s.itemsUncosted).toBe(1);
+    expect(s.unitsUncosted).toBe(50);
+    expect(s.note).toMatch(/EXCLUDED from the value/);
+    expect(s.status).toBe("amber");
+  });
+  it("GAP-NOT-ZERO: no costed items at all → value null + gap; days-on-hand and turns gap with it", () => {
+    const s = composeWorkingCapitalSection(
+      [{ type: "component", currentStock: 50 }],
+      CM,
+      NOW.toISOString(),
+    );
+    expect(s.value).toBeNull(); // never a fabricated 0
+    expect(s.status).toBe("gap");
+    expect(s.note).toMatch(/coverage gap, not \$0/);
+    expect(s.daysOnHand.value).toBeNull();
+    expect(s.daysOnHand.status).toBe("gap");
+    expect(s.turns.value).toBeNull();
+  });
+  it("dead contribution engine or an empty COGS window is a stated gap for days-on-hand (value still stands)", () => {
+    const dead = composeWorkingCapitalSection(
+      [{ type: "component", currentStock: 100, wacUnitCost: 26 }], null, NOW.toISOString(),
+    );
+    expect(dead.value).toBe(2600);
+    expect(dead.daysOnHand.status).toBe("gap");
+    expect(dead.daysOnHand.note).toContain("contribution engine unavailable");
+    const empty = composeWorkingCapitalSection(
+      [{ type: "component", currentStock: 100, wacUnitCost: 26 }], { ...CM, cogs: 0 }, NOW.toISOString(),
+    );
+    expect(empty.daysOnHand.status).toBe("gap");
+    expect(empty.daysOnHand.note).toContain("not infinite");
+  });
+});
+
 // ─── cash leaks ──────────────────────────────────────────────────────────────
 
 describe("composeLeaksSection", () => {
@@ -280,16 +389,17 @@ const ITEMS = [
   {
     id: "push1", sku: "SBR-PUSH-1.0", name: "Push 1.0 Classic", type: "finished_product",
     pivotQty: 85, hildaleQty: 5, availableForSaleQty: 12, currentStock: 0, skuAliases: [],
-    shopifySku: "SBR-Classic1.0", amazonSku: null, extensivSku: null,
+    shopifySku: "SBR-Classic1.0", amazonSku: null, extensivSku: null, wacUnitCost: 30,
   },
   {
     id: "wide2", sku: "SBR-Extrawide2.0", name: "Extrawide 2.0", type: "finished_product",
     pivotQty: 400, hildaleQty: 100, availableForSaleQty: 380, currentStock: 0, skuAliases: [],
-    shopifySku: null, amazonSku: null, extensivSku: null,
+    shopifySku: null, amazonSku: null, extensivSku: null, wacUnitCost: 25,
   },
   {
     id: "frame-push", sku: "CMP-FRAME-PUSH", name: "Push Frame", type: "component",
     category: "Frames", currentStock: 3, pivotQty: 0, hildaleQty: 0, availableForSaleQty: 0, skuAliases: [],
+    wacUnitCost: 10,
   },
 ];
 
@@ -361,7 +471,7 @@ const FAKE_DB = {
 describe("getCfoVerdict — full composition", () => {
   it("every section carries value/source/asOf/status (the provenance contract)", async () => {
     const v = await getCfoVerdict(FAKE_DB, makeDeps());
-    for (const key of ["cash", "runway", "mer", "contribution", "cashLeaks", "inventory", "decisions"] as const) {
+    for (const key of ["cash", "runway", "mer", "contribution", "workingCapital", "cashLeaks", "inventory", "decisions"] as const) {
       const s: any = v[key];
       expect(s, key).toBeDefined();
       expect(typeof s.source, `${key}.source`).toBe("string");
@@ -395,6 +505,36 @@ describe("getCfoVerdict — full composition", () => {
     expect(push.status).toBe("red");
     expect(push.note).toMatch(/ZERO frames on order/);
     expect(push.daysLeft).toBe(30); // (85+5) owned ÷ 3/day
+  });
+
+  it("working capital: buckets valued at WAC beside runway, days-on-hand + turns off the SAME contribution COGS basis", async () => {
+    const v = await getCfoVerdict(FAKE_DB, makeDeps());
+    const wc = v.workingCapital;
+    // finished = hildale+afs: push1 17×$30 + wide2 480×$25; component = current_stock: frame 3×$10
+    expect(wc.value).toBe(510 + 12000 + 30);
+    expect(wc.itemsCosted).toBe(3);
+    expect(wc.itemsUncosted).toBe(0);
+    expect(wc.daysOnHand.value).toBe(7.2);          // 12,540 ÷ (52,000/30d)
+    expect(wc.turns.value).toBeCloseTo(50.45, 2);   // 365 ÷ days-on-hand
+    expect(wc.daysOnHand.status).toBe("ok");
+    expect(wc.daysOnHand.note).toContain("QB plug"); // plug share of the proxy carried, not hidden
+    // provenance on every new number
+    for (const stamp of [wc, wc.daysOnHand, wc.turns]) {
+      expect(stamp.source.length).toBeGreaterThan(0);
+      expect(stamp.asOf).toBe(NOW.toISOString());
+      expect(stamp.status).toBe("ok");
+    }
+  });
+
+  it("working capital degrades to a stated gap when the items feed dies — the rest of the picture survives", async () => {
+    const deps = makeDeps();
+    (deps.storage as any).getAllItems = async () => { throw new Error("items table down"); };
+    const v = await getCfoVerdict(FAKE_DB, deps);
+    expect(v.workingCapital.value).toBeNull();
+    expect(v.workingCapital.status).toBe("gap");
+    expect(v.workingCapital.note).toContain("items table down");
+    expect(v.workingCapital.daysOnHand.status).toBe("gap");
+    expect(v.cash.value).toBe(53185.82); // untouched
   });
 
   it("ranks decisions: truth FAIL first, then the PROPOSED reconciliation, then the WARN (draft PO falls off top-3)", async () => {

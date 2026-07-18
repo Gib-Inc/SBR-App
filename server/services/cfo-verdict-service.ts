@@ -10,6 +10,8 @@
  *   MER           ← marketing-truth-service.getMarketingTruth (governor MER + confidence layer)
  *                   + meta-ads-client.getMetaDirectFeedConfidence + Windsor snapshot freshness
  *   CONTRIBUTION  ← contribution-margin-service.getBlendedContributionMargin (COGS-plug caveat carried)
+ *   WORKING CAP   ← items on-hand buckets × items WAC (fallback purchase cost) ÷ the SAME
+ *                   contribution engine's 30d COGS basis → days-on-hand + turns (plug caveat carried)
  *   CASH LEAKS    ← latest ACTIVE marketing_spend_snapshots (compliant sources only — never the raw ad-metrics grains)
  *   INVENTORY     ← storage.getSkuSalesVelocity (orderDate-windowed lines) + items buckets per type
  *   DECISIONS     ← truth_reports FAIL/WARN + data_reconciliation_log PROPOSED + pending PO drafts
@@ -263,6 +265,139 @@ export function composeContributionSection(cm: BlendedContribution, nowIso: stri
   };
 }
 
+// ─── 4b. WORKING CAPITAL (inventory value → days-on-hand → turns) ────────────
+
+export const WORKING_CAPITAL_SOURCE =
+  "items on-hand buckets (finished: hildale+afs; component: current_stock) × items.wac_unit_cost (fallback default_purchase_cost)";
+const DOH_SOURCE =
+  "inventory value at WAC ÷ daily COGS proxy (contribution-margin-service 30d COGS: real costed lines + 35% plug remainder)";
+const TURNS_SOURCE = "365 ÷ days-on-hand (derived from the same two canonical inputs)";
+
+/** Pure: usable unit cost — WAC first, purchase-cost fallback. Non-positive/absent
+ *  is NO cost (a coverage gap the caller must report), never a $0 valuation. */
+export function unitCostFor(item: { wacUnitCost?: number | null; defaultPurchaseCost?: number | null }): number | null {
+  const wac = num(item.wacUnitCost);
+  if (wac > 0) return wac;
+  const dpc = num(item.defaultPurchaseCost);
+  if (dpc > 0) return dpc;
+  return null;
+}
+
+/** Pure: on-hand units in the CORRECT bucket per type — finished goods live in
+ *  hildale + availableForSale (currentStock is not authoritative for them);
+ *  components live in current_stock. */
+export function onHandFor(item: {
+  type?: string | null; hildaleQty?: number | null; availableForSaleQty?: number | null; currentStock?: number | null;
+}): number {
+  return item.type === "finished_product"
+    ? num(item.hildaleQty) + num(item.availableForSaleQty)
+    : num(item.currentStock);
+}
+
+export interface InventoryValueAtWac {
+  value: number;         // sum over COSTED stocked items only
+  itemsCosted: number;
+  itemsUncosted: number; // stocked items with no usable cost — EXCLUDED and reported, never $0-costed
+  unitsUncosted: number; // their on-hand units (the size of the blind spot)
+}
+
+/** Pure: inventory value at WAC. Items with stock but no cost are counted and
+ *  reported as a coverage gap — they never enter the sum as $0. */
+export function computeInventoryValueAtWac(items: any[]): InventoryValueAtWac {
+  let value = 0, itemsCosted = 0, itemsUncosted = 0, unitsUncosted = 0;
+  for (const item of items) {
+    const onHand = onHandFor(item);
+    if (!(onHand > 0)) continue; // zero-stock items carry no value either way
+    const cost = unitCostFor(item);
+    if (cost == null) {
+      itemsUncosted += 1;
+      unitsUncosted += onHand;
+      continue;
+    }
+    itemsCosted += 1;
+    value += onHand * cost;
+  }
+  return { value: r2(value), itemsCosted, itemsUncosted, unitsUncosted };
+}
+
+export interface WorkingCapitalSection extends Stamp<number> {
+  /** Stamp.value = inventory $ at WAC (costed stocked items only; gaps stated). */
+  itemsCosted: number;
+  itemsUncosted: number;
+  unitsUncosted: number;
+  daysOnHand: Stamp<number>; // inventory value ÷ (30d COGS proxy ÷ 30)
+  turns: Stamp<number>;      // 365 ÷ days-on-hand
+}
+
+/**
+ * Pure: the working-capital linkage the runway sits beside — inventory $ at WAC,
+ * days-on-hand against the trailing-30d COGS proxy (the SAME canonical
+ * contribution engine's COGS basis: real costed lines + the 35% plug on the
+ * uncosted remainder), and implied annual turns. A dead contribution engine or
+ * an empty COGS window is a stated gap; a proxy that is ENTIRELY the plug
+ * carries the caveat in the field's status (amber) exactly like the
+ * contribution section does.
+ */
+export function composeWorkingCapitalSection(
+  items: any[],
+  cm: BlendedContribution | null,
+  nowIso: string,
+): WorkingCapitalSection {
+  const inv = computeInventoryValueAtWac(items);
+
+  const valueStamp: Stamp<number> =
+    inv.itemsCosted === 0
+      ? {
+          value: null, source: WORKING_CAPITAL_SOURCE, asOf: null, status: "gap",
+          note: inv.itemsUncosted > 0
+            ? `none of the ${inv.itemsUncosted} stocked item(s) carries a WAC or purchase cost — inventory value unavailable (a coverage gap, not $0)`
+            : "no stocked items readable — inventory value unavailable",
+        }
+      : {
+          value: inv.value, source: WORKING_CAPITAL_SOURCE, asOf: nowIso,
+          status: inv.itemsUncosted > 0 ? "amber" : "ok",
+          note: inv.itemsUncosted > 0
+            ? `${inv.itemsUncosted} stocked item(s) (${inv.unitsUncosted} units) have no WAC or purchase cost — EXCLUDED from the value (coverage gap, not $0-costed), so the total is understated`
+            : undefined,
+        };
+
+  const gapPair = (note: string): [Stamp<number>, Stamp<number>] => [
+    { value: null, source: DOH_SOURCE, asOf: null, status: "gap", note },
+    { value: null, source: TURNS_SOURCE, asOf: null, status: "gap", note },
+  ];
+  let daysOnHand: Stamp<number>;
+  let turns: Stamp<number>;
+  if (valueStamp.value == null) {
+    [daysOnHand, turns] = gapPair("inventory value unavailable — days-on-hand unknowable");
+  } else if (!cm) {
+    [daysOnHand, turns] = gapPair("contribution engine unavailable — no trailing-30d COGS proxy (stated, never zero-filled)");
+  } else if (!(cm.cogs > 0) || !(cm.windowDays > 0)) {
+    [daysOnHand, turns] = gapPair(`no COGS in the trailing ${cm.windowDays}d order window — days-on-hand unknowable (not infinite)`);
+  } else {
+    const dohRaw = valueStamp.value / (cm.cogs / cm.windowDays);
+    const allPlug = !(cm.cogsCosted > 0);
+    const plugShare = cm.cogsPlug / cm.cogs;
+    const caveat = allPlug
+      ? `COGS proxy is ENTIRELY the ${COGS_PLUG_RATE * 100}% QB plug (no real item costs joined this window) — days-on-hand is directional`
+      : plugShare > 0
+        ? `${Math.round(plugShare * 100)}% of the 30d COGS proxy is the ${COGS_PLUG_RATE * 100}% QB plug (uncosted revenue remainder)`
+        : undefined;
+    const status: VerdictStatus = allPlug ? "amber" : "ok";
+    daysOnHand = { value: r1(dohRaw), source: DOH_SOURCE, asOf: nowIso, status, note: caveat };
+    turns = { value: r2(365 / dohRaw), source: TURNS_SOURCE, asOf: nowIso, status, note: caveat };
+  }
+
+  return {
+    ...valueStamp,
+    status: rollupVerdict([valueStamp.status, daysOnHand.status]),
+    itemsCosted: inv.itemsCosted,
+    itemsUncosted: inv.itemsUncosted,
+    unitsUncosted: inv.unitsUncosted,
+    daysOnHand,
+    turns,
+  };
+}
+
 // ─── 5. CASH LEAKS ───────────────────────────────────────────────────────────
 
 /** Spend below this in a zero-purchase window is noise, not a "leak". */
@@ -432,6 +567,7 @@ export interface CfoVerdict {
   runway: RunwaySection;
   mer: MerSection;
   contribution: ContributionSection;
+  workingCapital: WorkingCapitalSection;
   cashLeaks: CashLeaksSection;
   inventory: InventorySection;
   decisions: DecisionsSection;
@@ -717,14 +853,29 @@ export async function getCfoVerdict(db: any, deps: CfoVerdictDeps = defaultDeps)
     };
   }
 
-  // 4. CONTRIBUTION
+  // 4. CONTRIBUTION (raw engine output captured — working capital reuses it as the COGS proxy)
   let contribution: ContributionSection;
+  let cmRaw: BlendedContribution | null = null;
   try {
-    contribution = composeContributionSection(await deps.getBlendedContributionMargin(db, 30), nowIso);
+    cmRaw = await deps.getBlendedContributionMargin(db, 30);
+    contribution = composeContributionSection(cmRaw, nowIso);
   } catch (e) {
     contribution = {
       ...gapStamp<number>("contribution-margin-service.getBlendedContributionMargin", e),
       marginPctDisplay: null, cogsPlugShare: null, caveats: [],
+    };
+  }
+
+  // 4b. WORKING CAPITAL (inventory value at WAC → days-on-hand → turns)
+  let workingCapital: WorkingCapitalSection;
+  try {
+    workingCapital = composeWorkingCapitalSection(await deps.storage.getAllItems(), cmRaw, nowIso);
+  } catch (e) {
+    workingCapital = {
+      ...gapStamp<number>(WORKING_CAPITAL_SOURCE, e),
+      itemsCosted: 0, itemsUncosted: 0, unitsUncosted: 0,
+      daysOnHand: gapStamp<number>(DOH_SOURCE, e),
+      turns: gapStamp<number>(TURNS_SOURCE, e),
     };
   }
 
@@ -757,10 +908,10 @@ export async function getCfoVerdict(db: any, deps: CfoVerdictDeps = defaultDeps)
   }
 
   const overall = rollupVerdict([
-    cash.status, runway.status, mer.status, contribution.status,
+    cash.status, runway.status, mer.status, contribution.status, workingCapital.status,
     cashLeaks.status, inventory.status, decisions.status,
   ]);
-  const gapCount = [cash, runway, mer, contribution, cashLeaks, inventory, decisions]
+  const gapCount = [cash, runway, mer, contribution, workingCapital, cashLeaks, inventory, decisions]
     .filter((s) => s.status === "gap").length;
   const headline =
     overall === "red" ? "Act today — at least one section is critical."
@@ -771,6 +922,6 @@ export async function getCfoVerdict(db: any, deps: CfoVerdictDeps = defaultDeps)
   return {
     generatedAt: nowIso,
     overall: { status: overall, headline },
-    cash, runway, mer, contribution, cashLeaks, inventory, decisions,
+    cash, runway, mer, contribution, workingCapital, cashLeaks, inventory, decisions,
   };
 }

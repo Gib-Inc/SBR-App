@@ -17,11 +17,14 @@ import {
   reconQueueItem,
   driftQueueItem,
   poQueueItem,
+  poCashOutDate,
+  parsePaymentTermsDays,
   staleBankItem,
   truthQueueItem,
   getApprovalQueue,
   STACY_APPROVAL_THRESHOLD,
   BANK_STALE_AFTER_DAYS,
+  ASSUMED_NET_TERMS_DAYS,
   type ApprovalQueueDeps,
   type ReconRow,
 } from "./approval-queue-service";
@@ -171,6 +174,79 @@ describe("poQueueItem", () => {
     for (const status of ["APPROVED", "SENT", "RECEIVED", "CLOSED", "CANCELLED"]) {
       expect(poQueueItem(po({ status }), lines)).toBeNull();
     }
+  });
+
+  it("evidence carries the cash-out date with terms ON FILE labeled as such (not assumed)", () => {
+    const qi = poQueueItem(po({ paymentTerms: "Net 30", expectedDate: "2026-08-01" }), lines)!;
+    expect(qi.evidence.cashOutDate).toBe("2026-08-31");
+    expect(qi.evidence.cashOutAssumed).toBe(false);
+    expect(String(qi.evidence.cashOutBasis)).toContain('terms "Net 30"');
+    expect(String(qi.evidence.cashOutBasis)).toContain("expected_date 2026-08-01");
+  });
+
+  it("evidence labels assumed Net-30 when terms are NOT on file — never a silent invention", () => {
+    const qi = poQueueItem(po({ orderDate: "2026-07-01" }), lines)!;
+    expect(qi.evidence.cashOutDate).toBe("2026-07-31"); // order_date + 30d
+    expect(qi.evidence.cashOutAssumed).toBe(true);
+    expect(String(qi.evidence.cashOutBasis)).toContain("assumed Net-30 — terms not on file");
+  });
+});
+
+// ─── PO cash-out date (expected payment date from EXISTING fields only) ──────
+
+describe("parsePaymentTermsDays", () => {
+  it("reads Net-N in its usual spellings", () => {
+    expect(parsePaymentTermsDays("Net 30")).toBe(30);
+    expect(parsePaymentTermsDays("net-45")).toBe(45);
+    expect(parsePaymentTermsDays("NET15")).toBe(15);
+  });
+  it("due-on-receipt family is 0 days", () => {
+    expect(parsePaymentTermsDays("Due on Receipt")).toBe(0);
+    expect(parsePaymentTermsDays("due upon receipt")).toBe(0);
+    expect(parsePaymentTermsDays("COD")).toBe(0);
+  });
+  it("absent or unparseable terms are null — the caller must state, never guess", () => {
+    expect(parsePaymentTermsDays(null)).toBeNull();
+    expect(parsePaymentTermsDays("")).toBeNull();
+    expect(parsePaymentTermsDays("50% deposit, balance on delivery")).toBeNull();
+  });
+});
+
+describe("poCashOutDate", () => {
+  it("terms on file anchor on received_at ▸ expected_date ▸ order_date (in that order), basis named", () => {
+    const fromExpected = poCashOutDate({ paymentTerms: "Net 45", expectedDate: "2026-08-01", orderDate: "2026-07-01" });
+    expect(fromExpected).toEqual({
+      date: "2026-09-15",
+      basis: 'terms "Net 45" (45d) from expected_date 2026-08-01',
+      assumed: false,
+    });
+    const fromReceived = poCashOutDate({ paymentTerms: "Net 30", receivedAt: "2026-07-10", expectedDate: "2026-08-01" });
+    expect(fromReceived.date).toBe("2026-08-09");
+    expect(fromReceived.basis).toContain("received_at 2026-07-10");
+  });
+  it("due-on-receipt terms pay at the anchor date itself", () => {
+    expect(poCashOutDate({ paymentTerms: "Due on Receipt", expectedDate: "2026-08-01" }).date).toBe("2026-08-01");
+  });
+  it(`no terms on file → order_date + ${ASSUMED_NET_TERMS_DAYS}d, LABELED as assumed`, () => {
+    const c = poCashOutDate({ orderDate: "2026-07-01" });
+    expect(c.date).toBe("2026-07-31");
+    expect(c.assumed).toBe(true);
+    expect(c.basis).toContain("assumed Net-30 — terms not on file");
+  });
+  it("unparseable terms fall to assumed Net-30 WITH the verbatim terms named in the label", () => {
+    const c = poCashOutDate({ paymentTerms: "50% deposit, balance on delivery", orderDate: "2026-07-01" });
+    expect(c.date).toBe("2026-07-31");
+    expect(c.assumed).toBe(true);
+    expect(c.basis).toContain('"50% deposit, balance on delivery"');
+    expect(c.basis).toContain("unparseable");
+  });
+  it("GAP-NOT-ZERO: no usable date → null with the gap stated, never an invented date", () => {
+    const noDates = poCashOutDate({ paymentTerms: "Net 30" });
+    expect(noDates.date).toBeNull();
+    expect(noDates.basis).toContain("no received/expected/order date");
+    const nothing = poCashOutDate({});
+    expect(nothing.date).toBeNull();
+    expect(nothing.basis).toContain("cash-out date unavailable");
   });
 });
 

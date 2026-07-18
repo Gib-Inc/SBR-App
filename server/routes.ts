@@ -26059,6 +26059,23 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Daily CFO Verdict — the provenance-stamped morning picture (Operation CFO,
+  // Build 1). READ-ONLY composition of the canonical modules (SOURCES-OF-TRUTH.md):
+  // bank-confirmed cash, debt-aware runway, marketing-truth MER + feed confidence,
+  // blended contribution, cash-leak scan, inventory days-left, and the top-3
+  // decisions (truth FAILs/WARNs, proposed reconciliations, pending PO drafts).
+  // Every field carries {value, source, asOf, status}; gaps are stated, never 0.
+  app.get("/api/cfo/verdict", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getCfoVerdict } = await import("./services/cfo-verdict-service");
+      res.json({ success: true, verdict: await getCfoVerdict(db) });
+    } catch (error: any) {
+      console.error("[CFO Verdict] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to compose the CFO verdict" });
+    }
+  });
+
   // Marketing Truth — the hero-tile payload: blended MER + contribution MER vs
   // breakevens, with the feed-confidence layer. Composes the canonical engines
   // (governor / contribution-margin / reconciliation); no math of its own.

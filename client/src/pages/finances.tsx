@@ -21,6 +21,7 @@ import { DraftOrdersCard } from "@/components/draft-orders-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
 import { DataHealthCard } from "@/components/data-health-card";
 import { QuickBooksLiveCard, type QbLive } from "@/components/quickbooks-live-card";
+import { CfoVerdictCard } from "@/components/cfo-verdict-card";
 import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone, ArrowRight, UploadCloud } from "lucide-react";
 import { Link } from "wouter";
 
@@ -164,6 +165,9 @@ export default function Finances() {
             <Kpi label="2026 Net Income" value={fmt(ytdNI)} sub="YTD" tone={ytdNI < 0 ? "crit" : ""} />
             <Kpi label="Total Liabilities" value={bs ? fmt(bs.totalLiabilities) : "—"} sub="all debt" tone="crit" />
           </div>
+
+          {/* Daily CFO Verdict — the provenance-stamped morning picture (canonical modules only) */}
+          <CfoVerdictCard />
 
           {/* Live from QuickBooks — real-time cash, receivables, bills due (+ aging) */}
           <QuickBooksLiveCard qbLive={data?.qbLive ?? null} netCashPosition={data?.netCashPosition ?? null} expectedPayouts={data?.expectedPayouts ?? null} />

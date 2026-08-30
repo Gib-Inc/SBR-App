@@ -284,6 +284,9 @@ function LinkedPOsSection({ recommendationId }: { recommendationId: string }) {
 interface AiAgentSettings {
   id: string;
   userId: string;
+  quickbooksIncludeHistory?: boolean;
+  quickbooksHistoryMonths?: number;
+  ordersToFetch?: number;
   autoSendCriticalPos: boolean;
   criticalRescueDays: number;
   criticalThresholdDays: number;
@@ -1690,12 +1693,37 @@ interface RecommendationWithContext {
   adMultiplier: number | null;
 }
 
+interface SalesAgg {
+  orders: number;
+  revenue: number;
+  units: number;
+  refunds: number;
+  netRevenue: number;
+}
+
 interface BatchTimelineResponse {
   batchLog: BatchDecision;
   timeline: TimelineEvent[];
   recommendations: RecommendationWithContext[];
   windowStart: string;
   windowEnd: string;
+  // Shapes mirror the batch-timeline endpoint's salesReport/poReport/quickbooksReport
+  // objects in server/routes.ts — keep in sync with that composer.
+  salesReport?: { today: SalesAgg; week: SalesAgg; month: SalesAgg };
+  poReport?: {
+    byStatus: Record<string, number>;
+    totalInbound: number;
+    pendingPOs: Array<{ poNumber: string; supplier: string; status: string; totalQty: number; expectedDate?: string }>;
+    totalPOs: number;
+    skuPoBreakdown: Array<Record<string, any>>;
+    skusWithNoPo: number;
+  };
+  quickbooksReport?: {
+    year: number;
+    totalSkus: number;
+    byMonth: Array<{ month: number; monthName: string; totalQty: number; totalRevenue: number }>;
+    yearTotals: { qty: number; revenue: number };
+  };
 }
 
 // Timeline Event Card Component - Shopify inspired single-line card
@@ -2066,7 +2094,7 @@ function BatchTimelineModal({
                                   <TableCell className="py-2">
                                     {item.hasPendingPo ? (
                                       <div className="flex flex-wrap gap-1">
-                                        {[...new Set(item.pos.map((p: any) => p.status))].map((status: string) => (
+                                        {Array.from(new Set<string>(item.pos.map((p: any) => String(p.status)))).map((status: string) => (
                                           <Badge key={status} variant="outline" className="text-xs">{status}</Badge>
                                         ))}
                                       </div>
@@ -4653,7 +4681,7 @@ export default function AIAgent() {
   const handleQuickBooksSync = async () => {
     setSyncingSource("quickbooks");
     try {
-      const result = await apiRequest("POST", "/api/quickbooks/sync-demand-history", { years: 3 });
+      const result = await (await apiRequest("POST", "/api/quickbooks/sync-demand-history", { years: 3 })).json();
       refetchQbStatus();
       toast({
         title: "Sync Complete",
@@ -4673,7 +4701,7 @@ export default function AIAgent() {
   // Meta Ads OAuth handlers
   const handleMetaAdsConnect = async () => {
     try {
-      const response = await apiRequest("GET", "/api/ads/meta/auth-url");
+      const response = await (await apiRequest("GET", "/api/ads/meta/auth-url")).json();
       if (response.authUrl) {
         window.open(response.authUrl, "_blank", "width=600,height=700");
       }

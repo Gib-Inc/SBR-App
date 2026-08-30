@@ -9799,15 +9799,15 @@ TOTAL: $${subtotal.toFixed(2)}
           if (contactId) {
             await storage.updateSalesOrder(order.id, { ghlContactId: contactId });
             linked++;
-            linkedDetails.push(`${order.orderNumber || order.id}: ${order.customerName} → ${contactId}`);
-            console.log(`[GHL Backfill] Linked order ${order.orderNumber || order.id} to contact ${contactId}`);
+            linkedDetails.push(`${order.orderName || order.id}: ${order.customerName} → ${contactId}`);
+            console.log(`[GHL Backfill] Linked order ${order.orderName || order.id} to contact ${contactId}`);
           } else {
             failed++;
-            errors.push(`Order ${order.orderNumber || order.id}: Could not find/create contact`);
+            errors.push(`Order ${order.orderName || order.id}: Could not find/create contact`);
           }
         } catch (err: any) {
           failed++;
-          errors.push(`Order ${order.orderNumber || order.id}: ${err.message}`);
+          errors.push(`Order ${order.orderName || order.id}: ${err.message}`);
         }
       }
       
@@ -9934,7 +9934,7 @@ TOTAL: $${subtotal.toFixed(2)}
         ? allSalesOrders.filter(so => !so.isHistorical)
         : allSalesOrders;
       const historicalSalesOrderIds = new Set(
-        allSalesOrders.filter(so => so.isHistorical).map(so => so.orderNumber || so.externalOrderId || so.id)
+        allSalesOrders.filter(so => so.isHistorical).map(so => so.orderName || so.externalOrderId || so.id)
       );
       console.log(`[GHL Sync] Sales orders: ${salesOrders.length} to sync (${historicalSalesOrderIds.size} historical will be cleaned up in align mode)`);
       
@@ -9972,7 +9972,7 @@ TOTAL: $${subtotal.toFixed(2)}
           // Create opportunity for the sales order
           const orderTotal = order.totalAmount ? Number(order.totalAmount) : 0;
           const notes = `
-Order: ${order.orderNumber || order.externalOrderId || order.id}
+Order: ${order.orderName || order.externalOrderId || order.id}
 Channel: ${order.channel || 'Unknown'}
 Status: ${order.status || 'Unknown'}
 Customer: ${order.customerName || 'Unknown'}
@@ -9982,7 +9982,7 @@ Order Date: ${order.orderDate ? new Date(order.orderDate).toLocaleDateString() :
 Total: $${orderTotal.toFixed(2)}
           `.trim();
 
-          const orderName = `Order ${order.orderNumber || order.externalOrderId || order.id} - ${order.customerName || 'Customer'}`;
+          const orderName = `Order ${order.orderName || order.externalOrderId || order.id} - ${order.customerName || 'Customer'}`;
           const opportunityResult = await client.createOrUpdateOpportunity(
             pipelineId,
             GHL_CONFIG.stages.SALES_ORDERS,
@@ -9991,12 +9991,12 @@ Total: $${orderTotal.toFixed(2)}
             notes,
             {
               orderId: order.id,
-              orderNumber: order.orderNumber || order.externalOrderId,
+              orderNumber: order.orderName || order.externalOrderId,
               channel: order.channel,
               status: order.status,
             },
             contactId, // Pass contactId (required for V2)
-            order.orderNumber || order.externalOrderId || order.id // Unique identifier for search
+            order.orderName || order.externalOrderId || order.id // Unique identifier for search
           );
 
           if (opportunityResult.success) {

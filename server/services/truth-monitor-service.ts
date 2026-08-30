@@ -160,6 +160,60 @@ export const LEDGER_STATS_SQL = `
        WHERE details->>'dedupAction' = 'DEDUP_SKIP'
          AND timestamp >= now() - interval '24 hours') AS dedup_skips_24h`;
 
+/** OUTLIER — 29 calendar days (Denver) of Shopify-channel daily revenue, zero-filled
+ * in SQL via generate_series so absent days read as $0 (an ingestion outage IS a zero
+ * day, exactly what the grade must see). Last row = yesterday; prior 28 = trailing. */
+export const OUTLIER_SQL = `
+  SELECT gs::date AS d,
+         COALESCE(round(sum(so.total_amount)::numeric, 2), 0) AS total
+  FROM generate_series((now() AT TIME ZONE 'America/Denver')::date - 29,
+                       (now() AT TIME ZONE 'America/Denver')::date - 1,
+                       interval '1 day') gs
+  LEFT JOIN sales_orders so
+    ON (so.order_date AT TIME ZONE 'America/Denver')::date = gs::date
+   AND upper(so.channel) LIKE '%SHOPIFY%'
+   AND COALESCE(so.is_historical, false) = false
+   AND so.cancelled_at IS NULL
+  GROUP BY 1
+  ORDER BY 1`;
+
+/**
+ * Graded outlier bounds for yesterday's Shopify revenue vs its trailing 28-day
+ * median (CFO Phase 1.5). Bands: <0.2x or >4x median = FAIL; <0.5x or >2.5x = WARN;
+ * else PASS. Two honesty guards never let thin data grade as healthy: fewer than 14
+ * trailing days = WARN (insufficient history), trailing median under $500 = WARN
+ * (window itself degraded — e.g. mid-backfill after an outage). Pure.
+ */
+export function classifyDailyOutlier(
+  yesterday: number,
+  trailing: number[],
+): { status: TruthCheckStatus; reason: string; median: number; ratio: number | null } {
+  const valid = trailing.filter((v) => Number.isFinite(v));
+  if (valid.length < 14) {
+    return { status: "WARN", reason: `insufficient history: ${valid.length} trailing day(s), need 14 to grade`, median: 0, ratio: null };
+  }
+  const sorted = [...valid].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  if (median < 500) {
+    return { status: "WARN", reason: `trailing window degraded (28-day median $${median.toFixed(2)}) — grading suspended until history heals`, median, ratio: null };
+  }
+  const ratio = yesterday / median;
+  if (ratio < 0.2) {
+    return { status: "FAIL", reason: `yesterday $${yesterday.toFixed(2)} is ${(ratio * 100).toFixed(0)}% of the 28-day median $${median.toFixed(2)} — revenue collapse or ingestion outage`, median, ratio };
+  }
+  if (ratio < 0.5) {
+    return { status: "WARN", reason: `yesterday $${yesterday.toFixed(2)} is ${(ratio * 100).toFixed(0)}% of the 28-day median $${median.toFixed(2)} — soft day or partial ingestion`, median, ratio };
+  }
+  if (ratio > 4) {
+    return { status: "FAIL", reason: `yesterday $${yesterday.toFixed(2)} is ${ratio.toFixed(1)}x the 28-day median $${median.toFixed(2)} — data error or exceptional day, verify before trusting`, median, ratio };
+  }
+  if (ratio > 2.5) {
+    return { status: "WARN", reason: `yesterday $${yesterday.toFixed(2)} is ${ratio.toFixed(1)}x the 28-day median $${median.toFixed(2)} — spike worth a look`, median, ratio };
+  }
+  return { status: "PASS", reason: `yesterday $${yesterday.toFixed(2)} within graded bounds of the 28-day median $${median.toFixed(2)}`, median, ratio };
+}
+
 // ─── Runner ──────────────────────────────────────────────────────────────────
 
 function rowsOf(r: any): any[] {
@@ -338,6 +392,27 @@ async function checkLedgerStats(): Promise<TruthCheck> {
   };
 }
 
+async function checkOutlierBounds(): Promise<TruthCheck> {
+  const rows = rowsOf(await db.execute(sql.raw(OUTLIER_SQL)));
+  const totals = rows.map((r: any) => Number(r.total ?? 0));
+  const yesterday = totals.length ? totals[totals.length - 1] : 0;
+  const trailing = totals.slice(0, -1);
+  const graded = classifyDailyOutlier(yesterday, trailing);
+  return {
+    id: "OUTLIER",
+    name: "Daily Shopify revenue outlier bounds",
+    status: graded.status,
+    summary: graded.reason,
+    details: {
+      yesterday,
+      trailingDays: trailing.length,
+      median: graded.median,
+      ratio: graded.ratio,
+      bands: { failLow: 0.2, warnLow: 0.5, warnHigh: 2.5, failHigh: 4 },
+    },
+  };
+}
+
 // ─── Orchestrator ────────────────────────────────────────────────────────────
 
 export interface RunTruthReportResult {
@@ -371,6 +446,7 @@ export async function runTruthReport(): Promise<RunTruthReportResult> {
     }
   }
   checks.push(await runCheck("LEDGER", "Inventory movement ledger stats", checkLedgerStats));
+  checks.push(await runCheck("OUTLIER", "Daily Shopify revenue outlier bounds", checkOutlierBounds));
 
   const overall = rollupTruth(checks);
   const report: TruthReport = {

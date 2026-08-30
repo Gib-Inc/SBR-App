@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // runTruthReport issues a fixed, ordered list of db.execute() calls:
 // 0 V1, 1 V2b, 2 V3, 3 V4, 4 V5 (one query for all platforms), 5 ledger stats,
-// 6 INSERT INTO truth_reports (the service's only write — its own table).
+// 6 OUTLIER (29 zero-filled daily revenue rows),
+// 7 INSERT INTO truth_reports (the service's only write — its own table).
 // getLatestTruthReport / hasRecentTruthReport are single reads.
 const h = vi.hoisted(() => ({
   execMock: vi.fn(),
@@ -25,6 +26,8 @@ import {
   V4_SQL,
   V5_SQL,
   LEDGER_STATS_SQL,
+  OUTLIER_SQL,
+  classifyDailyOutlier,
   type TruthCheck,
 } from "./truth-monitor-service";
 
@@ -50,7 +53,9 @@ function makeResults(over: Partial<Record<number, any>> = {}): any[] {
       { platform: "AMAZON", latest_period_end: "2026-07-16", days_old: 0 },
     ],
     [{ total_rows: 120, rows_24h: 12, dedup_skips_24h: 3 }], // 5 ledger stats
-    [{ id: "report-1", run_at: "2026-07-16T14:00:00.000Z" }], // 6 INSERT ... RETURNING
+    // 6 OUTLIER — 28 healthy trailing days + a healthy yesterday
+    Array.from({ length: 29 }, (_, i) => ({ d: `2026-07-${String(i + 1).padStart(2, "0")}`, total: 8000 })),
+    [{ id: "report-1", run_at: "2026-07-16T14:00:00.000Z" }], // 7 INSERT ... RETURNING
   ];
   for (const [k, v] of Object.entries(over)) base[Number(k)] = v;
   return base;
@@ -91,6 +96,37 @@ describe("rollupTruth (overall classifier)", () => {
   });
 });
 
+describe("classifyDailyOutlier (graded revenue bounds)", () => {
+  const healthy = Array.from({ length: 28 }, () => 8000);
+
+  it("passes a normal day against a healthy trailing median", () => {
+    const r = classifyDailyOutlier(7500, healthy);
+    expect(r.status).toBe("PASS");
+    expect(r.median).toBe(8000);
+  });
+  it("FAILS a zero/collapsed day (the ingestion-outage detector)", () => {
+    expect(classifyDailyOutlier(0, healthy).status).toBe("FAIL");
+    expect(classifyDailyOutlier(1500, healthy).status).toBe("FAIL"); // <0.2x
+  });
+  it("WARNs a soft day between 0.2x and 0.5x median", () => {
+    expect(classifyDailyOutlier(3000, healthy).status).toBe("WARN");
+  });
+  it("WARNs a 2.5-4x spike and FAILS beyond 4x", () => {
+    expect(classifyDailyOutlier(24000, healthy).status).toBe("WARN");
+    expect(classifyDailyOutlier(40000, healthy).status).toBe("FAIL");
+  });
+  it("never grades on thin history (<14 trailing days) — WARN, not PASS", () => {
+    const r = classifyDailyOutlier(8000, Array.from({ length: 10 }, () => 8000));
+    expect(r.status).toBe("WARN");
+    expect(r.reason).toContain("insufficient history");
+  });
+  it("suspends grading when the trailing window itself is degraded (median < $500)", () => {
+    const r = classifyDailyOutlier(0, Array.from({ length: 28 }, () => 0));
+    expect(r.status).toBe("WARN");
+    expect(r.reason).toContain("grading suspended");
+  });
+});
+
 describe("classifyFeedAge (V5 freshness thresholds)", () => {
   it("passes at 0–3 days old", () => {
     expect(classifyFeedAge(0).status).toBe("PASS");
@@ -114,7 +150,7 @@ describe("classifyFeedAge (V5 freshness thresholds)", () => {
 // ─── SQL shape (read-only + exact semantics) ────────────────────────────────
 
 describe("V-suite SQL shape", () => {
-  const ALL = { V1_SQL, V2B_SQL, V3_SQL, V4_SQL, V5_SQL, LEDGER_STATS_SQL };
+  const ALL = { V1_SQL, V2B_SQL, V3_SQL, V4_SQL, V5_SQL, LEDGER_STATS_SQL, OUTLIER_SQL };
 
   it("every check query is a read-only SELECT (zero writes to business tables)", () => {
     for (const [name, query] of Object.entries(ALL)) {
@@ -180,11 +216,11 @@ describe("runTruthReport", () => {
     expect(persisted).toBe(true);
     expect(report.id).toBe("report-1");
     expect(report.checks.map((c) => c.id)).toEqual([
-      "V1", "V2b", "V3", "V4", "V5-META", "V5-GOOGLE", "V5-AMAZON", "LEDGER",
+      "V1", "V2b", "V3", "V4", "V5-META", "V5-GOOGLE", "V5-AMAZON", "LEDGER", "OUTLIER",
     ]);
     for (const check of report.checks) expect(check.status).toBe("PASS");
-    // 6 check reads + 1 report insert.
-    expect(h.execMock).toHaveBeenCalledTimes(7);
+    // 7 check reads + 1 report insert.
+    expect(h.execMock).toHaveBeenCalledTimes(8);
   });
 
   it("includes the Meta direct-feed confidence verdict on the META check", async () => {
@@ -305,7 +341,7 @@ describe("runTruthReport", () => {
     expect(v3.summary).toContain("relation audit_logs does not exist");
     // Every other check still ran and is present.
     expect(report.checks.map((c) => c.id)).toEqual([
-      "V1", "V2b", "V3", "V4", "V5-META", "V5-GOOGLE", "V5-AMAZON", "LEDGER",
+      "V1", "V2b", "V3", "V4", "V5-META", "V5-GOOGLE", "V5-AMAZON", "LEDGER", "OUTLIER",
     ]);
     expect(report.overall).toBe("FAIL");
     expect(persisted).toBe(true);
@@ -333,7 +369,7 @@ describe("runTruthReport", () => {
   });
 
   it("returns the report un-persisted (persisted=false) when the INSERT fails, without throwing", async () => {
-    primeExec(makeResults({ 6: new Error("permission denied for table truth_reports") }));
+    primeExec(makeResults({ 7: new Error("permission denied for table truth_reports") }));
     const { report, persisted, persistError } = await runTruthReport();
     expect(persisted).toBe(false);
     expect(persistError).toContain("permission denied");

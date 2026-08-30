@@ -57,7 +57,9 @@ export async function computeDailyUsage(itemId: string): Promise<number | null> 
 // per-channel SKU columns (shopify/amazon/extensiv). Channel columns
 // occasionally arrive with a "SKU: " prefix from older imports — strip it
 // and try both forms so a row stored either way still matches.
-function aliasSkusFor(item: any): string[] {
+// Exported so consumers of the canonical velocity feed (e.g. the CFO Verdict)
+// match SKUs the SAME way this service does instead of re-deriving a matcher.
+export function aliasSkusFor(item: any): string[] {
   const out = new Set<string>();
   if (item.sku) out.add(item.sku);
   for (const a of (item.skuAliases ?? []) as string[]) {

@@ -26091,6 +26091,42 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Daily CFO Verdict — the provenance-stamped morning picture (Operation CFO,
+  // Build 1). READ-ONLY composition of the canonical modules (SOURCES-OF-TRUTH.md):
+  // bank-confirmed cash, debt-aware runway, marketing-truth MER + feed confidence,
+  // blended contribution, cash-leak scan, inventory days-left, and the top-3
+  // decisions (truth FAILs/WARNs, proposed reconciliations, pending PO drafts).
+  // Every field carries {value, source, asOf, status}; gaps are stated, never 0.
+  app.get("/api/cfo/verdict", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getCfoVerdict } = await import("./services/cfo-verdict-service");
+      res.json({ success: true, verdict: await getCfoVerdict(db) });
+    } catch (error: any) {
+      console.error("[CFO Verdict] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to compose the CFO verdict" });
+    }
+  });
+
+  // Approval Queue — every pending human decision, evidence-attached (Operation
+  // CFO, Build 2). READ-ONLY aggregation over the EXISTING approval flows:
+  // recon-log PROPOSED corrections, inventory-drift Review/Fix pending, draft
+  // POs awaiting approval, stale bank balance, and truth-report checks naming a
+  // human action. Each item's approveAction points at the EXISTING gated
+  // endpoint a one-tap would call — permission/SoD stays server-side on those
+  // endpoints; items with no existing endpoint render as manual steps. This
+  // route (and the service behind it) writes NOTHING.
+  app.get("/api/cfo/approval-queue", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getApprovalQueue } = await import("./services/approval-queue-service");
+      res.json({ success: true, queue: await getApprovalQueue(db) });
+    } catch (error: any) {
+      console.error("[Approval Queue] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to compose the approval queue" });
+    }
+  });
+
   // Marketing Truth — the hero-tile payload: blended MER + contribution MER vs
   // breakevens, with the feed-confidence layer. Composes the canonical engines
   // (governor / contribution-margin / reconciliation); no math of its own.

@@ -26933,6 +26933,93 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // DEBT-2 (task #45): payoff/refi simulator — pure READ computation over credit_lines.
+  // Monthly-cost model: scheduled payment normalized to monthly (weekly x52/12, biweekly
+  // x26/12), plus interest-only cost (balance x apr/12) shown separately for APR lines.
+  // Factor/fee/revenue-share facilities are listed with their real schedules and EXCLUDED
+  // from APR math — no invented rates. Scenarios: ?payoff=<name>&cash=<amt> removes one
+  // facility; ?consolidate=<name,name>&rate=<pct>&term=<months> compares an amortized
+  // consolidation payment against those lines' current outflow. Estimates, labeled.
+  app.get("/api/finances/payoff-simulator", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const rows: any[] = ((await db.execute(sql`
+        select name, balance, apr, rate_type, payment_amount, payment_frequency, due_day
+        from credit_lines where is_active and coalesce(balance,0) > 0 order by balance desc`)) as any).rows;
+
+      const toMonthly = (amt: number | null, freq: string | null): number | null => {
+        if (amt == null || !Number.isFinite(Number(amt)) || Number(amt) <= 0) return null;
+        const f = String(freq || "").toUpperCase();
+        if (f === "WEEKLY") return (Number(amt) * 52) / 12;
+        if (f === "BIWEEKLY") return (Number(amt) * 26) / 12;
+        if (f === "MONTHLY" || f === "") return Number(amt);
+        return null; // DAILY_PCT_SALES etc — schedule is sales-driven, no fixed monthly number
+      };
+
+      const facilities = rows.map((r) => {
+        const bal = Number(r.balance) || 0;
+        const apr = r.apr != null && Number.isFinite(Number(r.apr)) ? Number(r.apr) : null;
+        const rt = String(r.rate_type || "").toUpperCase();
+        const monthlyPayment = toMonthly(r.payment_amount != null ? Number(r.payment_amount) : null, r.payment_frequency);
+        const monthlyInterest = apr != null && !["FACTOR", "FEE", "REVENUE_SHARE"].includes(rt)
+          ? (bal * apr) / 100 / 12 : null;
+        return {
+          name: r.name, balance: Number(bal.toFixed(2)), apr, rateType: r.rate_type ?? null,
+          paymentAmount: r.payment_amount != null ? Number(r.payment_amount) : null,
+          paymentFrequency: r.payment_frequency ?? null, dueDay: r.due_day ?? null,
+          monthlyPayment: monthlyPayment != null ? Number(monthlyPayment.toFixed(2)) : null,
+          monthlyInterestCost: monthlyInterest != null ? Number(monthlyInterest.toFixed(2)) : null,
+          aprMathEligible: !["FACTOR", "FEE", "REVENUE_SHARE"].includes(rt) && apr != null,
+        };
+      });
+      const totalMonthlyOutflow = Number(facilities.reduce((s, f) => s + (f.monthlyPayment ?? 0), 0).toFixed(2));
+      const out: any = {
+        asOf: new Date().toISOString(), basis: "credit_lines live rows; estimates labeled",
+        facilities, totalBalance: Number(facilities.reduce((s, f) => s + f.balance, 0).toFixed(2)),
+        totalMonthlyOutflow,
+        unmodeled: facilities.filter((f) => f.monthlyPayment == null).map((f) => f.name),
+      };
+
+      const payoffName = typeof req.query.payoff === "string" ? req.query.payoff.trim() : "";
+      const cash = req.query.cash != null ? Number(req.query.cash) : null;
+      if (payoffName) {
+        const target = facilities.find((f) => f.name.toLowerCase() === payoffName.toLowerCase());
+        out.payoffScenario = !target ? { error: "facility not found: " + payoffName } : {
+          target: target.name, balance: target.balance,
+          cashProvided: Number.isFinite(cash as number) ? cash : null,
+          fullyRetires: Number.isFinite(cash as number) ? (cash as number) >= target.balance : null,
+          monthlyRelief: target.monthlyPayment,
+          note: "Relief = scheduled payment freed. Factor facilities may carry early-payoff discounts not modeled here — check the agreement.",
+        };
+      }
+
+      const consolidate = typeof req.query.consolidate === "string" ? req.query.consolidate.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      const rate = req.query.rate != null ? Number(req.query.rate) : null;
+      const term = req.query.term != null ? Number(req.query.term) : null;
+      if (consolidate.length && rate != null && term != null && Number.isFinite(rate) && Number.isFinite(term) && term > 0) {
+        const targets = facilities.filter((f) => consolidate.some((c) => f.name.toLowerCase() === c.toLowerCase()));
+        const missing = consolidate.filter((c) => !targets.some((f) => f.name.toLowerCase() === c.toLowerCase()));
+        const principal = targets.reduce((s, f) => s + f.balance, 0);
+        const r = rate / 100 / 12;
+        const newPayment = r > 0 ? (principal * r) / (1 - Math.pow(1 + r, -term)) : principal / term;
+        const currentOutflow = targets.reduce((s, f) => s + (f.monthlyPayment ?? 0), 0);
+        out.consolidationScenario = {
+          facilities: targets.map((f) => f.name), missing,
+          principal: Number(principal.toFixed(2)), ratePct: rate, termMonths: term,
+          newMonthlyPayment: Number(newPayment.toFixed(2)),
+          currentMonthlyOutflow: Number(currentOutflow.toFixed(2)),
+          monthlyDelta: Number((currentOutflow - newPayment).toFixed(2)),
+          note: "Current outflow counts only fixed-schedule payments; sales-driven remittances (see unmodeled) continue separately until those balances retire.",
+        };
+      }
+      res.json({ success: true, ...out });
+    } catch (error: any) {
+      console.error("[PayoffSim] error:", error);
+      res.status(500).json({ success: false, error: error.message || "simulator failed" });
+    }
+  });
+
   app.put("/api/finances/cash-obligation/:id/status", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const status = String(req.body?.status || "");

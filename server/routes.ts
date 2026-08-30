@@ -10510,6 +10510,12 @@ Notes: ${po.notes || 'None'}
               ? refreshedOppsResult.opportunities 
               : [];
             
+            // Scope guard (audit Fix #3): the cleanup may only judge opportunities the
+            // app itself created, identified by STRICT name prefixes — and IDs must match
+            // as whole tokens, not substrings (historical "#1502" must never match a live
+            // "Order #15020"). Anything else in the pipeline is not ours to delete.
+            const nameHasToken = (name: string, id: string) =>
+              name.split(/[\s:—–-]+/).includes(id);
             for (const opp of refreshedOpps) {
               const name = opp.name || '';
               let shouldDelete = false;
@@ -10521,14 +10527,16 @@ Notes: ${po.notes || 'None'}
                 // Extract item name from "Stock Alert: Name (X days)" format
                 const match = name.match(/Stock Alert:\s*(?:\[[^\]]+\]\s*)?(.+?)\s*\(\d+\s*days?\)/i);
                 const itemName = match ? match[1].trim() : null;
-                if (!itemName || !validStockAlertNames.has(itemName)) {
+                if (!itemName) {
+                  // Unparseable alert name — not provably ours in this format; skip, never delete.
+                } else if (!validStockAlertNames.has(itemName)) {
                   shouldDelete = true;
                   deleteReason = 'item not in at-risk list';
                 }
-              } else if (name.startsWith('Return ') || name.includes('Return ')) {
-                // Check if return RMA or ID is in the name
-                const hasValidReturn = Array.from(validReturnIds).some(id => name.includes(String(id)));
-                const hasHistoricalReturn = Array.from(historicalReturnIds).some(id => name.includes(String(id)));
+              } else if (name.startsWith('Return ')) {
+                // Check if return RMA or ID is in the name (whole-token match)
+                const hasValidReturn = Array.from(validReturnIds).some(id => nameHasToken(name, String(id)));
+                const hasHistoricalReturn = Array.from(historicalReturnIds).some(id => nameHasToken(name, String(id)));
                 if (hasHistoricalReturn) {
                   shouldDelete = true;
                   isHistorical = true;
@@ -10539,8 +10547,8 @@ Notes: ${po.notes || 'None'}
                 }
               } else if (name.startsWith('PO ') || name.startsWith('PO-')) {
                 // Check if PO number is in the name
-                const hasValidPO = Array.from(validPONumbers).some(poNum => name.includes(poNum));
-                const hasHistoricalPO = Array.from(historicalPONumbers).some(poNum => name.includes(poNum));
+                const hasValidPO = Array.from(validPONumbers).some(poNum => nameHasToken(name, String(poNum)));
+                const hasHistoricalPO = Array.from(historicalPONumbers).some(poNum => nameHasToken(name, String(poNum)));
                 if (hasHistoricalPO) {
                   shouldDelete = true;
                   isHistorical = true;
@@ -10549,10 +10557,10 @@ Notes: ${po.notes || 'None'}
                   shouldDelete = true;
                   deleteReason = 'orphaned (no matching app record)';
                 }
-              } else if (name.startsWith('Order ') || name.includes('Order ')) {
-                // Check if order number is in the name
-                const hasValidOrder = Array.from(validSalesOrderIds).some(orderId => orderId && name.includes(orderId));
-                const hasHistoricalOrder = Array.from(historicalSalesOrderIds).some(orderId => orderId && name.includes(String(orderId)));
+              } else if (name.startsWith('Order ')) {
+                // Check if order number is in the name (whole-token match)
+                const hasValidOrder = Array.from(validSalesOrderIds).some(orderId => orderId && nameHasToken(name, String(orderId)));
+                const hasHistoricalOrder = Array.from(historicalSalesOrderIds).some(orderId => orderId && nameHasToken(name, String(orderId)));
                 if (hasHistoricalOrder) {
                   shouldDelete = true;
                   isHistorical = true;

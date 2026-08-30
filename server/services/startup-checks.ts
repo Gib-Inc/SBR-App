@@ -599,7 +599,7 @@ async function seedReorderPriority(client: pg.PoolClient): Promise<{
  * sees the issue without having to wait for the first scheduled tick.
  *
  * Looks in two places:
- *   1. Per-user integration_settings (apiKey + warehouseId)
+ *   1. Per-user integration_configs (provider EXTENSIV + api_key)
  *   2. Env-var fallbacks (EXTENSIV_CLIENT_ID + EXTENSIV_CLIENT_SECRET,
  *      or EXTENSIV_API_KEY for the legacy single-key flow)
  *
@@ -610,14 +610,14 @@ async function checkExtensivCredentials(client: pg.PoolClient): Promise<void> {
     !!(process.env.EXTENSIV_CLIENT_ID && process.env.EXTENSIV_CLIENT_SECRET) ||
     !!process.env.EXTENSIV_API_KEY;
 
-  // integration_settings is keyed (user_id, integration_name); we just
-  // want to know if ANY user has Extensiv set up.
+  // integration_configs is the real integrations table (provider, api_key,
+  // is_enabled); we just want to know if ANY user has Extensiv set up.
   let dbHasCreds = false;
   try {
     const result = await client.query<{ count: string }>(
       `SELECT COUNT(*)::text AS count
-         FROM integration_settings
-        WHERE LOWER(integration_name) = 'extensiv'
+         FROM integration_configs
+        WHERE LOWER(provider) = 'extensiv'
           AND api_key IS NOT NULL
           AND api_key <> ''`,
     );
@@ -626,7 +626,7 @@ async function checkExtensivCredentials(client: pg.PoolClient): Promise<void> {
     // Table missing on a fresh DB is not a problem worth raising here —
     // the scheduler will fail-soft on the actual sync attempt.
     console.warn(
-      "[Startup Checks] Could not read integration_settings while checking Extensiv creds:",
+      "[Startup Checks] Could not read integration_configs while checking Extensiv creds:",
       err?.message ?? err,
     );
   }

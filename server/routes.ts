@@ -132,6 +132,31 @@ function opsTokenOrAuth(req: Request, res: Response, next: NextFunction) {
   return requireAuth(req, res, next);
 }
 
+// n8n / sweet-hope machine auth — X-CRON-SECRET header checked timing-safe against the
+// Railway CRON_SECRET env var. Fail-closed: unset env means every caller gets 401.
+// requireCronSecret gates machine-only routes; cronSecretOrAuth lets the same route serve
+// both n8n (header) and signed-in humans (session).
+function cronSecretMatches(req: Request): boolean {
+  const envSecret = process.env.CRON_SECRET?.trim();
+  const provided = String(req.headers["x-cron-secret"] || "").trim();
+  if (!envSecret || !provided || envSecret.length !== provided.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(envSecret, "utf8"), Buffer.from(provided, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+function requireCronSecret(req: Request, res: Response, next: NextFunction) {
+  if (cronSecretMatches(req)) return next();
+  return res.status(401).json({ success: false, error: "unauthorized" });
+}
+
+function cronSecretOrAuth(req: Request, res: Response, next: NextFunction) {
+  if (cronSecretMatches(req)) return next();
+  return requireAuth(req, res, next);
+}
+
 // Single-user mode enforcement
 // keepUserId: when called from admin endpoint, keeps the current logged-in user
 // requireExplicitKeeper: when true (startup), refuses to delete if no explicit keeper is identified
@@ -24727,7 +24752,7 @@ Generate only the email body text, no subject line.`;
   //   bank_statement→ Claude-vision PDF → opening/closing/deposits/withdrawals
   //   ad_spend      → Meta/Google CSV/XLSX → period spend/impressions/clicks
   // Vision docs require the Anthropic key from Settings → LLM Configuration.
-  app.post("/api/financial-upload/parse", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
+  app.post("/api/financial-upload/parse", cronSecretOrAuth, upload.single("file"), async (req: Request, res: Response) => {
     // 100% ACCEPTANCE: this endpoint never rejects a document. The universal
     // salvage parser honors the user's type pick, auto-detects the real type when
     // the pick is wrong, and otherwise accepts the file into a reviewable preview
@@ -24740,8 +24765,15 @@ Generate only the email body text, no subject line.`;
       const mime = req.file.mimetype || "application/octet-stream";
       const requestedType = String(req.body?.docType || "auto");
 
-      const settings = await storage.getSettings(req.session.userId!);
-      const apiKey = settings?.llmApiKey?.trim() || "";
+      // Cron-authed calls (W10 statement inbox via n8n) carry no session. Attribute them to
+      // the first owner/admin so settings + audit fields resolve; session calls unchanged.
+      if (!(req.session as any)?.userId) {
+        const users = await storage.getAllUsers().catch(() => [] as any[]);
+        const owner = users.find((u: any) => ["owner", "admin"].includes(String(u.role || "").toLowerCase())) || users[0];
+        if (owner?.id) (req.session as any).userId = owner.id;
+      }
+      const settings = (req.session as any)?.userId ? await storage.getSettings(req.session.userId!) : undefined;
+      const apiKey = settings?.llmApiKey?.trim() || process.env.ANTHROPIC_API_KEY?.trim() || "";
 
       const { salvageParse } = await import("./services/universal-doc-parser");
       const fin = await import("./services/financial-doc-parser");
@@ -26859,6 +26891,45 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[BankBalance] post error:", error);
       res.status(500).json({ success: false, error: error.message || "Failed to save bank balance" });
+    }
+  });
+
+  // W7 (n8n bank-balance chaser) machine ingest — the SMS-confirmed bank number lands here.
+  // Twin of the operator route above with the same validation + propagation chain; auth is
+  // X-CRON-SECRET only (no session). Contract: n8n-build/reference/w7-endpoint-contract.md —
+  // body { amount, source: "n8n-sms", confirmed_by }. Records + tracks only, never moves money.
+  app.post("/api/cron/bank-balance", requireCronSecret, async (req: Request, res: Response) => {
+    try {
+      const b = req.body || {};
+      const amount = Number(b.amount);
+      if (!Number.isFinite(amount) || amount < 0) {
+        return res.status(400).json({ success: false, error: "amount must be a non-negative number" });
+      }
+      if (amount > 100_000_000) {
+        return res.status(400).json({ success: false, error: "amount looks implausibly large — refusing" });
+      }
+      const source = typeof b.source === "string" && b.source.trim() ? b.source.trim().slice(0, 60) : "n8n-sms";
+      const confirmedBy = typeof b.confirmed_by === "string" && b.confirmed_by.trim() ? b.confirmed_by.trim().slice(0, 120) : "unknown";
+
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      await db.execute(sql`
+        insert into bank_balance_entries (available_balance, as_of, in_transit, source, entered_by, note)
+        values (${Number(amount.toFixed(2))}, now(), '[]'::jsonb, ${source}, ${"n8n:" + confirmedBy}, ${"W7 SMS-confirmed balance"})`);
+
+      // Same propagation as the operator route: today's cash_position + the runway forecast
+      // pick up the bank truth immediately instead of waiting for the nightly capture.
+      const { writeCashPosition } = await import("./services/cash-flow-service");
+      const asOfDay = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+      await writeCashPosition(db, asOfDay).catch((e: any) => console.warn("[CronBankBalance] cash_position refresh failed:", e?.message));
+      const { computeAndStoreRunway } = await import("./services/runway-service");
+      await computeAndStoreRunway().catch((e: any) => console.warn("[CronBankBalance] runway refresh failed:", e?.message));
+
+      console.log(`[CronBankBalance] accepted ${amount} from ${confirmedBy} via ${source}`);
+      res.json({ success: true, accepted: Number(amount.toFixed(2)) });
+    } catch (error: any) {
+      console.error("[CronBankBalance] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to record bank balance" });
     }
   });
 

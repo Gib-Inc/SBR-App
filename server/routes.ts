@@ -7280,9 +7280,16 @@ TOTAL: $${subtotal.toFixed(2)}
   // that would corrupt the live position. Lines are inserted with
   // qtyAllocated=0 and the rawPayload preserved on the order so the
   // historical record is intact.
-  app.post("/api/integrations/shopify/backfill-orders", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/integrations/shopify/backfill-orders", cronSecretOrAuth, async (req: Request, res: Response) => {
     try {
       const body = req.body as Record<string, any>;
+      // Cron-authed calls carry no session — attribute to the first owner/admin so the
+      // SHOPIFY integration config resolves (same pattern as financial-upload/parse).
+      if (!(req.session as any)?.userId) {
+        const users = await storage.getAllUsers().catch(() => [] as any[]);
+        const owner = users.find((u: any) => ["owner", "admin"].includes(String(u.role || "").toLowerCase())) || users[0];
+        if (owner?.id) (req.session as any).userId = owner.id;
+      }
       const dateFromStr = typeof body.dateFrom === "string" ? body.dateFrom.trim() : "";
       const dateToStr = typeof body.dateTo === "string" ? body.dateTo.trim() : "";
       if (!dateFromStr) return res.status(400).json({ error: "dateFrom is required (YYYY-MM-DD)" });

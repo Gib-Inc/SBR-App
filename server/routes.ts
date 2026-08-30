@@ -12845,6 +12845,8 @@ Notes: ${po.notes || 'None'}
 
         const newFx = fxAvailable - qty;
         const newHildale = (item.hildaleQty ?? 0) + qty;
+        // Task #21: per-item isolation — one row's failure must not abort the batch.
+        try {
         await storage.updateItem(itemId, {
           fxInProcessQty: newFx,
           hildaleQty: newHildale,
@@ -12862,6 +12864,12 @@ Notes: ${po.notes || 'None'}
         });
 
         results.push({ itemId, sku: item.sku, quantity: qty, success: true });
+        } catch (rowErr: any) {
+          // If updateItem landed but the ledger insert failed, quantities moved without
+          // a transaction record — log loudly; the integrity monitor reconciles that pair.
+          console.error(`[Receive from FX] ${item.sku} failed mid-write:`, rowErr?.message);
+          results.push({ itemId, sku: item.sku, quantity: qty, success: false, error: String(rowErr?.message || rowErr).slice(0, 160) });
+        }
       }
 
       const allFailed = results.every((r) => !r.success);
@@ -16192,6 +16200,9 @@ Notes: ${po.notes || 'None'}
         const item = await storage.getItem(line.itemId);
         if (!item) continue;
 
+        // Task #21: per-line isolation — one line's failure must not abort the rest of
+        // the receive (earlier lines' quantities have already moved).
+        try {
         if (isFx && item.type === "finished_product") {
           const fxBefore = item.fxInProcessQty ?? 0;
           // Decrement fx_in_process by what was actually received (symmetric with the
@@ -16233,6 +16244,10 @@ Notes: ${po.notes || 'None'}
         await storage.updatePurchaseOrderLine(line.id, {
           qtyReceived: (line.qtyReceived ?? 0) + recv,
         } as any);
+        } catch (lineErr: any) {
+          console.error(`[PO Receive] line ${line.id} (${item.sku}) failed mid-write:`, lineErr?.message);
+          applied.push({ sku: item.sku, received: 0, effect: `FAILED: ${String(lineErr?.message || lineErr).slice(0, 160)}` });
+        }
       }
 
       // Compute accuracy + delivery variance for reliability scoring.
@@ -28066,7 +28081,7 @@ Generate only the email body text, no subject line.`;
 
   // Inventory snapshots — PDF-backed Pyvott / Hildale view
   // Returns the most recent snapshot by default, or a specific date via ?date=YYYY-MM-DD
-  app.get("/api/inventory/snapshot", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/inventory/snapshot", cronSecretOrAuth, async (req: Request, res: Response) => {
     try {
       const { date } = req.query as { date?: string };
       const rows = await storage.getInventorySnapshot({ date });

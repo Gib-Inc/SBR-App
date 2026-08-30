@@ -7385,6 +7385,11 @@ TOTAL: $${subtotal.toFixed(2)}
             cancelledAt: order.cancelled_at ? new Date(order.cancelled_at) : null,
             sourceUrl: shopDomain ? `https://${shopDomain.replace(/^https?:\/\//, "")}/admin/orders/${externalId}` : null,
             totalAmount: order.total_price ? parseFloat(order.total_price) : 0,
+            // BOOK.E's daily JE drafts require these three — a backfill that omits them
+            // blocks every drafted day with a data-gap (Aug 2026 lesson).
+            subtotalAmount: order.subtotal_price != null ? parseFloat(order.subtotal_price) : null,
+            taxAmount: order.total_tax != null ? parseFloat(order.total_tax) : null,
+            discountAmount: order.total_discounts != null ? parseFloat(order.total_discounts) : null,
             currency: order.currency ?? "USD",
             fulfillmentSource: "PIVOT_EXTENSIV",
             isHistorical: true,

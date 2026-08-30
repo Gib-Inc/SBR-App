@@ -171,6 +171,32 @@ function normalizeLoanRates<T extends { rate?: number | null }>(loans: T[]): T[]
   });
 }
 
+// P9: shared-secret gate for the unauthenticated /api/ghl/* webhook endpoints. GHL
+// workflows call these server-to-server (no session possible) and order-lookup/order-status
+// return customer PII — so they answer to X-GHL-WEBHOOK-SECRET. ENFORCE-IF-CONFIGURED:
+// with GHL_WEBHOOK_SECRET unset these stay open (loud boot-log warning, no silent outage
+// of live return-label/order flows); the moment the env var is set on Railway AND the same
+// value is added as a header in each GHL workflow action, the gate closes for callers
+// without it. Timing-safe compare, same pattern as cronSecretMatches.
+let ghlSecretWarned = false;
+function requireGhlWebhookSecret(req: Request, res: Response, next: NextFunction) {
+  const envSecret = process.env.GHL_WEBHOOK_SECRET?.trim();
+  if (!envSecret) {
+    if (!ghlSecretWarned) {
+      ghlSecretWarned = true;
+      console.warn("[GHL Webhooks] GHL_WEBHOOK_SECRET is NOT set — /api/ghl/* endpoints are open. Set it on Railway and in the GHL workflow headers to close them.");
+    }
+    return next();
+  }
+  const provided = String(req.headers["x-ghl-webhook-secret"] || "").trim();
+  if (provided && provided.length === envSecret.length) {
+    try {
+      if (crypto.timingSafeEqual(Buffer.from(envSecret, "utf8"), Buffer.from(provided, "utf8"))) return next();
+    } catch {}
+  }
+  return res.status(401).json({ success: false, error: "unauthorized" });
+}
+
 // Single-user mode enforcement
 // keepUserId: when called from admin endpoint, keeps the current logged-in user
 // requireExplicitKeeper: when true (startup), refuses to delete if no explicit keeper is identified
@@ -19796,7 +19822,7 @@ Generate only the email body text, no subject line.`;
   // Request: { orderNumber: string, contactId: string, channel?: string, customerName?: string }
   // Response: { success: true, messageForAgent: "...", trackingNumber: "...", labelUrl: "...", carrier: "...", serviceLevel: "..." }
   // Side effects: Creates Shippo label, sends SMS with label details, updates sales order status, creates GHL opportunity
-  app.post("/api/ghl/custom-actions/create-return-label", async (req: Request, res: Response) => {
+  app.post("/api/ghl/custom-actions/create-return-label", requireGhlWebhookSecret, async (req: Request, res: Response) => {
     console.log("[GHL Custom Action] Create return label request received");
     
     // Helper to get GHL client for creating opportunities and sending SMS
@@ -20439,7 +20465,7 @@ Generate only the email body text, no subject line.`;
     return false;
   }
 
-  app.post("/api/ghl/review-trigger", async (req: Request, res: Response) => {
+  app.post("/api/ghl/review-trigger", requireGhlWebhookSecret, async (req: Request, res: Response) => {
     try {
       if (!ghlPublicSecretGate(req, res, "ghl/review-trigger")) return;
       const { order_id, delivery_date } = req.body;
@@ -20534,7 +20560,7 @@ Generate only the email body text, no subject line.`;
 
   // POST /api/ghl/order-lookup
   // GHL calls this to get order details when customer reports a product issue
-  app.post("/api/ghl/order-lookup", async (req: Request, res: Response) => {
+  app.post("/api/ghl/order-lookup", requireGhlWebhookSecret, async (req: Request, res: Response) => {
     try {
       if (!ghlPublicSecretGate(req, res, "ghl/order-lookup")) return;
       const { phone, email, contact_name } = req.body;
@@ -20658,7 +20684,7 @@ Generate only the email body text, no subject line.`;
 
   // POST /api/ghl/order-status
   // GHL checks if a replacement order has been placed and shipped
-  app.post("/api/ghl/order-status", async (req: Request, res: Response) => {
+  app.post("/api/ghl/order-status", requireGhlWebhookSecret, async (req: Request, res: Response) => {
     try {
       if (!ghlPublicSecretGate(req, res, "ghl/order-status")) return;
       const { phone, email, product_type } = req.body;

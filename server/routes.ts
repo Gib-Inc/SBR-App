@@ -27020,6 +27020,67 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+
+  // GL-3 (task #48): one-click owners-packet export — a single workbook a lender, CPA,
+  // or owner can read cold. Pure READ of live tables; every sheet states its source.
+  // Known-caveat lines ride the Cover sheet so the packet can never silently overclaim.
+  app.get("/api/finances/owners-packet.xlsx", requireAuth, requireRole(["admin", "owner"]), async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const XLSX = await import("xlsx");
+      const rowsOf = (r: any) => (r?.rows ?? r ?? []) as any[];
+
+      const pl = rowsOf(await db.execute(sql.raw(
+        `select month, total_income, total_cogs, gross_profit, total_expenses,
+                net_operating_income, net_income, source
+         from monthly_financials order by month`)));
+      const debt = rowsOf(await db.execute(sql.raw(
+        `select name, balance, apr, rate_type, payment_amount, payment_frequency,
+                due_day, balance_synced_at
+         from credit_lines where is_active and coalesce(balance,0) > 0 order by balance desc`)));
+      const cash = rowsOf(await db.execute(sql.raw(
+        `select available_balance, as_of, source, entered_by, note
+         from bank_balance_entries order by as_of desc limit 10`)));
+      const bsSnap = rowsOf(await db.execute(sql.raw(
+        `select raw->'balanceSheet' as bs, created_at from qb_financial_snapshots
+         where raw ? 'balanceSheet' order by created_at desc limit 1`)))[0];
+      const bs: any = bsSnap ? (typeof bsSnap.bs === "string" ? JSON.parse(bsSnap.bs) : bsSnap.bs) : null;
+
+      const wb = XLSX.utils.book_new();
+      const cover = [
+        ["STICKER BURR ROLLER — OWNERS PACKET"],
+        ["Generated", new Date().toISOString()],
+        ["Sources", "Live app database (QBO-mirrored where noted). Every figure retrieved, none derived here."],
+        [],
+        ["KNOWN CAVEATS AT EXPORT TIME"],
+        ["1", "Sales orders have an ingestion gap Jul 26-Aug 29 2026 until the Shopify backfill runs — P&L rows sourced from QBO are unaffected; app-side sales dashboards are."],
+        ["2", "Debt balances mirror QBO; the 8/23 creditor-confirmed schedule shows material QBO book errors (see DEBT-RECON-2026-08-30.md) pending correction."],
+        ["3", "Loan rates in the balance-sheet sheet are as stored (mixed fraction/percent conventions until the normalizer PR merges)."],
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cover), "Cover");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pl), "P&L Monthly");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(debt), "Debt Register");
+      if (bs) {
+        const { loans, ...buckets } = bs;
+        const bsRows = Object.entries(buckets).map(([k, v]) => ({ field: k, value: v as any }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bsRows), "Balance Sheet");
+        if (Array.isArray(loans) && loans.length) {
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(loans), "Named Loans");
+        }
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cash), "Cash Entries");
+
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="SBR_Owners_Packet_${new Date().toISOString().slice(0, 10)}.xlsx"`);
+      res.send(buf);
+    } catch (error: any) {
+      console.error("[OwnersPacket] export error:", error);
+      res.status(500).json({ success: false, error: error.message || "export failed" });
+    }
+  });
+
   app.put("/api/finances/cash-obligation/:id/status", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const status = String(req.body?.status || "");

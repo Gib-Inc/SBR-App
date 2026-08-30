@@ -157,6 +157,20 @@ function cronSecretOrAuth(req: Request, res: Response, next: NextFunction) {
   return requireAuth(req, res, next);
 }
 
+// Loan-rate unit normalizer — uploaded balance sheets have historically stored `rate`
+// in MIXED units (fraction 0.36 vs percent 36; the source of the 3600.00% WAIR render).
+// Contract everywhere in the app: FRACTION. A real fraction APR above 1.5 (150%) does
+// not occur among bs.loans (bank/term notes; MCA factor economics live in credit_lines),
+// so values > 1.5 are treated as percent and divided down. Never invents a rate.
+function normalizeLoanRates<T extends { rate?: number | null }>(loans: T[]): T[] {
+  return loans.map((l) => {
+    const r = l?.rate;
+    if (r == null || !Number.isFinite(Number(r))) return { ...l, rate: null };
+    const n = Number(r);
+    return { ...l, rate: n > 1.5 ? Number((n / 100).toFixed(6)) : n };
+  });
+}
+
 // Single-user mode enforcement
 // keepUserId: when called from admin endpoint, keeps the current logged-in user
 // requireExplicitKeeper: when true (startup), refuses to delete if no explicit keeper is identified
@@ -24445,6 +24459,11 @@ Generate only the email body text, no subject line.`;
       const useUploaded = uploadedBS && (uploadedBS.totalLiabilities != null || uploadedBS.cash != null);
       let balanceSheet = useUploaded ? uploadedBS : FINANCIAL_SEED.balanceSheet;
       let balanceSheetSource = useUploaded ? (uploadedBS.source || "accountant_upload") : "accountant_seed";
+      // Normalize loan-rate units at the boundary so every historical snapshot serves
+      // fractions regardless of what convention its upload used. Stored raw untouched.
+      if (Array.isArray((balanceSheet as any)?.loans)) {
+        balanceSheet = { ...balanceSheet, loans: normalizeLoanRates((balanceSheet as any).loans) };
+      }
 
       // Live QuickBooks position (cash on hand, A/R + aging, A/P + aging, P&L) from
       // the most recent daily capture — the real-time operational layer on top of
@@ -25115,7 +25134,7 @@ Generate only the email body text, no subject line.`;
       const basis = f.basis || prevBS?.basis || null;
       // loans: prefer this upload's named loans; keep prior if the upload has none.
       const incLoans = Array.isArray(req.body?.loans) ? req.body.loans : (Array.isArray(f.loans) ? f.loans : []);
-      const loans = incLoans.length ? incLoans : (Array.isArray(prevBS?.loans) ? prevBS.loans : []);
+      const loans = normalizeLoanRates(incLoans.length ? incLoans : (Array.isArray(prevBS?.loans) ? prevBS.loans : []));
       if (incLoans.length && Array.isArray(prevBS?.loans) && JSON.stringify(incLoans) !== JSON.stringify(prevBS.loans)) {
         decisions.push({ action: "UPDATED", field: "loans", reason: `loans: replaced ${prevBS.loans.length} named loan(s) with ${incLoans.length}.` });
       } else if (!incLoans.length && Array.isArray(prevBS?.loans) && prevBS.loans.length) {

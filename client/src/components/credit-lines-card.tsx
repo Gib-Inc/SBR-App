@@ -189,7 +189,7 @@ export function CreditLinesCard({ balanceSheet }: { balanceSheet: BalanceSheet |
                   <div className="flex justify-between px-3 py-2 text-sm"><span>Credit cards</span><span className="tabular-nums">{money(balanceSheet.creditCards)}</span></div>
                 ) : null}
                 {(balanceSheet.loans ?? []).filter((l) => (l.balance ?? 0) !== 0).map((l) => (
-                  <div key={l.name} className="flex justify-between px-3 py-2 text-sm"><span>{l.name}{l.rate != null ? <span className="ml-2 text-xs text-muted-foreground">{l.rate}% APR</span> : null}</span><span className="tabular-nums">{money(l.balance ?? 0)}</span></div>
+                  <div key={l.name} className="flex justify-between px-3 py-2 text-sm"><span>{l.name}{l.rate != null ? <span className="ml-2 text-xs text-muted-foreground">{(l.rate * 100).toFixed(2)}% APR</span> : null}</span><span className="tabular-nums">{money(l.balance ?? 0)}</span></div>
                 ))}
                 <div className="flex justify-between bg-muted/40 px-3 py-2 text-sm"><span className="font-medium">Total debt</span><span className="tabular-nums font-semibold text-red-600 dark:text-red-400">{money(balanceSheet.totalLiabilities ?? 0)}</span></div>
               </div>

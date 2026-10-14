@@ -39,6 +39,7 @@ const salesItems = [
   { title: "Backorders",        url: "/backorders",         icon: PackageCheck  },
   { title: "Production Priority", url: "/production-priority", icon: ListOrdered  },
   { title: "In-House Shipping", url: "/in-house-shipping",  icon: Truck         },
+  { title: "Ship Queue",        url: "/ship-queue",         icon: Truck         },
   { title: "Returns",           url: "/returns",            icon: PackageOpen   },
 ];
 

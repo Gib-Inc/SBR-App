@@ -27161,6 +27161,132 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── SHIP QUEUE — box-grouped label batching for in-house fulfillment ─────────
+  // Groups every open (ORDERED) order by its packing box via packing_rules so the
+  // whole backlog prints as a handful of same-box batches instead of one-by-one
+  // guessing in Shopify admin. Read-only over orders; rules are editable below.
+  const normalizeSku = (s: string) => String(s || "").replace(/^SKU:\s*/i, "").trim();
+
+  app.get("/api/ship-queue", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const rowsOf = (r: any) => (r?.rows ?? r ?? []) as any[];
+
+      const rules = rowsOf(await db.execute(sql.raw(
+        `select sku, box_sku, box_name, length_in, width_in, height_in, weight_oz, parcels_per_unit, notes, name_pattern from packing_rules`)));
+      const ruleBySku = new Map(rules.map((r: any) => [normalizeSku(r.sku), r]));
+      // ~90 lines in the live queue carry SHOPIFY-<variantId> placeholder SKUs (ingestion
+      // never resolved them) but real product names — name_pattern rules catch those.
+      const patternRules = rules.filter((r: any) => r.name_pattern && String(r.name_pattern).trim());
+      const resolveRule = (sku: string, productName: string) => {
+        const direct = ruleBySku.get(sku);
+        if (direct) return direct;
+        const name = (productName || "").toLowerCase();
+        if (!name) return undefined;
+        return patternRules.find((r: any) => name.includes(String(r.name_pattern).toLowerCase()));
+      };
+
+      const lines = rowsOf(await db.execute(sql.raw(`
+        select so.id, so.order_name, so.external_order_id, so.customer_name,
+               ((so.order_date at time zone 'America/Denver')::date)::text as order_day,
+               greatest(0, (now() at time zone 'America/Denver')::date - (so.order_date at time zone 'America/Denver')::date)::int as age_days,
+               sol.sku, sol.product_name, sol.qty_ordered
+        from sales_orders so
+        join sales_order_lines sol on sol.sales_order_id = so.id
+        where so.status = 'ORDERED' and coalesce(so.is_historical, false) = false and so.cancelled_at is null
+        order by so.order_date asc, so.id, sol.sku`)));
+
+      type L = { sku: string; name: string; qty: number };
+      const orders = new Map<string, { id: string; orderName: string; customer: string; shopifyUrl: string | null; orderDay: string; ageDays: number; lines: L[] }>();
+      for (const r of lines) {
+        let o = orders.get(String(r.id));
+        if (!o) {
+          const ext = r.external_order_id != null ? String(r.external_order_id) : "";
+          o = {
+            id: String(r.id),
+            orderName: r.order_name || ext || String(r.id).slice(0, 8),
+            customer: r.customer_name || "",
+            shopifyUrl: /^\d+$/.test(ext) ? `https://admin.shopify.com/store/08810d-e1/orders/${ext}` : null,
+            orderDay: r.order_day,
+            ageDays: Number(r.age_days) || 0,
+            lines: [],
+          };
+          orders.set(o.id, o);
+        }
+        o.lines.push({ sku: normalizeSku(r.sku), name: r.product_name || "", qty: Number(r.qty_ordered) || 0 });
+      }
+
+      const batches = new Map<string, any>();
+      const exceptions: any[] = [];
+      for (const o of orders.values()) {
+        const base = { id: o.id, orderName: o.orderName, customer: o.customer, shopifyUrl: o.shopifyUrl, orderDay: o.orderDay, ageDays: o.ageDays };
+        if (o.lines.length !== 1) {
+          exceptions.push({ ...base, lines: o.lines, reason: "multi-item order — pick boxes by hand" });
+          continue;
+        }
+        const line = o.lines[0];
+        const rule = resolveRule(line.sku, line.name);
+        if (!rule) {
+          exceptions.push({ ...base, lines: o.lines, reason: `no packing rule for ${line.sku}` });
+          continue;
+        }
+        const parcels = Math.max(1, Number(rule.parcels_per_unit) || 1) * Math.max(1, line.qty);
+        const key = rule.box_name;
+        let b = batches.get(key);
+        if (!b) {
+          const dims = rule.length_in && rule.width_in && rule.height_in
+            ? `${rule.length_in}×${rule.width_in}×${rule.height_in}"` : null;
+          b = { boxName: rule.box_name, boxSku: rule.box_sku, dims, weightOz: rule.weight_oz != null ? Number(rule.weight_oz) : null, notes: rule.notes || null, orders: [] };
+          batches.set(key, b);
+        }
+        b.orders.push({ ...base, sku: line.sku, qty: line.qty, parcels });
+      }
+
+      const batchList = Array.from(batches.values()).sort((a, b) => b.orders.length - a.orders.length);
+      res.json({
+        success: true,
+        summary: {
+          openOrders: orders.size,
+          batched: batchList.reduce((s, b) => s + b.orders.length, 0),
+          exceptions: exceptions.length,
+          oldestDay: Math.max(0, ...Array.from(orders.values()).map((o) => o.ageDays)),
+        },
+        batches: batchList,
+        exceptions: exceptions.sort((a, b) => b.ageDays - a.ageDays),
+      });
+    } catch (error: any) {
+      console.error("[ShipQueue] error:", error);
+      res.status(500).json({ success: false, error: error.message || "ship queue failed" });
+    }
+  });
+
+  // Upsert one packing rule (box name / dims / weight). Never invents values —
+  // this is exactly the "size TBD" fill-in path on the Ship Queue page.
+  app.post("/api/ship-queue/rule", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const b = req.body || {};
+      const sku = normalizeSku(String(b.sku || ""));
+      const boxName = typeof b.boxName === "string" ? b.boxName.trim() : "";
+      if (!sku || !boxName) return res.status(400).json({ success: false, error: "sku and boxName are required" });
+      const num = (v: any) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      await db.execute(sql`
+        insert into packing_rules (sku, box_sku, box_name, length_in, width_in, height_in, weight_oz, parcels_per_unit, notes, updated_at)
+        values (${sku}, ${b.boxSku ?? null}, ${boxName}, ${num(b.lengthIn)}, ${num(b.widthIn)}, ${num(b.heightIn)}, ${num(b.weightOz)}, ${Math.max(1, Number(b.parcelsPerUnit) || 1)}, ${b.notes ?? null}, now())
+        on conflict (sku) do update set
+          box_sku = excluded.box_sku, box_name = excluded.box_name,
+          length_in = excluded.length_in, width_in = excluded.width_in, height_in = excluded.height_in,
+          weight_oz = excluded.weight_oz, parcels_per_unit = excluded.parcels_per_unit,
+          notes = excluded.notes, updated_at = now()`);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[ShipQueue] rule upsert error:", error);
+      res.status(500).json({ success: false, error: error.message || "rule save failed" });
+    }
+  });
+
   app.put("/api/finances/cash-obligation/:id/status", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
     try {
       const status = String(req.body?.status || "");

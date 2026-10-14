@@ -27167,6 +27167,19 @@ Generate only the email body text, no subject line.`;
   // guessing in Shopify admin. Read-only over orders; rules are editable below.
   const normalizeSku = (s: string) => String(s || "").replace(/^SKU:\s*/i, "").trim();
 
+  // Matt's carton catalog (10/13/2026) — the physical boxes purchased, with bundle
+  // counts from the supplier spec. The Set-size editor offers exactly these.
+  const STANDARD_BOXES = [
+    { label: '22\u00d714\u00d710"', lengthIn: 22, widthIn: 14, heightIn: 10, bundle: 20 },
+    { label: '20\u00d715\u00d76" (Push 1.0)', lengthIn: 20, widthIn: 15, heightIn: 6, bundle: 25 },
+    { label: '14\u00d710\u00d710"', lengthIn: 14, widthIn: 10, heightIn: 10, bundle: 25 },
+    { label: '26\u00d714\u00d710"', lengthIn: 26, widthIn: 14, heightIn: 10, bundle: 25 },
+    { label: '26\u00d716\u00d716" (Push 2.0)', lengthIn: 26, widthIn: 16, heightIn: 16, bundle: 15 },
+    { label: '20\u00d712\u00d712"', lengthIn: 20, widthIn: 12, heightIn: 12, bundle: 20 },
+    { label: '46\u00d720\u00d712" (Pull-Behind/Bigfoot)', lengthIn: 46, widthIn: 20, heightIn: 12, bundle: 10 },
+    { label: '36\u00d74\u00d74" (bars)', lengthIn: 36, widthIn: 4, heightIn: 4, bundle: 25 },
+  ];
+
   app.get("/api/ship-queue", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");
@@ -27254,6 +27267,7 @@ Generate only the email body text, no subject line.`;
         },
         batches: batchList,
         exceptions: exceptions.sort((a, b) => b.ageDays - a.ageDays),
+        standardBoxes: STANDARD_BOXES,
       });
     } catch (error: any) {
       console.error("[ShipQueue] error:", error);

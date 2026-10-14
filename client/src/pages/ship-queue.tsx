@@ -31,10 +31,19 @@ interface QueueBatch {
   orders: QueueOrder[];
 }
 
+interface StandardBox {
+  label: string;
+  lengthIn: number;
+  widthIn: number;
+  heightIn: number;
+  bundle: number;
+}
+
 interface ShipQueueData {
   summary: { openOrders: number; batched: number; exceptions: number; oldestDay: number };
   batches: QueueBatch[];
   exceptions: QueueOrder[];
+  standardBoxes?: StandardBox[];
 }
 
 // Pack & print view: the whole open-order backlog grouped by shipping box, so
@@ -122,6 +131,23 @@ export default function ShipQueue() {
           <CardContent>
             {editingSku && batch.orders[0]?.sku === editingSku && (
               <div className="flex flex-wrap items-end gap-2 mb-3 p-3 rounded-lg border print:hidden">
+                <div>
+                  <label className="text-xs text-muted-foreground">Standard carton</label>
+                  <select
+                    className="block h-9 rounded-md border bg-background px-2 text-sm"
+                    defaultValue=""
+                    onChange={(e) => {
+                      const b = (data.standardBoxes ?? []).find((x) => x.label === e.target.value);
+                      if (b) setDimDraft((d) => ({ ...d, lengthIn: String(b.lengthIn), widthIn: String(b.widthIn), heightIn: String(b.heightIn) }));
+                    }}
+                    data-testid="select-standard-box"
+                  >
+                    <option value="">pick a box…</option>
+                    {(data.standardBoxes ?? []).map((b) => (
+                      <option key={b.label} value={b.label}>{b.label}</option>
+                    ))}
+                  </select>
+                </div>
                 <div><label className="text-xs text-muted-foreground">Box name</label><Input value={dimDraft.boxName} onChange={(e) => setDimDraft({ ...dimDraft, boxName: e.target.value })} className="w-56" /></div>
                 {(["lengthIn", "widthIn", "heightIn"] as const).map((k) => (
                   <div key={k}><label className="text-xs text-muted-foreground">{k[0].toUpperCase()}&quot;</label><Input value={dimDraft[k]} onChange={(e) => setDimDraft({ ...dimDraft, [k]: e.target.value })} inputMode="decimal" className="w-20" /></div>

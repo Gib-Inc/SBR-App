@@ -2602,6 +2602,28 @@ export type AiSystemRecommendation = typeof aiSystemRecommendations.$inferSelect
 // CUSTOM LABEL FORMATS
 // ============================================================================
 
+// ============================================================================
+// PACKING RULES — SKU → box mapping for the Ship Queue (label batching).
+// Dims live here (not on items) because the shipping box differs from the
+// product; weights are NEVER invented — null until Matt confirms them.
+// ============================================================================
+
+export const packingRules = pgTable("packing_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sku: text("sku").notNull().unique(), // normalized (leading "SKU:" stripped)
+  namePattern: text("name_pattern"), // substring fallback when a line's SKU is a SHOPIFY-<id> placeholder
+  boxSku: text("box_sku"),             // items.sku of the carton when it is tracked inventory
+  boxName: text("box_name").notNull(),
+  lengthIn: real("length_in"),
+  widthIn: real("width_in"),
+  heightIn: real("height_in"),
+  weightOz: real("weight_oz"),         // full packed shipping weight
+  parcelsPerUnit: integer("parcels_per_unit").notNull().default(1),
+  shipsVia: text("ships_via").notNull().default("IN_HOUSE"),
+  notes: text("notes"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export const labelFormats = pgTable("label_formats", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),

@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { User, LogOut } from "lucide-react";
+import ShipQueue from "@/pages/ship-queue";
 import { NotificationsBell } from "@/components/notifications-bell";
 import { ScanProvider } from "@/contexts/scan-context";
 import { ScanButton } from "@/components/scan-button";
@@ -161,6 +162,7 @@ function AuthenticatedApp() {
                     <Route path="/cycle-count" component={CycleCount} />
                     <Route path="/direct-orders" component={DirectOrders} />
                     <Route path="/barcodes" component={Barcodes} />
+                    <Route path="/ship-queue" component={ShipQueue} />
                     <Route path="/suppliers" component={Suppliers} />
                     <Route path="/supplier-intel" component={SupplierIntel} />
                     <Route path="/purchase-orders" component={PurchaseOrders} />
